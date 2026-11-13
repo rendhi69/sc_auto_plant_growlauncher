@@ -1173,28 +1173,29 @@ local function executePlantRow(plantY)
             if needPlant then
                 moveSafeTo(standX, plantY)
 
-                -- Tanam 3 petak berurutan: Kiri, Tengah, Kanan
-                if sLeft >= 0 and isTilePlantable(sLeft, plantY) then
-                    plantSingleSpot(sLeft, plantY)
-                end
-                if isTilePlantable(sCenter, plantY) then
-                    plantSingleSpot(sCenter, plantY)
-                end
-                if sRight <= 99 and isTilePlantable(sRight, plantY) then
-                    plantSingleSpot(sRight, plantY)
-                end
+                -- Percobaan tanam dengan verifikasi bertahap (hingga 3x jika lag/packet drop)
+                for attempt = 1, 3 do
+                    local anyPlantedThisRound = false
+                    if sLeft >= 0 and isTilePlantable(sLeft, plantY) then
+                        plantSingleSpot(sLeft, plantY)
+                        anyPlantedThisRound = true
+                    end
+                    if isTilePlantable(sCenter, plantY) then
+                        plantSingleSpot(sCenter, plantY)
+                        anyPlantedThisRound = true
+                    end
+                    if sRight <= 99 and isTilePlantable(sRight, plantY) then
+                        plantSingleSpot(sRight, plantY)
+                        anyPlantedThisRound = true
+                    end
 
-                -- VERIFIKASI LANGSUNG DI TEMPAT (Anti-Bolong)
-                -- Jika ada petak yang sempat tertinggal / packet lag, tanam sekali lagi di tempat sebelum melangkah maju!
-                safeSleep(40)
-                if sLeft >= 0 and isTilePlantable(sLeft, plantY) then
-                    plantSingleSpot(sLeft, plantY)
-                end
-                if isTilePlantable(sCenter, plantY) then
-                    plantSingleSpot(sCenter, plantY)
-                end
-                if sRight <= 99 and isTilePlantable(sRight, plantY) then
-                    plantSingleSpot(sRight, plantY)
+                    if not anyPlantedThisRound then break end
+                    safeSleep(math.max(40, CFG.plant_delay))
+
+                    local stillHole = (sLeft >= 0 and isTilePlantable(sLeft, plantY))
+                                   or isTilePlantable(sCenter, plantY)
+                                   or (sRight <= 99 and isTilePlantable(sRight, plantY))
+                    if not stillHole then break end
                 end
             end
 
@@ -1204,11 +1205,12 @@ local function executePlantRow(plantY)
         -- Tangani ujung kanan platform (petak 98 dan 99 agar tidak bolong di ujung)
         if isTilePlantable(98, plantY) or isTilePlantable(99, plantY) then
             moveSafeTo(98, plantY)
-            if isTilePlantable(98, plantY) then plantSingleSpot(98, plantY) end
-            if isTilePlantable(99, plantY) then plantSingleSpot(99, plantY) end
-            safeSleep(40)
-            if isTilePlantable(98, plantY) then plantSingleSpot(98, plantY) end
-            if isTilePlantable(99, plantY) then plantSingleSpot(99, plantY) end
+            for attempt = 1, 3 do
+                if isTilePlantable(98, plantY) then plantSingleSpot(98, plantY) end
+                if isTilePlantable(99, plantY) then plantSingleSpot(99, plantY) end
+                safeSleep(math.max(40, CFG.plant_delay))
+                if not isTilePlantable(98, plantY) and not isTilePlantable(99, plantY) then break end
+            end
         end
 
     else
@@ -1224,15 +1226,49 @@ local function executePlantRow(plantY)
 
             if isTilePlantable(curX, plantY) then
                 moveSafeTo(curX, plantY)
-                plantSingleSpot(curX, plantY)
-                -- Verifikasi langsung di tempat
-                safeSleep(30)
-                if isTilePlantable(curX, plantY) then
+                for attempt = 1, 3 do
+                    if not isTilePlantable(curX, plantY) then break end
                     plantSingleSpot(curX, plantY)
+                    safeSleep(math.max(30, CFG.plant_delay))
                 end
             end
         end
     end
+
+    -- =========================================================================
+    -- ROW SWEEPER: Deteksi & tambal otomatis setiap petak yang terlewat di baris ini
+    -- =========================================================================
+    if hasPlantableSpotsInRow(plantY) then
+        local missedSpots = {}
+        for x = 0, 99 do
+            if isTilePlantable(x, plantY) then
+                table.insert(missedSpots, x)
+            end
+        end
+
+        if #missedSpots > 0 then
+            addLog(string.format("[Tambal Baris Y=%d] Terdeteksi %d petak belum tertanam, melakukan tambal sisa...", plantY, #missedSpots))
+            for _, mx in ipairs(missedSpots) do
+                if not STATE.running then break end
+                while STATE.paused do safeSleep(500) if not STATE.running then break end end
+
+                if not hasEnoughSeedInBackpack() then
+                    local okRestock = restockFromStorage()
+                    if not okRestock then return false end
+                end
+
+                if isTilePlantable(mx, plantY) then
+                    moveSafeTo(mx, plantY)
+                    for rep = 1, 3 do
+                        if not isTilePlantable(mx, plantY) then break end
+                        plantSingleSpot(mx, plantY)
+                        safeSleep(math.max(40, CFG.plant_delay))
+                    end
+                end
+            end
+        end
+    end
+
     return true
 end
 
@@ -1265,6 +1301,64 @@ local function plantEntireWorld()
         setStatus("Menanam", string.format("Baris Y=%d (%d/%d) di %s", plantY, idx, #activeRows, curW))
         local okRow = executePlantRow(plantY)
         if not okRow then return false end
+    end
+
+    -- =========================================================================
+    -- WORLD SWEEPER: Validasi ulang seluruh baris (Y=0 s/d 53) untuk memastikan 0 BOLONG
+    -- =========================================================================
+    local maxWorldSweeps = 2
+    for sweepCycle = 1, maxWorldSweeps do
+        if not STATE.running then break end
+        while STATE.paused do safeSleep(500) if not STATE.running then break end end
+
+        local remainingRows = {}
+        local totalRemainingHoles = 0
+
+        for y = 0, 53 do
+            local holesInY = 0
+            for x = 0, 99 do
+                if isTilePlantable(x, y) then
+                    holesInY = holesInY + 1
+                end
+            end
+            if holesInY > 0 then
+                table.insert(remainingRows, y)
+                totalRemainingHoles = totalRemainingHoles + holesInY
+            end
+        end
+
+        if totalRemainingHoles == 0 then
+            break -- World 100% tuntas tanpa ada satu pun petak bolong!
+        end
+
+        addLog(string.format("[Sweeper World #%d] Masih tersisa %d petak bolong di %d baris. Menyapu dan menambal ulang...",
+            sweepCycle, totalRemainingHoles, #remainingRows))
+        setStatus("Menambal Sisa", string.format("Sweep #%d: %d petak di %s", sweepCycle, totalRemainingHoles, curW))
+
+        for _, sweepY in ipairs(remainingRows) do
+            if not STATE.running then break end
+            while STATE.paused do safeSleep(500) if not STATE.running then break end end
+            local okRow = executePlantRow(sweepY)
+            if not okRow then return false end
+        end
+    end
+
+    -- Verifikasi Akhir Jumlah Petak Kosong
+    local finalHoles = 0
+    for y = 0, 53 do
+        for x = 0, 99 do
+            if isTilePlantable(x, y) then
+                finalHoles = finalHoles + 1
+            end
+        end
+    end
+
+    if finalHoles == 0 then
+        addLog(string.format("World Farm %s SELESAI ditanam! (100%% Penuh, 0 Bolong)", curW))
+        setStatus("World Selesai", string.format("World %s 100%% tuntas tertanam!", curW))
+    else
+        addLog(string.format("[Peringatan] World %s masih menyisakan %d petak kosong (kehabisan seed).", curW, finalHoles))
+        setStatus("Selesai Sebagian", string.format("Tersisa %d petak kosong di %s", finalHoles, curW))
     end
 
     return true
