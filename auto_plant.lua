@@ -990,6 +990,10 @@ local function moveSafeTo(tx, ty)
                     if not wx then wx, wy, direct = sx, sy, true end
                 end
 
+                -- TELEPORT per hop dengan jeda SEBELUM teleport (jitter ±20% agar ritme tidak robotik)
+                local baseDelay = tonumber(CFG.step_delay) or 110
+                safeSleep(math.floor(math.max(100, baseDelay) * (0.8 + math.random() * 0.4)))
+                if not STATE.running then break end
                 pcall(pFn, wx, wy)
                 local stepDist = math.max(math.abs(wx - cx), math.abs(wy - cy))
                 local maxWait = math.max(120, math.min(1500, stepDist * 60))
@@ -1003,7 +1007,7 @@ local function moveSafeTo(tx, ty)
 
                 local nx, ny = getPlayerTilePos()
                 if nx and ny and math.abs(nx - sx) <= 1 and math.abs(ny - sy) <= 1 then
-                    safeSleep(CFG.step_delay or 40)
+                    safeSleep(math.max(150, baseDelay)) -- jeda setelah teleport terakhir sebelum aksi
                     return true
                 end
                 if nx == cx and ny == cy then
@@ -1012,8 +1016,8 @@ local function moveSafeTo(tx, ty)
                 else
                     stuck = 0
                 end
-                -- Jeda antar hop mengikuti slider "Kecepatan Melangkah" (min 200ms) agar tidak terlalu cepat
-                safeSleep(math.max(200, (tonumber(CFG.step_delay) or 110) * 2))
+                -- Jeda SETELAH tiap teleport mengikuti slider "Kecepatan Melangkah" (min 200ms, jitter ±20%)
+                safeSleep(math.floor(math.max(200, baseDelay * 2) * (0.8 + math.random() * 0.4)))
             end
         end
     end
