@@ -976,9 +976,10 @@ local function isSupportTile(t)
         return true
     end
 
-    -- 3. Semua block padat Growtopia ID-nya genap (> 0) selain pintu, sign, dan lock
-    if (fg % 2 == 0) and not isPermanentObstacle(t) then
-        if fg ~= 6 and fg ~= 12 and fg ~= 16 and fg ~= 18 and fg ~= 202 and fg ~= 204 and fg ~= 206 and fg ~= 242 then
+    -- 3. Semua block padat & platform Growtopia ID-nya genap (> 0)
+    --    Selain pintu (6, 12, 18), lock (202, 204, 206, 242), dan jammer (226)
+    if (fg % 2 == 0) then
+        if fg ~= 6 and fg ~= 12 and fg ~= 18 and fg ~= 202 and fg ~= 204 and fg ~= 206 and fg ~= 242 and fg ~= 226 then
             return true
         end
     end
@@ -989,31 +990,41 @@ end
 local function isPermanentObstacle(t)
     if not t then return false end
     local fg = tonumber(t.fg) or 0
-    if fg == 6 or fg == 8 or fg == 242 or fg == 202 or fg == 204 or fg == 206 or fg == 226 or fg == 828 or fg == 12 or fg == 18 then
-        return true -- Main Door, Bedrock, WL, SL, BL, HL, Jammer, Vent, Door, Dungeon Door
+    if fg == 6 or fg == 242 or fg == 202 or fg == 204 or fg == 206 or fg == 226 or fg == 828 or fg == 12 or fg == 18 then
+        return true -- Main Door, WL, SL, BL, HL, Jammer, Vent, Door, Dungeon Door
     end
     return false
 end
 
 local function isTilePlantable(tx, ty)
-    if tx < 0 or tx > 99 or ty < 0 or ty > 58 then return false end
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
     local tAt = getTileSafe(tx, ty)
-    local tBelow = getTileSafe(tx, ty + 1)
+    local fgAt = tonumber(tAt and tAt.fg) or 0
 
     -- Petak harus kosong dari foreground solid/pohon yang sudah ada
-    if (tonumber(tAt.fg) or 0) ~= 0 then return false end
-    if isPermanentObstacle(tAt) then return false end
+    if fgAt ~= 0 then return false end
 
-    -- Petak di bawahnya harus merupakan support (tanah / platform)
+    -- Petak di bawahnya harus merupakan support / lantai (tanah / platform / bedrock)
+    local tBelow = getTileSafe(tx, ty + 1)
     if not isSupportTile(tBelow) then return false end
 
     return true
 end
 
+local function hasPlantableSpotsInRow(plantY)
+    if plantY < 0 or plantY > 53 then return false end
+    for x = 0, 99 do
+        if isTilePlantable(x, plantY) then
+            return true
+        end
+    end
+    return false
+end
+
 local function moveSafeTo(tx, ty)
     if not STATE.running then return false end
     tx = math.max(0, math.min(99, tx))
-    ty = math.max(0, math.min(59, ty))
+    ty = math.max(0, math.min(53, ty))
 
     local curPx, curPy = getPlayerTilePos()
     if curPx == tx and curPy == ty then
@@ -1023,20 +1034,10 @@ local function moveSafeTo(tx, ty)
     local pFn = FindPath or findPath
     if pFn then
         pcall(pFn, tx, ty)
-    elseif sendPacketRaw then
-        local okP, p = pcall(getLocal)
-        if okP and p then
-            sendPacketRaw(false, {
-                type  = 0,
-                x     = tx * 32,
-                y     = ty * 32,
-                state = 32,
-            })
-        end
     end
 
     -- Tunggu konfirmasi pergerakan karakter tiba di petak tujuan (toleransi <= 1 tile)
-    local maxWait = 250
+    local maxWait = 160
     local elapsed = 0
     while elapsed < maxWait do
         local px, py = getPlayerTilePos()
@@ -1045,6 +1046,21 @@ local function moveSafeTo(tx, ty)
         end
         safeSleep(20)
         elapsed = elapsed + 20
+    end
+
+    -- Fallback Packet 0 jika FindPath gagal / terhalang udara atau modfly
+    local pxNow, pyNow = getPlayerTilePos()
+    if math.abs(pxNow - tx) > 1 or math.abs(pyNow - ty) > 1 then
+        if sendPacketRaw then
+            local state = (pxNow > tx) and 48 or 32
+            pcall(sendPacketRaw, false, {
+                type  = 0,
+                x     = tx * 32,
+                y     = ty * 32,
+                state = state,
+            })
+            safeSleep(30)
+        end
     end
 
     safeSleep(CFG.step_delay)
@@ -1073,28 +1089,11 @@ end
 -- ============================================================================
 local function detectPlantableRows()
     local rows = {}
-    for y = 0, 54 do
-        local supportCount = 0
-        for x = 0, 99 do
-            local tBelow = getTileSafe(x, y + 1)
-            local tAt = getTileSafe(x, y)
-            -- Syarat petak baris tanam:
-            -- 1. Bawahnya adalah platform atau tanah (isSupportTile)
-            -- 2. Petak ini bukan rintangan permanen
-            -- 3. Petak ini bukan support/blok padat itu sendiri (merupakan udara atau pohon yang sudah ada)
-            if isSupportTile(tBelow) and not isPermanentObstacle(tAt) and not isSupportTile(tAt) then
-                supportCount = supportCount + 1
-            end
-        end
-        -- Baris dianggap platform/dirt farm jika memiliki minimal 4 petak support
-        if supportCount >= 4 then
+    for y = 0, 53 do
+        if hasPlantableSpotsInRow(y) then
             table.insert(rows, y)
         end
-        if y % 15 == 0 then safeSleep(5) end
     end
-
-    -- Pastikan baris selalu diurutkan dari paling atas (Y terkecil) ke paling bawah (Y terbesar)
-    table.sort(rows, function(a, b) return a < b end)
     return rows
 end
 _G.__detectPlantableRows = detectPlantableRows
@@ -1118,6 +1117,7 @@ local function plantSingleSpot(tx, ty)
     local okP, p = pcall(getLocal)
     local px = (okP and p and (p.posX or (p.pos and p.pos.x))) or (tx * 32)
     local py = (okP and p and (p.posY or (p.pos and p.pos.y))) or (ty * 32)
+    local state = (px > (tx * 32)) and 48 or 32
 
     -- Step 1: Tanam Seed 1
     if sendPacketRaw then
@@ -1128,6 +1128,7 @@ local function plantSingleSpot(tx, ty)
             py    = ty,
             x     = px,
             y     = py,
+            state = state,
         })
     end
     safeSleep(CFG.plant_delay)
@@ -1143,6 +1144,7 @@ local function plantSingleSpot(tx, ty)
                 py    = ty,
                 x     = px,
                 y     = py,
+                state = state,
             })
         end
         safeSleep(CFG.plant_delay)
@@ -1292,91 +1294,49 @@ local function hasEnoughSeedInBackpack()
     return true
 end
 
-local function executePlantRow(plantY, rowIdx)
-    local isLeftToRight = (rowIdx % 2 == 1)
-
+local function executePlantRow(plantY)
     if CFG.plant_mode == "3zigzag" then
         -- Mode Plant 3 Zig-Zag ala Lucifer (Kiri, Tengah, Kanan lalu melangkah 3 petak)
-        if isLeftToRight then
-            local curX = 1
-            while curX <= 97 do
-                if not STATE.running then break end
-                while STATE.paused do safeSleep(500) if not STATE.running then break end end
+        -- Selalu bergerak dari Kiri ke Kanan (X = 0 s/d 99)
+        local curX = 1
+        while curX <= 97 do
+            if not STATE.running then break end
+            while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-                if not hasEnoughSeedInBackpack() then
-                    local okRestock = restockFromStorage()
-                    if not okRestock then return false end
-                end
+            if not hasEnoughSeedInBackpack() then
+                local okRestock = restockFromStorage()
+                if not okRestock then return false end
+            end
 
-                -- Cek apakah dari 3 petak ini ada yang perlu ditanam
-                local needPlant = isTilePlantable(curX - 1, plantY)
-                               or isTilePlantable(curX, plantY)
-                               or isTilePlantable(curX + 1, plantY)
+            -- Cek apakah dari 3 petak ini ada yang perlu ditanam
+            local needPlant = isTilePlantable(curX - 1, plantY)
+                           or isTilePlantable(curX, plantY)
+                           or isTilePlantable(curX + 1, plantY)
 
-                if needPlant then
-                    moveSafeTo(curX, plantY)
-                    local spots = { curX - 1, curX, curX + 1 }
-                    for _, spotX in ipairs(spots) do
-                        if spotX >= 0 and spotX <= 99 and isTilePlantable(spotX, plantY) then
-                            plantSingleSpot(spotX, plantY)
-                        end
+            if needPlant then
+                moveSafeTo(curX, plantY)
+                local spots = { curX - 1, curX, curX + 1 }
+                for _, spotX in ipairs(spots) do
+                    if spotX >= 0 and spotX <= 99 and isTilePlantable(spotX, plantY) then
+                        plantSingleSpot(spotX, plantY)
                     end
                 end
-
-                curX = curX + 3
             end
 
-            -- Tangani ujung kanan platform (petak 98 dan 99 agar tidak bolong di ujung)
-            if isTilePlantable(98, plantY) or isTilePlantable(99, plantY) then
-                moveSafeTo(98, plantY)
-                if isTilePlantable(98, plantY) then plantSingleSpot(98, plantY) end
-                if isTilePlantable(99, plantY) then plantSingleSpot(99, plantY) end
-            end
-        else
-            -- Bergerak Kanan ke Kiri (stepX = -1)
-            local curX = 98
-            while curX >= 2 do
-                if not STATE.running then break end
-                while STATE.paused do safeSleep(500) if not STATE.running then break end end
+            curX = curX + 3
+        end
 
-                if not hasEnoughSeedInBackpack() then
-                    local okRestock = restockFromStorage()
-                    if not okRestock then return false end
-                end
-
-                local needPlant = isTilePlantable(curX + 1, plantY)
-                               or isTilePlantable(curX, plantY)
-                               or isTilePlantable(curX - 1, plantY)
-
-                if needPlant then
-                    moveSafeTo(curX, plantY)
-                    local spots = { curX + 1, curX, curX - 1 }
-                    for _, spotX in ipairs(spots) do
-                        if spotX >= 0 and spotX <= 99 and isTilePlantable(spotX, plantY) then
-                            plantSingleSpot(spotX, plantY)
-                        end
-                    end
-                end
-
-                curX = curX - 3
-            end
-
-            -- Tangani ujung kiri platform (petak 1 dan 0 agar tidak bolong di ujung)
-            if isTilePlantable(1, plantY) or isTilePlantable(0, plantY) then
-                moveSafeTo(1, plantY)
-                if isTilePlantable(1, plantY) then plantSingleSpot(1, plantY) end
-                if isTilePlantable(0, plantY) then plantSingleSpot(0, plantY) end
-            end
+        -- Tangani ujung kanan platform (petak 98 dan 99 agar tidak bolong di ujung)
+        if isTilePlantable(98, plantY) or isTilePlantable(99, plantY) then
+            moveSafeTo(98, plantY)
+            if isTilePlantable(98, plantY) then plantSingleSpot(98, plantY) end
+            if isTilePlantable(99, plantY) then plantSingleSpot(99, plantY) end
         end
 
         -- ====================================================================
         -- ANTI-HOLE SWEEP: Sapu bersih jika ada petak yang sempat terlewat / packet lag
         -- ====================================================================
-        local sweepStart = isLeftToRight and 0 or 99
-        local sweepEnd   = isLeftToRight and 99 or 0
-        local sweepStep  = isLeftToRight and 1 or -1
-
-        for chkX = sweepStart, sweepEnd, sweepStep do
+        for chkX = 0, 99 do
             if not STATE.running then break end
             while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
@@ -1391,12 +1351,8 @@ local function executePlantRow(plantY, rowIdx)
         end
 
     else
-        -- Mode 1 by 1 (Tanam per petak demi petak penuh dari ujung ke ujung)
-        local startX = isLeftToRight and 0 or 99
-        local endX   = isLeftToRight and 99 or 0
-        local stepX  = isLeftToRight and 1 or -1
-
-        for curX = startX, endX, stepX do
+        -- Mode 1 by 1 (Tanam per petak demi petak penuh dari ujung kiri ke kanan 0 s/d 99)
+        for curX = 0, 99 do
             if not STATE.running then break end
             while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
@@ -1416,36 +1372,32 @@ end
 
 local function plantEntireWorld()
     local curW = getCurrentWorldSafe()
-    setStatus("Deteksi Layout", "Memindai baris platform di world " .. curW)
+    setStatus("Menanam", "Memulai proses tanam dari baris paling atas di world " .. curW)
+    addLog(string.format("Memulai tanam world %s (Urut dari baris paling atas Y=0 s/d Y=53, kiri ke kanan)", curW))
 
-    local rows = detectPlantableRows()
-    if #rows == 0 then
-        -- Fallback baris: pindai baris ber-support dari paling atas ke bawah
-        addLog("[Peringatan] Deteksi otomatis minim, memindai fallback dari paling atas...")
-        for y = 0, 53 do
-            local cnt = 0
-            for x = 0, 99 do
-                if isSupportTile(getTileSafe(x, y + 1)) then cnt = cnt + 1 end
-            end
-            if cnt >= 3 then table.insert(rows, y) end
+    -- Pindai dan kumpulkan baris yang memiliki petak kosong berlantai (Y=0 s/d Y=53)
+    local activeRows = {}
+    for y = 0, 53 do
+        if hasPlantableSpotsInRow(y) then
+            table.insert(activeRows, y)
         end
     end
 
-    if #rows == 0 then
-        setStatus("World Kosong / Tidak Ada Platform", "Tidak terdeteksi baris platform untuk ditanam!")
-        addLog("[Peringatan] Tidak ditemukan baris tanam yang valid di world " .. curW)
-        return false
+    if #activeRows == 0 then
+        setStatus("World Penuh / Selesai", "Tidak ada petak kosong yang dapat ditanam di world " .. curW)
+        addLog("[Info] World " .. curW .. " tidak memiliki petak kosong berlantai. Ditandai selesai.")
+        return true
     end
 
     addLog(string.format("Terdeteksi %d baris tanam di %s (Mulai dari baris paling atas: Y=%d)",
-        #rows, curW, rows[1] or 0))
+        #activeRows, curW, activeRows[1]))
 
-    for idx, rY in ipairs(rows) do
+    for idx, plantY in ipairs(activeRows) do
         if not STATE.running then break end
         while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-        setStatus("Menanam", string.format("Baris Y=%d (%d/%d) di %s", rY, idx, #rows, curW))
-        local okRow = executePlantRow(rY, idx)
+        setStatus("Menanam", string.format("Baris Y=%d (%d/%d) di %s", plantY, idx, #activeRows, curW))
+        local okRow = executePlantRow(plantY)
         if not okRow then return false end
     end
 
@@ -1462,11 +1414,18 @@ local function autoPlantMainLoop()
     applyCheatToggles()
 
     if #CFG.world_list == 0 then
-        setStatus("List World Kosong", "Silakan tambahkan world farm terlebih dahulu di menu!")
-        if sendNotification then pcall(sendNotification, "List World Farm kosong!") end
-        STATE.running = false
-        if editToggle then pcall(editToggle, "ap_run_power", false) end
-        return
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then
+            addLog("[Info] List world kosong, otomatis menggunakan world saat ini: " .. curW)
+            table.insert(CFG.world_list, { name = curW, door = "", done = false, status = "ANTRE" })
+            updateWorldDisplayList()
+        else
+            setStatus("List World Kosong", "Silakan tambahkan world farm terlebih dahulu di menu!")
+            if sendNotification then pcall(sendNotification, "List World Farm kosong!") end
+            STATE.running = false
+            if editToggle then pcall(editToggle, "ap_run_power", false) end
+            return
+        end
     end
 
     if STATE.active_world_idx > #CFG.world_list then

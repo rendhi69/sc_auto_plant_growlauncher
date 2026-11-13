@@ -7,9 +7,11 @@ Script otomatisasi tanam (Plant) dan kawin bibit (Splice) untuk Growlauncher And
    - Tombol `🎒 Pilih Seed 1 dari Tas` dan `🎒 Pilih Seed 2 dari Tas` langsung membuka daftar seed yang ada di backpack pemain.
    - Fitur pencarian bibit (Search Seed) berdasarkan nama atau ID barang di dalam tas.
    - Bot otomatis mendeteksi dan memilih bibit terbanyak di tas jika user lupa menyetel ID bibit saat start.
-2. **Mode Tanam 3 Zig-Zag (Lucifer Style) & 1 by 1**:
-   - Menanam 3 petak sekaligus sepanjang baris platform/dirt layaknya fitur Lucifer tanpa ada petak yang terlewat (zero-hole).
-   - Pemindaian platform selalu dimulai dari baris paling atas (Y terkecil / Sky Platforms) menuju ke bawah.
+2. **Mode Tanam Langsung Template (Top-to-Bottom Y=0 s/d 53 Urut Kiri ke Kanan)**:
+   - Penanaman langsung menyapu dari baris paling atas (Y=0) menuju ke bawah (Y=53), urut kiri ke kanan tanpa perlu pre-detection rumit.
+   - Menanam di semua petak kosong yang memiliki lantai/platform di bawahnya.
+   - Mendukung Mode 3 Zig-Zag (Lucifer Style) dan Mode 1 by 1 tanpa ada petak yang terlewat (zero-hole).
+   - Otomatis menanam world saat ini jika antrean world kosong saat START BOT.
 3. **Fitur Splice (Kawin Bibit Otomatis)**:
    - Toggle ON / OFF Splice.
    - Bot menanam Seed 1 dan langsung detik itu juga menanam Seed 2 di petak yang sama.
