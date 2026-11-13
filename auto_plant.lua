@@ -117,6 +117,8 @@ local updateWorldDisplayList
 local updateStorageDisplayList
 local updateFileInfoDisplayList
 local updateBagDisplayList
+local updateSeedsInBagDisplayList
+local syncInventoryCache
 local updateLogDisplayList
 local openWorldListManagerDialog
 local openEditWorldEntryDialog
@@ -126,6 +128,7 @@ local openPasteWorldListDialog
 local openCopyAllWorldsDialog
 local openBackpackSeedPickerDialog
 local getSeedsInBackpack
+local autoDetectAndSetSeeds
 local parseAndValidateWorldBatch
 local parseAndValidateStorageBatch
 
@@ -216,30 +219,71 @@ local SEED_NAMES = {
     [5667]= "Laser Grid Seed",
 }
 
+local function getItemNameSafe(itemID)
+    itemID = tonumber(itemID) or 0
+    if itemID <= 0 then return "" end
+    if SEED_NAMES[itemID] then return SEED_NAMES[itemID] end
+
+    if getItemInfoByID then
+        local ok, info = pcall(getItemInfoByID, itemID)
+        if ok and info and info.name and info.name ~= "" then
+            return tostring(info.name)
+        end
+    end
+
+    if growtopia and growtopia.getItemName then
+        local ok, n = pcall(growtopia.getItemName, itemID)
+        if ok and n and n ~= "" then
+            return tostring(n)
+        end
+    end
+
+    if item_info_manager and item_info_manager.getItemName then
+        local ok, n = pcall(item_info_manager.getItemName, itemID)
+        if ok and n and n ~= "" then
+            return tostring(n)
+        end
+    end
+
+    if ItemInfo and ItemInfo.getItem then
+        local ok, info = pcall(ItemInfo.getItem, itemID)
+        if ok and info and info.name and info.name ~= "" then
+            return tostring(info.name)
+        end
+    end
+
+    return ""
+end
+
 local function resolveSeedName(itemID)
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return "None" end
-    if SEED_NAMES[itemID] then return SEED_NAMES[itemID] end
-    if getItemInfoByID then
-        local ok, info = pcall(getItemInfoByID, itemID)
-        if ok and info and info.name and info.name ~= "" then return info.name end
-    end
-    if growtopia and growtopia.getItemName then
-        local ok, n = pcall(growtopia.getItemName, itemID)
-        if ok and n and n ~= "" then return n end
-    end
-    if item_info_manager and item_info_manager.getItemName then
-        local ok, n = pcall(item_info_manager.getItemName, itemID)
-        if ok and n and n ~= "" then return n end
-    end
-    if ItemInfo and ItemInfo.getItem then
-        local ok, info = pcall(ItemInfo.getItem, itemID)
-        if ok and info and info.name and info.name ~= "" then return info.name end
-    end
+    local name = getItemNameSafe(itemID)
+    if name ~= "" then return name end
     if itemID % 2 == 1 then
         return "Seed #" .. tostring(itemID)
     end
     return "Item #" .. tostring(itemID)
+end
+
+local function isSeedByName(itemID)
+    itemID = tonumber(itemID) or 0
+    if itemID <= 1 or itemID == 112 then return false, "" end -- ID 112 = Gems
+
+    local name = getItemNameSafe(itemID)
+    if name ~= "" then
+        -- Cek kata "seed" di dalam nama barang (case-insensitive)
+        if name:lower():find("seed", 1, true) then
+            return true, name
+        end
+    end
+
+    -- Khusus jika terdaftar di tabel SEED_NAMES kita
+    if SEED_NAMES[itemID] and SEED_NAMES[itemID]:lower():find("seed", 1, true) then
+        return true, SEED_NAMES[itemID]
+    end
+
+    return false, name
 end
 
 local function getInventorySafe()
@@ -263,7 +307,7 @@ local function getInvCount(itemID)
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return 0 end
 
-    -- 1. Metode cepat C++ Growlauncher
+    -- 1. Metode cepat C++ Growlauncher (Paling akurat & live)
     if growtopia and growtopia.checkInventoryCount then
         local ok, cnt = pcall(growtopia.checkInventoryCount, itemID)
         if ok and type(cnt) == "number" and cnt >= 0 then
@@ -271,11 +315,12 @@ local function getInvCount(itemID)
         end
     end
 
-    -- 2. Scan tabel inventory fallback
+    -- 2. Scan tabel inventory fallback (dengan penggabungan seluruh slot)
     local inv = getInventorySafe()
     local total = 0
     for _, it in pairs(inv) do
-        if it and tonumber(it.id or it.itemid) == itemID then
+        local id = tonumber(it.id or it.itemid or it.itemID) or 0
+        if id == itemID then
             total = total + (tonumber(it.amount or it.count) or 0)
         end
     end
@@ -284,37 +329,111 @@ end
 
 getSeedsInBackpack = function(keyword)
     local inv = getInventorySafe()
-    local seeds = {}
+    local seedMap = {}
     keyword = (keyword and keyword ~= "") and keyword:lower() or nil
 
     for _, it in pairs(inv) do
-        local id = tonumber(it.id or it.itemid) or 0
-        local amt = tonumber(it.amount or it.count) or 0
-        if id > 1 and amt > 0 then
-            local name = resolveSeedName(id)
-            -- Di Growtopia, semua bibit (seed) memiliki ID ganjil (odd ID)
-            local isSeed = (id % 2 == 1)
+        local id = tonumber(it.id or it.itemid or it.itemID) or 0
+        if id > 1 and id ~= 112 then
+            local isSeed, seedName = isSeedByName(id)
             if isSeed then
-                local match = true
-                if keyword then
-                    local idStr = tostring(id)
-                    if not name:lower():find(keyword, 1, true) and not idStr:find(keyword, 1, true) then
-                        match = false
-                    end
-                end
-                if match then
-                    table.insert(seeds, {
+                -- Ambil live count aktual dari tas
+                local cnt = getInvCount(id)
+                if cnt > 0 then
+                    local displayName = (seedName ~= "") and seedName or resolveSeedName(id)
+                    seedMap[id] = {
                         id = id,
-                        name = name,
-                        amount = amt
-                    })
+                        name = displayName,
+                        amount = cnt
+                    }
                 end
             end
         end
     end
 
-    table.sort(seeds, function(a, b) return a.amount > b.amount end)
-    return seeds
+    local seedList = {}
+    for _, s in pairs(seedMap) do
+        local match = true
+        if keyword then
+            local idStr = tostring(s.id)
+            if not s.name:lower():find(keyword, 1, true) and not idStr:find(keyword, 1, true) then
+                match = false
+            end
+        end
+        if match then
+            table.insert(seedList, s)
+        end
+    end
+
+    table.sort(seedList, function(a, b) return a.amount > b.amount end)
+    return seedList
+end
+
+updateSeedsInBagDisplayList = function()
+    if not editValue then return end
+    local seeds = getSeedsInBackpack()
+    local rows = {}
+    for i, s in ipairs(seeds) do
+        local tag = ""
+        if s.id == CFG.seed_1_id then
+            tag = " `2[SEED 1]"
+        elseif CFG.splice_mode and s.id == CFG.seed_2_id then
+            tag = " `3[SEED 2]"
+        end
+        table.insert(rows, {
+            string.format("%d. 🌱 %s%s", i, s.name, tag),
+            string.format("ID: %d | Di Tas: %d biji", s.id, s.amount)
+        })
+    end
+    if #rows == 0 then
+        table.insert(rows, {
+            "Tidak ada bibit (seed) di tas!",
+            "Pastikan membawa seed di tas lalu klik 'Refresh Seed di Tas'"
+        })
+    end
+    pcall(editValue, "ap_seeds_in_bag_list", jsonEncode(rows))
+end
+
+autoDetectAndSetSeeds = function(silent)
+    syncInventoryCache()
+    local seeds = getSeedsInBackpack()
+    if #seeds == 0 then
+        if not silent then
+            local msg = "Tidak ditemukan bibit (seed) di dalam tas backpack Anda!"
+            addLog("[Auto-Detect] " .. msg)
+            if sendNotification then pcall(sendNotification, msg) end
+        end
+        return false
+    end
+
+    local s1 = seeds[1]
+    CFG.seed_1_id = s1.id
+    CFG.seed_1_name = s1.name
+    local summary = string.format("Seed 1: %s (ID: %d - %d biji)", s1.name, s1.id, s1.amount)
+
+    if CFG.splice_mode then
+        local s2 = nil
+        for i = 2, #seeds do
+            if seeds[i].id ~= s1.id then
+                s2 = seeds[i]
+                break
+            end
+        end
+        if s2 then
+            CFG.seed_2_id = s2.id
+            CFG.seed_2_name = s2.name
+            summary = summary .. string.format(" | Seed 2: %s (ID: %d - %d biji)", s2.name, s2.id, s2.amount)
+        end
+    end
+
+    persistConfig()
+    updatePowerStatusList()
+    updateSeedsInBagDisplayList()
+    addLog("[Auto-Detect] Berhasil deteksi otomatis bibit di tas -> " .. summary)
+    if not silent and sendNotification then
+        pcall(sendNotification, "Otomatis diset: " .. summary)
+    end
+    return true
 end
 
 openBackpackSeedPickerDialog = function(targetSlot, keyword)
@@ -323,20 +442,26 @@ openBackpackSeedPickerDialog = function(targetSlot, keyword)
     STATE.bp_picker_target = targetSlot
     STATE.bp_search_query = keyword or ""
 
+    syncInventoryCache()
     local seeds = getSeedsInBackpack(keyword)
     local targetTitle = (targetSlot == 1) and "Seed 1 (Utama)" or "Seed 2 (Splice)"
 
     local dLines = {
         "set_default_color|`o",
         string.format("add_label_with_icon|big|`wPilih Seed dari Tas (%s)``|left|11550|", targetTitle),
-        "add_textbox|`oPilih bibit yang ingin Anda tanam langsung dari isi tas backpack Anda:|left|",
+        "add_textbox|`oDaftar bibit (seed) yang benar-benar ada di dalam tas backpack Anda:|left|",
+        "add_spacer|small|",
+
+        -- Action Buttons
+        "add_button|boren_btn_refresh_bp_dialog|🔄 Refresh Isi Tas|noflags|0|0|",
+        "add_button|boren_btn_autodetect_dialog|🎯 Deteksi Otomatis Bibit di Tas|noflags|0|0|",
         "add_spacer|small|",
 
         -- Search Bar
         "add_textbox|`2[Cari Bibit di Tas]|left|",
         string.format("add_input_string|boren_bp_search_box|Cari Nama / ID :|%s|32|", keyword or ""),
         "add_button|boren_btn_search_bp|🔍 Cari Bibit|noflags|0|0|",
-        "add_button|boren_btn_reset_bp_search|🔄 Reset / Tampilkan Semua|noflags|0|0|",
+        "add_button|boren_btn_reset_bp_search|🔄 Tampilkan Semua|noflags|0|0|",
         "add_spacer|small|",
 
         -- Daftar Seed di Tas
@@ -348,14 +473,14 @@ openBackpackSeedPickerDialog = function(targetSlot, keyword)
             table.insert(dLines, "add_textbox|`4Tidak ditemukan bibit di tas dengan kata kunci pencarian tersebut!|left|")
         else
             table.insert(dLines, "add_textbox|`4Tas backpack Anda tidak memiliki bibit/seed!|left|")
-            table.insert(dLines, "add_textbox|`eSilakan ambil seed terlebih dahulu dari gudang/drop.|left|")
+            table.insert(dLines, "add_textbox|`ePastikan Anda membawa bibit di tas lalu klik 'Refresh Isi Tas'.|left|")
         end
     else
         for _, s in ipairs(seeds) do
             local isCur = (targetSlot == 1 and CFG.seed_1_id == s.id) or (targetSlot == 2 and CFG.seed_2_id == s.id)
-            local curTag = isCur and " `2[SEDANG DIPILIH]" or ""
+            local curTag = isCur and " `2[SEDANG AKTIF]" or ""
             table.insert(dLines, string.format("add_textbox|`w• `2%s `o(ID: `9%d`o) - Di Tas: `e%d biji%s|left|", s.name, s.id, s.amount, curTag))
-            table.insert(dLines, string.format("add_button|boren_choose_seed_%d_%d|`2Pilih %s|noflags|0|0|", targetSlot, s.id, s.name))
+            table.insert(dLines, string.format("add_button|boren_choose_seed_%d_%d|`2Gunakan Sebagai %s|noflags|0|0|", targetSlot, s.id, targetTitle))
             table.insert(dLines, "add_spacer|small|")
         end
     end
@@ -365,23 +490,30 @@ openBackpackSeedPickerDialog = function(targetSlot, keyword)
     return true
 end
 
-local function syncInventoryCache()
+syncInventoryCache = function()
     local inv = getInventorySafe()
-    local c = {}
+    local map = {}
     for _, it in pairs(inv) do
-        local id = tonumber(it.id or it.itemid) or 0
-        local amt = tonumber(it.amount or it.count) or 0
-        if id > 0 and amt > 0 then
-            table.insert(c, {
-                id = id,
-                name = resolveSeedName(id),
-                amount = amt
-            })
+        local id = tonumber(it.id or it.itemid or it.itemID) or 0
+        if id > 0 then
+            local cnt = getInvCount(id)
+            if cnt > 0 then
+                map[id] = {
+                    id = id,
+                    name = resolveSeedName(id),
+                    amount = cnt
+                }
+            end
         end
+    end
+    local c = {}
+    for _, it in pairs(map) do
+        table.insert(c, it)
     end
     table.sort(c, function(a, b) return a.amount > b.amount end)
     STATE.cached_inv = c
     if updateBagDisplayList then pcall(updateBagDisplayList) end
+    if updateSeedsInBagDisplayList then pcall(updateSeedsInBagDisplayList) end
 end
 
 -- ============================================================================
@@ -1360,30 +1492,7 @@ local function autoPlantMainLoop()
 
                 -- Auto-detect seed jika Seed 1 di tas 0 tapi ada seed lain di tas
                 if getInvCount(CFG.seed_1_id) == 0 then
-                    local availableSeeds = getSeedsInBackpack()
-                    if #availableSeeds > 0 then
-                        CFG.seed_1_id = availableSeeds[1].id
-                        CFG.seed_1_name = availableSeeds[1].name
-                        persistConfig()
-                        updatePowerStatusList()
-                        addLog(string.format("[Auto-Detect Seed] Memilih bibit terbanyak di tas: %s (ID: %d - %d biji)",
-                            CFG.seed_1_name, CFG.seed_1_id, availableSeeds[1].amount))
-                    end
-                end
-
-                if CFG.splice_mode and getInvCount(CFG.seed_2_id) == 0 then
-                    local availableSeeds = getSeedsInBackpack()
-                    for _, cand in ipairs(availableSeeds) do
-                        if cand.id ~= CFG.seed_1_id then
-                            CFG.seed_2_id = cand.id
-                            CFG.seed_2_name = cand.name
-                            persistConfig()
-                            updatePowerStatusList()
-                            addLog(string.format("[Auto-Detect Seed] Memilih Seed 2 untuk splice: %s (ID: %d - %d biji)",
-                                CFG.seed_2_name, CFG.seed_2_id, cand.amount))
-                            break
-                        end
-                    end
+                    autoDetectAndSetSeeds(true)
                 end
 
                 -- Cek stok awal
@@ -1787,7 +1896,15 @@ local function onSendPacketDialogHook(ptype, pkt)
 
     elseif dName == "boren_bp_seed_picker" then
         local slot = STATE.bp_picker_target or 1
-        if btn == "boren_btn_search_bp" then
+        if btn == "boren_btn_refresh_bp_dialog" then
+            syncInventoryCache()
+            openBackpackSeedPickerDialog(slot, STATE.bp_search_query)
+            return true
+        elseif btn == "boren_btn_autodetect_dialog" then
+            autoDetectAndSetSeeds(false)
+            openBackpackSeedPickerDialog(slot, "")
+            return true
+        elseif btn == "boren_btn_search_bp" then
             local query = pkt:match("boren_bp_search_box|(.-)\n") or fields.boren_bp_search_box or ""
             openBackpackSeedPickerDialog(slot, query)
             return true
@@ -1815,6 +1932,7 @@ local function onSendPacketDialogHook(ptype, pkt)
                 end
                 persistConfig()
                 updatePowerStatusList()
+                updateSeedsInBagDisplayList()
             end
             return true
         end
@@ -1905,6 +2023,15 @@ local function registerNativePlantUI()
     uiFarm:addLabel("Pengaturan Tanam & Splice:")
     uiFarm:addToggle("Tanam 3 Petak Sekaligus (Gaya Lucifer)", CFG.plant_mode == "3zigzag", "ap_toggle_mode_3zigzag", true)
     uiFarm:addToggle("Aktifkan Splice (Kawin 2 Seed)", CFG.splice_mode, "ap_toggle_splice", true)
+    uiFarm:addDivider()
+
+    uiFarm:addLabel("Bibit di Tas & Deteksi Otomatis:")
+    uiFarm:addButton("🔄 Refresh Seed di Tas (Sinkron)", "ap_btn_refresh_seeds")
+    uiFarm:addButton("🎯 Deteksi & Pasang Otomatis Seed dari Tas", "ap_btn_auto_detect_bp")
+    uiFarm:addDisplayList("Daftar Bibit di Tas Saat Ini", "Default", "ap_seeds_in_bag_list")
+    uiFarm:addDivider()
+
+    uiFarm:addLabel("Pilihan Bibit untuk Ditanam:")
     uiFarm:addButton("🎒 Pilih Seed 1 dari Tas (Search BP)", "ap_btn_open_bp_seed_1")
     uiFarm:addItemPicker("Pilih Seed 1 (Utama)", CFG.seed_1_id, CFG.seed_1_name, "ap_picker_seed_1")
     uiFarm:addInputInt("ID Seed 1 (Ketik Angka)", tostring(CFG.seed_1_id), "Seed ID", "Contoh: 3", "Tag", "ap_input_seed_1")
@@ -2004,6 +2131,17 @@ function onValue(typeVal, name, val)
         CFG.splice_mode = (val == true or val == 1)
         persistConfig()
         updatePowerStatusList()
+        updateSeedsInBagDisplayList()
+    elseif name == "ap_btn_refresh_seeds" then
+        syncInventoryCache()
+        updateSeedsInBagDisplayList()
+        updatePowerStatusList()
+        local seeds = getSeedsInBackpack()
+        local msg = string.format("Isi tas diperbarui! Ditemukan %d jenis bibit di tas.", #seeds)
+        addLog("[Tas] " .. msg)
+        if sendNotification then pcall(sendNotification, msg) end
+    elseif name == "ap_btn_auto_detect_bp" then
+        autoDetectAndSetSeeds(false)
     elseif name == "ap_btn_open_bp_seed_1" then
         openBackpackSeedPickerDialog(1)
     elseif name == "ap_btn_open_bp_seed_2" then
@@ -2015,6 +2153,7 @@ function onValue(typeVal, name, val)
             CFG.seed_1_name = resolveSeedName(id)
             persistConfig()
             updatePowerStatusList()
+            updateSeedsInBagDisplayList()
             if sendNotification then pcall(sendNotification, "Seed 1 diset ke: " .. CFG.seed_1_name) end
         end
     elseif name == "ap_picker_seed_2" or name == "ap_input_seed_2" then
@@ -2024,6 +2163,7 @@ function onValue(typeVal, name, val)
             CFG.seed_2_name = resolveSeedName(id)
             persistConfig()
             updatePowerStatusList()
+            updateSeedsInBagDisplayList()
             if sendNotification then pcall(sendNotification, "Seed 2 diset ke: " .. CFG.seed_2_name) end
         end
     elseif name == "ap_manual_world_input" then
