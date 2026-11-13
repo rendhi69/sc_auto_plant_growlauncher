@@ -886,35 +886,65 @@ local function moveSafeTo(tx, ty)
     end
 
     local pFn = FindPath or findPath
-    if pFn then
-        pcall(pFn, tx, ty)
-    end
+    local CHUNK_LIMIT = 10 -- Langkah per hop (10 block) untuk hemat CPU dan gerak mulus
 
-    -- Tunggu konfirmasi pergerakan karakter tiba di petak tujuan
-    local maxWait = 350
-    local elapsed = 0
-    while elapsed < maxWait do
+    while STATE.running do
         local px, py = getPlayerTilePos()
-        if px == tx and py == ty then
-            break
-        end
-        safeSleep(25)
-        elapsed = elapsed + 25
-    end
+        if not px or not py then break end
+        if px == tx and py == ty then break end
 
-    -- Fallback Packet 0 jika FindPath belum sampai / terhalang udara atau ModFly
-    local pxNow, pyNow = getPlayerTilePos()
-    if pxNow ~= tx or pyNow ~= ty then
-        if sendPacketRaw then
-            local state = (pxNow > tx) and 48 or 32
+        local dx = tx - px
+        local dy = ty - py
+        local dist = math.max(math.abs(dx), math.abs(dy))
+        if dist == 0 then break end
+
+        -- Jika jarak jauh (> 10 tile), potong jalur per 10 block
+        local stepX, stepY
+        if dist <= CHUNK_LIMIT then
+            stepX, stepY = tx, ty
+        else
+            local ratio = CHUNK_LIMIT / dist
+            stepX = math.floor(px + (dx * ratio) + 0.5)
+            stepY = math.floor(py + (dy * ratio) + 0.5)
+            stepX = math.max(0, math.min(99, stepX))
+            stepY = math.max(0, math.min(53, stepY))
+        end
+
+        if pFn then
+            pcall(pFn, stepX, stepY)
+        end
+
+        -- Tunggu pergerakan segmen dengan jeda ramah CPU
+        local waited = 0
+        local stepDist = math.max(math.abs(stepX - px), math.abs(stepY - py))
+        local maxWait = math.max(100, math.min(450, stepDist * 40))
+        while waited < maxWait do
+            local nx, ny = getPlayerTilePos()
+            if nx == stepX and ny == stepY then break end
+            safeSleep(25)
+            waited = waited + 25
+        end
+
+        -- Fallback Packet 0 jika FindPath terhambat udara / ModFly
+        local cnx, cny = getPlayerTilePos()
+        if (cnx ~= stepX or cny ~= stepY) and sendPacketRaw then
+            local state = (cnx > stepX) and 48 or 32
             pcall(sendPacketRaw, false, {
                 type  = 0,
-                x     = tx * 32,
-                y     = ty * 32,
+                x     = stepX * 32,
+                y     = stepY * 32,
                 state = state,
             })
-            safeSleep(40)
+            safeSleep(30)
         end
+
+        -- Jeda istirahat antar-segmen jika masih ada jarak berikutnya (> 10 block)
+        if dist > CHUNK_LIMIT then
+            safeSleep(35)
+        end
+
+        local fpx, fpy = getPlayerTilePos()
+        if fpx == tx and fpy == ty then break end
     end
 
     safeSleep(CFG.step_delay)
