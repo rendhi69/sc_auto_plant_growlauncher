@@ -1085,24 +1085,55 @@ local function restockFromStorage()
             syncInventoryCache()
 
             -- Ambil Seed 1
-            collectFloatingSeedsInStorage(CFG.seed_1_id, CFG.target_seed_bp)
+            local c1 = collectFloatingSeedsInStorage(CFG.seed_1_id, CFG.target_seed_bp)
             -- Jika Splice, ambil juga Seed 2
+            local c2 = 0
             if CFG.splice_mode then
-                collectFloatingSeedsInStorage(CFG.seed_2_id, CFG.target_seed_bp)
+                c2 = collectFloatingSeedsInStorage(CFG.seed_2_id, CFG.target_seed_bp)
             end
 
-            syncInventoryCache()
+            -- Tunggu toleransi sinkronisasi paket inventori dari server
             local bp1 = getInvCount(CFG.seed_1_id)
             local bp2 = CFG.splice_mode and getInvCount(CFG.seed_2_id) or 999
+            local hasSeedNow = (not CFG.splice_mode and (bp1 > 0 or c1 > 0))
+                            or (CFG.splice_mode and (bp1 > 0 or c1 > 0) and (bp2 > 0 or c2 > 0))
 
-            if bp1 >= CFG.min_seed_bp and bp2 >= CFG.min_seed_bp then
-                addLog(string.format("[Storage] Sukses restock di %s (Seed 1: %d | Seed 2: %d)", storName, bp1, bp2))
+            if not hasSeedNow then
+                for _ = 1, 5 do
+                    safeSleep(200)
+                    syncInventoryCache()
+                    bp1 = getInvCount(CFG.seed_1_id)
+                    bp2 = CFG.splice_mode and getInvCount(CFG.seed_2_id) or 999
+                    if (not CFG.splice_mode and bp1 > 0) or (CFG.splice_mode and bp1 > 0 and bp2 > 0) then
+                        hasSeedNow = true
+                        break
+                    end
+                end
+            else
+                safeSleep(300)
+                syncInventoryCache()
+                bp1 = getInvCount(CFG.seed_1_id)
+                if CFG.splice_mode then bp2 = getInvCount(CFG.seed_2_id) end
+            end
+
+            local canPlantNow = (not CFG.splice_mode and bp1 > 0)
+                             or (CFG.splice_mode and bp1 > 0 and bp2 > 0)
+
+            if canPlantNow then
+                addLog(string.format("[Storage] Sukses ambil seed di %s (Seed 1: %d | Seed 2: %d). Kembali ke farm untuk menanam...", storName, bp1, bp2))
                 successRestock = true
+                -- PENTING: Jangan langsung skip ke storage berikutnya jika tas berhasil diisi seed!
+                -- Biarkan bot kembali ke farm menanam stok ini.
+                -- Jika stok di storage ini benar-benar habis, bot baru akan konfirmasi dan skip saat balik lagi nanti dengan tas kosong!
                 break
             else
-                addLog(string.format("[Storage] Stok di %s habis/kurang! Skip ke storage berikutnya...", storName))
-                if sendNotification then
-                    pcall(sendNotification, string.format("Storage %s kosong! Skip ke berikutnya...", storName))
+                if CFG.splice_mode and bp1 > 0 and bp2 <= 0 then
+                    addLog(string.format("[Storage] Seed 1 ada di %s (%d), tetapi Seed 2 kosong. Mencari Seed 2 di storage berikutnya...", storName, bp1))
+                else
+                    addLog(string.format("[Storage] Stok di %s habis/kosong (0 seed didapat). Cek storage berikutnya...", storName))
+                    if sendNotification then
+                        pcall(sendNotification, string.format("Storage %s kosong! Skip ke berikutnya...", storName))
+                    end
                 end
                 STATE.active_storage_idx = STATE.active_storage_idx + 1
                 checkedCount = checkedCount + 1
@@ -1114,8 +1145,16 @@ local function restockFromStorage()
         end
     end
 
+    -- Validasi akhir: jika di tas ada seed yang bisa ditanam (misalnya dari storage sebelumnya)
+    local finalBp1 = getInvCount(CFG.seed_1_id)
+    local finalBp2 = CFG.splice_mode and getInvCount(CFG.seed_2_id) or 999
+    if (not CFG.splice_mode and finalBp1 > 0) or (CFG.splice_mode and finalBp1 > 0 and finalBp2 > 0) then
+        successRestock = true
+    end
+
     if not successRestock then
         setStatus("Semua Storage Habis", "Semua world storage kehabisan stok seed!")
+        addLog("[Peringatan] Semua world storage telah diperiksa dan stok seed benar-benar habis. Bot dijeda.")
         if sendNotification then
             pcall(sendNotification, "PERINGATAN: Semua World Storage kehabisan seed! Bot dijeda.")
         end
