@@ -1136,16 +1136,42 @@ end
 -- ============================================================================
 -- 14. ALUR UTAMA TANAM PER BARIS & WORLD
 -- ============================================================================
-local function hasEnoughSeedInBackpack()
-    -- Jika user tidak mengatur world storage sama sekali, bot menanam sampai seed di tas 0
-    local threshold = (#CFG.storage_world_list > 0) and CFG.min_seed_bp or 0
-    local bp1 = getInvCount(CFG.seed_1_id)
-    if bp1 <= threshold then return false end
-    if CFG.splice_mode then
-        local bp2 = getInvCount(CFG.seed_2_id)
-        if bp2 <= threshold then return false end
+local function countPlantableSpotsInWorld()
+    local cnt = 0
+    for y = 0, 53 do
+        for x = 0, 99 do
+            if isTilePlantable(x, y) then
+                cnt = cnt + 1
+            end
+        end
     end
-    return true
+    return cnt
+end
+
+local function hasEnoughSeedInBackpack()
+    local s1 = CFG.seed_1_id
+    local s2 = CFG.seed_2_id
+
+    local bp1 = getInvCount(s1)
+    local bp2 = CFG.splice_mode and getInvCount(s2) or 999
+
+    -- VALIDASI 1: Jika di tas masih ada seed (bp1 > 0 dan jika splice bp2 > 0),
+    -- bot WAJIB menanam sampai habis (0 di tas). Jangan pernah ambil seed ke storage saat tas belum habis!
+    if bp1 > 0 and (not CFG.splice_mode or bp2 > 0) then
+        return true
+    end
+
+    -- VALIDASI 2: Jika terdeteksi 0, double-check dengan sync inventory untuk mencegah lag pembacaan paket
+    syncInventoryCache()
+    safeSleep(50)
+    bp1 = getInvCount(s1)
+    bp2 = CFG.splice_mode and getInvCount(s2) or 999
+    if bp1 > 0 and (not CFG.splice_mode or bp2 > 0) then
+        return true
+    end
+
+    -- Tas benar-benar 0 (habis ter-plant semua)
+    return false
 end
 
 local function executePlantRow(plantY)
@@ -1157,11 +1183,6 @@ local function executePlantRow(plantY)
             if not STATE.running then break end
             while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-            if not hasEnoughSeedInBackpack() then
-                local okRestock = restockFromStorage()
-                if not okRestock then return false end
-            end
-
             local sLeft   = standX - 1
             local sCenter = standX
             local sRight  = standX + 1
@@ -1171,6 +1192,17 @@ local function executePlantRow(plantY)
                            or (sRight <= 99 and isTilePlantable(sRight, plantY))
 
             if needPlant then
+                -- VALIDASI 3: Cek stok tas HANYA saat petak benar-benar butuh tanam!
+                if not hasEnoughSeedInBackpack() then
+                    local remHoles = countPlantableSpotsInWorld()
+                    if remHoles == 0 then
+                        -- World sudah ter-plant semua! Tidak perlu restock lagi!
+                        return true
+                    end
+                    local okRestock = restockFromStorage()
+                    if not okRestock then return false end
+                end
+
                 moveSafeTo(standX, plantY)
 
                 -- Percobaan tanam dengan verifikasi bertahap (hingga 3x jika lag/packet drop)
@@ -1204,6 +1236,13 @@ local function executePlantRow(plantY)
 
         -- Tangani ujung kanan platform (petak 98 dan 99 agar tidak bolong di ujung)
         if isTilePlantable(98, plantY) or isTilePlantable(99, plantY) then
+            if not hasEnoughSeedInBackpack() then
+                local remHoles = countPlantableSpotsInWorld()
+                if remHoles == 0 then return true end
+                local okRestock = restockFromStorage()
+                if not okRestock then return false end
+            end
+
             moveSafeTo(98, plantY)
             for attempt = 1, 3 do
                 if isTilePlantable(98, plantY) then plantSingleSpot(98, plantY) end
@@ -1219,12 +1258,14 @@ local function executePlantRow(plantY)
             if not STATE.running then break end
             while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-            if not hasEnoughSeedInBackpack() then
-                local okRestock = restockFromStorage()
-                if not okRestock then return false end
-            end
-
             if isTilePlantable(curX, plantY) then
+                if not hasEnoughSeedInBackpack() then
+                    local remHoles = countPlantableSpotsInWorld()
+                    if remHoles == 0 then return true end
+                    local okRestock = restockFromStorage()
+                    if not okRestock then return false end
+                end
+
                 moveSafeTo(curX, plantY)
                 for attempt = 1, 3 do
                     if not isTilePlantable(curX, plantY) then break end
@@ -1252,12 +1293,14 @@ local function executePlantRow(plantY)
                 if not STATE.running then break end
                 while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-                if not hasEnoughSeedInBackpack() then
-                    local okRestock = restockFromStorage()
-                    if not okRestock then return false end
-                end
-
                 if isTilePlantable(mx, plantY) then
+                    if not hasEnoughSeedInBackpack() then
+                        local remHoles = countPlantableSpotsInWorld()
+                        if remHoles == 0 then return true end
+                        local okRestock = restockFromStorage()
+                        if not okRestock then return false end
+                    end
+
                     moveSafeTo(mx, plantY)
                     for rep = 1, 3 do
                         if not isTilePlantable(mx, plantY) then break end
@@ -1410,25 +1453,35 @@ local function autoPlantMainLoop()
                 syncInventoryCache()
 
 
-                -- Cek stok awal
-                if not hasEnoughSeedInBackpack() then
-                    local okR = restockFromStorage()
-                    if not okR then break end
-                end
-
-                local okPlant = plantEntireWorld()
-                if okPlant and STATE.running then
+                -- Validasi awal: Cek apakah world ini memang masih memiliki petak kosong berlantai
+                local initialHoles = countPlantableSpotsInWorld()
+                if initialHoles == 0 then
+                    addLog(string.format("[Info] World %s sudah ter-plant penuh (0 petak kosong tersisa). Selesai!", entry.name))
                     entry.done = true
                     entry.status = "DONE"
                     persistConfig()
                     updateWorldDisplayList()
-                    addLog(string.format("World Farm %s SELESAI ditanam!", entry.name))
-                    if sendNotification then
-                        pcall(sendNotification, string.format("Farm %s selesai! Menuju world berikutnya...", entry.name))
-                    end
                 else
-                    if STATE.paused or not STATE.running then
-                        break
+                    -- Cek stok awal HANYA jika world masih membutuhkan penanaman
+                    if not hasEnoughSeedInBackpack() then
+                        local okR = restockFromStorage()
+                        if not okR then break end
+                    end
+
+                    local okPlant = plantEntireWorld()
+                    if okPlant and STATE.running then
+                        entry.done = true
+                        entry.status = "DONE"
+                        persistConfig()
+                        updateWorldDisplayList()
+                        addLog(string.format("World Farm %s SELESAI ditanam!", entry.name))
+                        if sendNotification then
+                            pcall(sendNotification, string.format("Farm %s selesai! Menuju world berikutnya...", entry.name))
+                        end
+                    else
+                        if STATE.paused or not STATE.running then
+                            break
+                        end
                     end
                 end
             else
@@ -1506,7 +1559,7 @@ openWorldListManagerDialog = function(fmt)
 
         -- Bagian 1: Salin Semua World
         "add_textbox|`2[1. Salin Semua World Farm ke Clipboard]|left|",
-        "add_input_string|boren_wcopy_box|Salin Antrean :|" .. rawCopy .. "|2048|",
+        string.format("add_text_input|boren_wcopy_box|Salin Antrean|%s|9999|", rawCopy),
         "add_button|boren_btn_wfmt_colon|Format Titik Dua (:)|noflags|0|0|",
         "add_button|boren_btn_wfmt_pipe|Format Garis (|)|noflags|0|0|",
         "add_button|boren_btn_wfmt_name|Hanya Nama World|noflags|0|0|",
@@ -1515,7 +1568,7 @@ openWorldListManagerDialog = function(fmt)
         -- Bagian 2: Tempel Banyak / Tambah World
         "add_textbox|`2[2. Tempel / Tambah World ke Antrean]|left|",
         "add_textbox|`eTempel 1 atau banyak world (Format: WORLD:ID / WORLD|ID / WORLD). Bebas koma, spasi, enter.|left|",
-        "add_input_string|boren_wpaste_raw|Tempel World :||2048|",
+        "add_text_input|boren_wpaste_raw|Tempel World di sini:||9999|",
         "add_checkbox|boren_wpaste_replace|Ganti semua antrean (Replace)|0|",
         "add_button|boren_submit_wpaste|`2+ Tempel / Tambah ke Antrean|noflags|0|0|",
         "add_spacer|small|",
@@ -1570,7 +1623,7 @@ openStorageListManagerDialog = function(fmt)
 
         -- Bagian 1: Salin Semua Gudang
         "add_textbox|`2[1. Salin Semua Gudang Seed ke Clipboard]|left|",
-        "add_input_string|boren_stcopy_box|Salin Gudang :|" .. rawCopy .. "|2048|",
+        string.format("add_text_input|boren_stcopy_box|Salin Gudang|%s|9999|", rawCopy),
         "add_button|boren_btn_stfmt_colon|Format Titik Dua (:)|noflags|0|0|",
         "add_button|boren_btn_stfmt_pipe|Format Garis (|)|noflags|0|0|",
         "add_button|boren_btn_stfmt_name|Hanya Nama Gudang|noflags|0|0|",
@@ -1579,7 +1632,7 @@ openStorageListManagerDialog = function(fmt)
         -- Bagian 2: Tempel Banyak / Tambah Gudang
         "add_textbox|`2[2. Tempel / Tambah Gudang Seed ke Antrean]|left|",
         "add_textbox|`eTempel 1 atau banyak gudang (Format: WORLD:ID / WORLD|ID / WORLD). Bebas koma, spasi, enter.|left|",
-        "add_input_string|boren_stpaste_raw|Tempel Gudang :||2048|",
+        "add_text_input|boren_stpaste_raw|Tempel Gudang di sini:||9999|",
         "add_checkbox|boren_stpaste_replace|Ganti semua gudang (Replace)|0|",
         "add_button|boren_submit_stpaste|`2+ Tempel / Tambah ke Antrean|noflags|0|0|",
         "add_spacer|small|",
@@ -1615,8 +1668,8 @@ openEditWorldEntryDialog = function(idx)
         string.format("add_label_with_icon|big|`wEdit World Farm #%d``|left|2|", idx),
         "add_textbox|`oUbah nama world atau Door ID di bawah ini:|left|",
         "add_spacer|small|",
-        string.format("add_input_string|boren_ed_wname|Nama World :|%s|32|", e.name or ""),
-        string.format("add_input_string|boren_ed_wdoor|Door ID    :|%s|32|", e.door or ""),
+        string.format("add_text_input|boren_ed_wname|Nama World|%s|32|", e.name or ""),
+        string.format("add_text_input|boren_ed_wdoor|Door ID (Kosong = White Door)|%s|32|", e.door or ""),
         "add_spacer|small|",
         string.format("add_button|boren_save_wedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
         "end_dialog|boren_edit_w_dlg|Batal||"
@@ -1634,8 +1687,8 @@ openEditStorageEntryDialog = function(idx)
         string.format("add_label_with_icon|big|`wEdit Gudang Seed #%d``|left|242|", idx),
         "add_textbox|`oUbah nama gudang atau Door ID di bawah ini:|left|",
         "add_spacer|small|",
-        string.format("add_input_string|boren_ed_sname|Nama Gudang :|%s|32|", e.name or ""),
-        string.format("add_input_string|boren_ed_sdoor|Door ID     :|%s|32|", e.door or ""),
+        string.format("add_text_input|boren_ed_sname|Nama Gudang|%s|32|", e.name or ""),
+        string.format("add_text_input|boren_ed_sdoor|Door ID (Kosong = White Door)|%s|32|", e.door or ""),
         "add_spacer|small|",
         string.format("add_button|boren_save_stedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
         "end_dialog|boren_edit_s_dlg|Batal||"
@@ -1940,7 +1993,7 @@ local function registerNativePlantUI()
     -- Tab 3: Pengaturan & Delay
     local uiSetting = createNativeUI("3. Pengaturan & Delay", "Build")
     uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
-    uiSetting:addSlider("Kecepatan Tanam (ms)", 40, 250, CFG.plant_delay, 10, false, "ap_slider_plant_delay")
+    uiSetting:addInputInt("Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 70", "Timer", "ap_input_plant_delay")
     uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 40, 300, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
     uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 300, CFG.step_delay, 10, false, "ap_slider_step_delay")
     uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
@@ -2112,9 +2165,11 @@ function onValue(typeVal, name, val)
     elseif name == "ap_slider_collect_range" then
         CFG.collect_range = tonumber(val) or CFG.collect_range
         persistConfig()
-    elseif name == "ap_slider_plant_delay" then
-        CFG.plant_delay = tonumber(val) or CFG.plant_delay
+    elseif name == "ap_input_plant_delay" or name == "ap_slider_plant_delay" then
+        local d = tonumber(val) or 70
+        CFG.plant_delay = math.max(10, math.min(5000, math.floor(d)))
         persistConfig()
+        if sendNotification then pcall(sendNotification, "Delay tanam: " .. CFG.plant_delay .. " ms") end
     elseif name == "ap_slider_splice_delay" then
         CFG.splice_delay = tonumber(val) or CFG.splice_delay
         persistConfig()
@@ -2159,7 +2214,7 @@ local ALL_UI_ALIASES = {
     "ap_btn_add_cur_world", "ap_btn_view_worlds", "ap_btn_clear_worlds", "ap_btn_save_worlds",
     "ap_btn_load_worlds", "ap_slider_min_bp", "ap_slider_target_bp", "ap_slider_collect_range",
     "ap_manual_stor_input", "ap_manual_stor_door_input", "ap_btn_add_storage", "ap_btn_view_storages",
-    "ap_btn_clear_storages", "ap_slider_plant_delay", "ap_slider_splice_delay", "ap_slider_step_delay",
+    "ap_btn_clear_storages", "ap_input_plant_delay", "ap_slider_plant_delay", "ap_slider_splice_delay", "ap_slider_step_delay",
     "ap_slider_warp_delay", "ap_toggle_ignore_gems", "ap_toggle_modfly", "ap_toggle_anti_lava",
     "ap_toggle_reconnect", "ap_btn_clear_logs", "ap_toggle_err_only", "ap_btn_refresh_bag"
 }
