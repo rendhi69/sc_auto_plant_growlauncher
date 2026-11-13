@@ -968,7 +968,7 @@ local function moveSafeTo(tx, ty)
             return nil, nil
         end
 
-        local CHUNK_LIMIT = 10
+        local CHUNK_LIMIT = 5 -- hop pendek (5 block) agar gerakan natural & aman saat lag
         local stuck = 0
         while STATE.running do
             local cx, cy = getPlayerTilePos()
@@ -1012,7 +1012,8 @@ local function moveSafeTo(tx, ty)
                 else
                     stuck = 0
                 end
-                safeSleep(35) -- jeda ringan antar hop agar hemat CPU/server
+                -- Jeda antar hop mengikuti slider "Kecepatan Melangkah" (min 200ms) agar tidak terlalu cepat
+                safeSleep(math.max(200, (tonumber(CFG.step_delay) or 110) * 2))
             end
         end
     end
@@ -2166,7 +2167,7 @@ local function registerNativePlantUI()
     uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
     uiSetting:addInputInt("Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 70", "Timer", "ap_input_plant_delay")
     uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 40, 300, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
-    uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 300, CFG.step_delay, 10, false, "ap_slider_step_delay")
+    uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 500, CFG.step_delay, 10, false, "ap_slider_step_delay")
     uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
     uiSetting:addDivider()
 
