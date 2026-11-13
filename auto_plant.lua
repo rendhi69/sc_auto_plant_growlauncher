@@ -252,12 +252,37 @@ local function getItemNameSafe(itemID)
     return ""
 end
 
+local function ensureSeedID(itemID)
+    itemID = math.floor(tonumber(itemID) or 0)
+    if itemID <= 0 then return 0 end
+
+    -- Kasus 1: ID sudah ganjil (identifikasi standar Seed di Growtopia)
+    -- Contoh: Dirt Seed = 3, Lava Seed = 5, Rock Seed = 11, Cave Seed = 15, Pepper Seed = 4585, Laser Grid Seed = 5667
+    if itemID % 2 == 1 then
+        return itemID
+    end
+
+    -- Kasus 2: ID genap (User memilih Block / Tree di tas backpack, bukan Seed-nya)
+    -- Sesuai standar Lucifer (Farhad Auto Harvest / Lucifer scripts):
+    -- Rumus resmi Growtopia: SeedID = BlockID + 1 !
+    -- Contoh: Cave Background (14) -> Cave Seed (15)
+    --         Pepper Tree (4584) -> Pepper Seed (4585)
+    --         Dirt (2) -> Dirt Seed (3)
+    --         Rock (10) -> Rock Seed (11)
+    --         Laser Grid (5666) -> Laser Grid Seed (5667)
+    return itemID + 1
+end
+
 local function resolveSeedName(itemID)
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return "None" end
     local name = getItemNameSafe(itemID)
     if name ~= "" then return name end
     if itemID % 2 == 1 then
+        local blockName = getItemNameSafe(itemID - 1)
+        if blockName ~= "" then
+            return blockName .. " Seed"
+        end
         return "Seed #" .. tostring(itemID)
     end
     return "Item #" .. tostring(itemID)
@@ -325,21 +350,43 @@ local function getInvCount(itemID)
 end
 
 resolvePickedItemID = function(value)
+    if not value or value == "" then return nil end
     if type(value) == "table" then
         value = value.id or value.itemID or value.itemid or value.value or value.name
     end
     local num = tonumber(value)
     if num and num > 0 then
-        return math.floor(num)
+        return ensureSeedID(num)
     end
     if type(value) == "string" and value ~= "" then
+        local cleanVal = value:gsub("^%s+", ""):gsub("%s+$", "")
+        local sNum = tonumber(cleanVal)
+        if sNum and sNum > 0 then
+            return ensureSeedID(sNum)
+        end
         if findItemID then
-            local ok, id = pcall(findItemID, value)
-            if ok and tonumber(id) and tonumber(id) > 0 then return tonumber(id) end
+            local ok, id = pcall(findItemID, cleanVal)
+            if ok and tonumber(id) and tonumber(id) > 0 then
+                return ensureSeedID(tonumber(id))
+            end
+            if not cleanVal:lower():find("seed", 1, true) then
+                local ok2, id2 = pcall(findItemID, cleanVal .. " Seed")
+                if ok2 and tonumber(id2) and tonumber(id2) > 0 then
+                    return ensureSeedID(tonumber(id2))
+                end
+            end
         end
         if growtopia and growtopia.getItemID then
-            local ok, id = pcall(growtopia.getItemID, value)
-            if ok and tonumber(id) and tonumber(id) > 0 then return tonumber(id) end
+            local ok, id = pcall(growtopia.getItemID, cleanVal)
+            if ok and tonumber(id) and tonumber(id) > 0 then
+                return ensureSeedID(tonumber(id))
+            end
+            if not cleanVal:lower():find("seed", 1, true) then
+                local ok2, id2 = pcall(growtopia.getItemID, cleanVal .. " Seed")
+                if ok2 and tonumber(id2) and tonumber(id2) > 0 then
+                    return ensureSeedID(tonumber(id2))
+                end
+            end
         end
     end
     return nil
@@ -902,25 +949,71 @@ local function moveSafeTo(tx, ty)
 
     local pFn = FindPath or findPath
     if pFn then
-        pcall(pFn, sx, sy)
-        -- Polling posisi kedatangan dengan jeda ramah CPU
-        local waited = 0
-        local dist = math.max(math.abs(sx - (curPx or sx)), math.abs(sy - (curPy or sy)))
-        local maxWait = math.max(100, math.min(2200, dist * 50))
-        while waited < maxWait do
-            if not STATE.running then break end
-            local npx, npy = getPlayerTilePos()
-            if npx and npy and math.abs(npx - sx) <= 1 and math.abs(npy - sy) <= 1 then
-                break
+        -- Titik singgah (waypoint) wajib tile kosong; titik garis lurus sering jatuh di block padat
+        local function isFree(x, y)
+            if x < 0 or x > 99 or y < 0 or y > 53 then return false end
+            local tt = getTileSafe(x, y)
+            return not (tt and tt.collidable)
+        end
+        local function nearestFree(cx, cy)
+            for r = 0, 3 do
+                for oy = -r, r do
+                    for ox = -r, r do
+                        if math.max(math.abs(ox), math.abs(oy)) == r and isFree(cx + ox, cy + oy) then
+                            return cx + ox, cy + oy
+                        end
+                    end
+                end
             end
-            safeSleep(30)
-            waited = waited + 30
+            return nil, nil
         end
 
-        local fpx, fpy = getPlayerTilePos()
-        if fpx and fpy and math.abs(fpx - sx) <= 1 and math.abs(fpy - sy) <= 1 then
-            safeSleep(CFG.step_delay or 40)
-            return true
+        local CHUNK_LIMIT = 10
+        local stuck = 0
+        while STATE.running do
+            local cx, cy = getPlayerTilePos()
+            if not cx or not cy then safeSleep(100); stuck = stuck + 1; if stuck >= 3 then break end
+            else
+                if math.abs(cx - sx) <= 1 and math.abs(cy - sy) <= 1 then
+                    safeSleep(CFG.step_delay or 40)
+                    return true
+                end
+                local dx, dy = sx - cx, sy - cy
+                local dist = math.max(math.abs(dx), math.abs(dy))
+                local wx, wy = sx, sy
+                local direct = (dist <= CHUNK_LIMIT) or stuck >= 1
+                if not direct then
+                    local r = CHUNK_LIMIT / dist
+                    local ix = math.max(0, math.min(99, math.floor(cx + dx * r + 0.5)))
+                    local iy = math.max(0, math.min(53, math.floor(cy + dy * r + 0.5)))
+                    wx, wy = nearestFree(ix, iy)
+                    if not wx then wx, wy, direct = sx, sy, true end
+                end
+
+                pcall(pFn, wx, wy)
+                local stepDist = math.max(math.abs(wx - cx), math.abs(wy - cy))
+                local maxWait = math.max(120, math.min(1500, stepDist * 60))
+                local waited = 0
+                while waited < maxWait and STATE.running do
+                    local npx, npy = getPlayerTilePos()
+                    if npx and npy and math.abs(npx - wx) <= 1 and math.abs(npy - wy) <= 1 then break end
+                    safeSleep(30)
+                    waited = waited + 30
+                end
+
+                local nx, ny = getPlayerTilePos()
+                if nx and ny and math.abs(nx - sx) <= 1 and math.abs(ny - sy) <= 1 then
+                    safeSleep(CFG.step_delay or 40)
+                    return true
+                end
+                if nx == cx and ny == cy then
+                    stuck = stuck + 1 -- tidak bergerak: coba langsung ke target, lalu menyerah
+                    if direct and stuck >= 2 then break end
+                else
+                    stuck = 0
+                end
+                safeSleep(35) -- jeda ringan antar hop agar hemat CPU/server
+            end
         end
     end
 
@@ -2106,6 +2199,20 @@ end
 -- ============================================================================
 function onValue(typeVal, name, val)
     name = tostring(name or "")
+    if name == "" then return end
+
+    -- Fallback jika val kosong saat event item picker, ambil langsung via getValue
+    if (val == nil or val == "" or val == 0) and getValue then
+        if name == "ap_pick_seed_1" or name == "ap_pick_seed_2" then
+            for _, vt in ipairs({ 5, 2, 1 }) do
+                local okG, gv = pcall(getValue, vt, name)
+                if okG and gv and gv ~= "" and gv ~= 0 then
+                    val = gv
+                    break
+                end
+            end
+        end
+    end
 
     if name == "ap_run_power" then
         if val == true or val == 1 then
@@ -2132,15 +2239,24 @@ function onValue(typeVal, name, val)
             CFG.seed_1_id = id
             CFG.seed_1_name = resolveSeedName(id)
             persistConfig()
+            if editValue then
+                pcall(editValue, "ap_input_seed_1", tostring(id))
+                pcall(editValue, "ap_pick_seed_1", tostring(id))
+            end
             updatePowerStatusList()
+            addLog(string.format("[Pick] Seed 1 diset: %s (ID: %d)", CFG.seed_1_name, id))
             if sendNotification then pcall(sendNotification, "Seed 1 diset: " .. CFG.seed_1_name .. " (ID: " .. id .. ")") end
         end
     elseif name == "ap_input_seed_1" then
-        local id = tonumber(val) or 0
-        if id > 0 then
-            CFG.seed_1_id = math.floor(id)
+        local id = resolvePickedItemID(val)
+        if id and id > 0 then
+            CFG.seed_1_id = id
             CFG.seed_1_name = resolveSeedName(id)
             persistConfig()
+            if editValue then
+                pcall(editValue, "ap_input_seed_1", tostring(id))
+                pcall(editValue, "ap_pick_seed_1", tostring(id))
+            end
             updatePowerStatusList()
         end
     elseif name == "ap_pick_seed_2" then
@@ -2149,15 +2265,24 @@ function onValue(typeVal, name, val)
             CFG.seed_2_id = id
             CFG.seed_2_name = resolveSeedName(id)
             persistConfig()
+            if editValue then
+                pcall(editValue, "ap_input_seed_2", tostring(id))
+                pcall(editValue, "ap_pick_seed_2", tostring(id))
+            end
             updatePowerStatusList()
+            addLog(string.format("[Pick] Seed 2 diset: %s (ID: %d)", CFG.seed_2_name, id))
             if sendNotification then pcall(sendNotification, "Seed 2 diset: " .. CFG.seed_2_name .. " (ID: " .. id .. ")") end
         end
     elseif name == "ap_input_seed_2" then
-        local id = tonumber(val) or 0
-        if id > 0 then
-            CFG.seed_2_id = math.floor(id)
+        local id = resolvePickedItemID(val)
+        if id and id > 0 then
+            CFG.seed_2_id = id
             CFG.seed_2_name = resolveSeedName(id)
             persistConfig()
+            if editValue then
+                pcall(editValue, "ap_input_seed_2", tostring(id))
+                pcall(editValue, "ap_pick_seed_2", tostring(id))
+            end
             updatePowerStatusList()
         end
     elseif name == "ap_manual_world_input" then
@@ -2285,6 +2410,15 @@ function onValue(typeVal, name, val)
     end
 end
 
+-- Alias global OnValue & onValue agar dipanggil oleh engine Growlauncher di semua platform
+function OnValue(typeVal, name, val)
+    local ok, err = pcall(onValue, typeVal, name, val)
+    if not ok then
+        addLog("[Plant UI Err] " .. tostring(err))
+    end
+end
+onValue = OnValue
+
 local ALL_UI_ALIASES = {
     "ap_run_power", "ap_btn_stop", "ap_pause_toggle", "ap_toggle_mode_3zigzag",
     "ap_toggle_splice", "ap_pick_seed_1", "ap_input_seed_1", "ap_pick_seed_2",
@@ -2301,11 +2435,11 @@ if setOnValue then
     for _, aliasName in ipairs(ALL_UI_ALIASES) do
         pcall(setOnValue, aliasName, function(a1, a2, a3)
             if a2 == aliasName then
-                onValue(a1, a2, a3)
+                OnValue(a1, a2, a3)
             elseif a1 == aliasName then
-                onValue(0, a1, a2)
+                OnValue(0, a1, a2)
             else
-                onValue(0, aliasName, a1)
+                OnValue(0, aliasName, a1)
             end
         end)
     end
@@ -2316,7 +2450,7 @@ end
 -- ============================================================================
 ensureHooksInstalled()
 if addHook then
-    pcall(addHook, onValue, "onvalue")
+    pcall(addHook, OnValue, "onvalue")
     pcall(addHook, onSendPacketDialogHook, "onsendpacket")
 end
 if applyHook then
