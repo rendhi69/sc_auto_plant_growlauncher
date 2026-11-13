@@ -124,6 +124,8 @@ local openStorageListManagerDialog
 local openEditStorageEntryDialog
 local openPasteWorldListDialog
 local openCopyAllWorldsDialog
+local openBackpackSeedPickerDialog
+local getSeedsInBackpack
 local parseAndValidateWorldBatch
 local parseAndValidateStorageBatch
 
@@ -202,18 +204,30 @@ end
 -- 3. ITEM & INVENTORY HELPERS
 -- ============================================================================
 local SEED_NAMES = {
-    [3]  = "Dirt Seed",
-    [15] = "Rock Seed",
-    [17] = "Cave Background Seed",
-    [5]  = "Grass Seed",
-    [27] = "Wood Block Seed",
-    [11] = "Lava Seed",
-    [103]= "Wooden Platform Seed",
+    [3]   = "Dirt Seed",
+    [5]   = "Grass Seed",
+    [11]  = "Lava Seed",
+    [15]  = "Rock Seed",
+    [17]  = "Cave Background Seed",
+    [27]  = "Wood Block Seed",
+    [103] = "Wooden Platform Seed",
+    [340] = "Chandelier Seed",
+    [4585]= "Pepper Tree Seed",
+    [5667]= "Laser Grid Seed",
 }
 
 local function resolveSeedName(itemID)
     itemID = tonumber(itemID) or 0
+    if itemID <= 0 then return "None" end
     if SEED_NAMES[itemID] then return SEED_NAMES[itemID] end
+    if getItemInfoByID then
+        local ok, info = pcall(getItemInfoByID, itemID)
+        if ok and info and info.name and info.name ~= "" then return info.name end
+    end
+    if growtopia and growtopia.getItemName then
+        local ok, n = pcall(growtopia.getItemName, itemID)
+        if ok and n and n ~= "" then return n end
+    end
     if item_info_manager and item_info_manager.getItemName then
         local ok, n = pcall(item_info_manager.getItemName, itemID)
         if ok and n and n ~= "" then return n end
@@ -222,39 +236,146 @@ local function resolveSeedName(itemID)
         local ok, info = pcall(ItemInfo.getItem, itemID)
         if ok and info and info.name and info.name ~= "" then return info.name end
     end
-    return "Seed #" .. tostring(itemID)
+    if itemID % 2 == 1 then
+        return "Seed #" .. tostring(itemID)
+    end
+    return "Item #" .. tostring(itemID)
 end
 
 local function getInventorySafe()
-    local fn = getInventory or getInventoryItems
-    if not fn then return {} end
-    local ok, inv = pcall(fn)
-    if ok and type(inv) == "table" then return inv end
-    return {}
+    local inv = nil
+    if getInventory then
+        local ok, res = pcall(getInventory)
+        if ok and type(res) == "table" then inv = res end
+    end
+    if not inv and getInventoryItems then
+        local ok, res = pcall(getInventoryItems)
+        if ok and type(res) == "table" then inv = res end
+    end
+    if not inv and growtopia and growtopia.getInventory then
+        local ok, res = pcall(growtopia.getInventory)
+        if ok and type(res) == "table" then inv = res end
+    end
+    return inv or {}
 end
 
 local function getInvCount(itemID)
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return 0 end
+
+    -- 1. Metode cepat C++ Growlauncher
+    if growtopia and growtopia.checkInventoryCount then
+        local ok, cnt = pcall(growtopia.checkInventoryCount, itemID)
+        if ok and type(cnt) == "number" and cnt >= 0 then
+            return cnt
+        end
+    end
+
+    -- 2. Scan tabel inventory fallback
     local inv = getInventorySafe()
     local total = 0
     for _, it in pairs(inv) do
-        if it and tonumber(it.id) == itemID then
-            total = total + (tonumber(it.amount) or tonumber(it.count) or 0)
+        if it and tonumber(it.id or it.itemid) == itemID then
+            total = total + (tonumber(it.amount or it.count) or 0)
         end
     end
     return total
+end
+
+getSeedsInBackpack = function(keyword)
+    local inv = getInventorySafe()
+    local seeds = {}
+    keyword = (keyword and keyword ~= "") and keyword:lower() or nil
+
+    for _, it in pairs(inv) do
+        local id = tonumber(it.id or it.itemid) or 0
+        local amt = tonumber(it.amount or it.count) or 0
+        if id > 1 and amt > 0 then
+            local name = resolveSeedName(id)
+            -- Di Growtopia, semua bibit (seed) memiliki ID ganjil (odd ID)
+            local isSeed = (id % 2 == 1)
+            if isSeed then
+                local match = true
+                if keyword then
+                    local idStr = tostring(id)
+                    if not name:lower():find(keyword, 1, true) and not idStr:find(keyword, 1, true) then
+                        match = false
+                    end
+                end
+                if match then
+                    table.insert(seeds, {
+                        id = id,
+                        name = name,
+                        amount = amt
+                    })
+                end
+            end
+        end
+    end
+
+    table.sort(seeds, function(a, b) return a.amount > b.amount end)
+    return seeds
+end
+
+openBackpackSeedPickerDialog = function(targetSlot, keyword)
+    if not growtopia or not growtopia.sendDialog then return false end
+    targetSlot = tonumber(targetSlot) or 1
+    STATE.bp_picker_target = targetSlot
+    STATE.bp_search_query = keyword or ""
+
+    local seeds = getSeedsInBackpack(keyword)
+    local targetTitle = (targetSlot == 1) and "Seed 1 (Utama)" or "Seed 2 (Splice)"
+
+    local dLines = {
+        "set_default_color|`o",
+        string.format("add_label_with_icon|big|`wPilih Seed dari Tas (%s)``|left|11550|", targetTitle),
+        "add_textbox|`oPilih bibit yang ingin Anda tanam langsung dari isi tas backpack Anda:|left|",
+        "add_spacer|small|",
+
+        -- Search Bar
+        "add_textbox|`2[Cari Bibit di Tas]|left|",
+        string.format("add_input_string|boren_bp_search_box|Cari Nama / ID :|%s|32|", keyword or ""),
+        "add_button|boren_btn_search_bp|🔍 Cari Bibit|noflags|0|0|",
+        "add_button|boren_btn_reset_bp_search|🔄 Reset / Tampilkan Semua|noflags|0|0|",
+        "add_spacer|small|",
+
+        -- Daftar Seed di Tas
+        string.format("add_textbox|`2[Daftar Bibit di Tas (%d Jenis Ditemukan)]|left|", #seeds)
+    }
+
+    if #seeds == 0 then
+        if keyword and keyword ~= "" then
+            table.insert(dLines, "add_textbox|`4Tidak ditemukan bibit di tas dengan kata kunci pencarian tersebut!|left|")
+        else
+            table.insert(dLines, "add_textbox|`4Tas backpack Anda tidak memiliki bibit/seed!|left|")
+            table.insert(dLines, "add_textbox|`eSilakan ambil seed terlebih dahulu dari gudang/drop.|left|")
+        end
+    else
+        for _, s in ipairs(seeds) do
+            local isCur = (targetSlot == 1 and CFG.seed_1_id == s.id) or (targetSlot == 2 and CFG.seed_2_id == s.id)
+            local curTag = isCur and " `2[SEDANG DIPILIH]" or ""
+            table.insert(dLines, string.format("add_textbox|`w• `2%s `o(ID: `9%d`o) - Di Tas: `e%d biji%s|left|", s.name, s.id, s.amount, curTag))
+            table.insert(dLines, string.format("add_button|boren_choose_seed_%d_%d|`2Pilih %s|noflags|0|0|", targetSlot, s.id, s.name))
+            table.insert(dLines, "add_spacer|small|")
+        end
+    end
+
+    table.insert(dLines, "end_dialog|boren_bp_seed_picker|Tutup||")
+    pcall(growtopia.sendDialog, table.concat(dLines, "\n"))
+    return true
 end
 
 local function syncInventoryCache()
     local inv = getInventorySafe()
     local c = {}
     for _, it in pairs(inv) do
-        if it and it.id and it.amount and it.amount > 0 then
+        local id = tonumber(it.id or it.itemid) or 0
+        local amt = tonumber(it.amount or it.count) or 0
+        if id > 0 and amt > 0 then
             table.insert(c, {
-                id = tonumber(it.id),
-                name = resolveSeedName(it.id),
-                amount = tonumber(it.amount)
+                id = id,
+                name = resolveSeedName(id),
+                amount = amt
             })
         end
     end
@@ -690,39 +811,40 @@ local function getPlayerTilePos()
     return 0, 0
 end
 
+-- Tabel lookup O(1) cepat untuk support platform & tanah / solid blocks
+local SUPPORT_ITEMS = {
+    [2] = true,   -- Dirt
+    [4] = true,   -- Lava
+    [8] = true,   -- Bedrock
+    [10] = true,  -- Rock
+    [14] = true,  -- Cave Dirt
+    [20] = true,  -- Wood Block
+    [22] = true,  -- Lava Rock
+    [24] = true,  -- Mars Rock
+    [102] = true, -- Wooden Platform
+    [456] = true, [458] = true, [460] = true, [462] = true,
+    [464] = true, [466] = true, [468] = true, [470] = true, [472] = true,
+    [880] = true, -- Stone Platform
+    [954] = true, -- Steel Platform
+    [1238] = true,-- Glass Platform
+    [2304] = true,-- Cyber Platform
+    [3800] = true,-- Bubble Platform
+}
+
 local function isSupportTile(t)
     if not t then return false end
     local fg = tonumber(t.fg) or 0
     if fg <= 0 then return false end
 
-    -- 1. Berbagai macam jenis platform (bisa diinjak dan ditanami di atasnya)
-    -- Wooden Platform (102), Stone Platform (880), Steel Platform (954),
-    -- Glass Platform (1238), Cloud Platform (472), Cyber Platform (2304), Bubble Platform (3800)
-    if fg == 102 or fg == 880 or fg == 954 or fg == 1238 or fg == 2304 or fg == 3800 then
-        return true
-    end
-    if fg >= 456 and fg <= 472 and (fg % 2 == 0) then
-        return true
-    end
-    if growtopia and growtopia.getItemName then
-        local ok, n = pcall(growtopia.getItemName, fg)
-        if ok and n and type(n) == "string" and n:lower():find("platform", 1, true) then
-            return true
-        end
-    end
+    -- 1. Cek tabel lookup O(1) tercepat
+    if SUPPORT_ITEMS[fg] then return true end
 
-    -- 2. Tanah / Block Dirt Farm & Solid Blocks
-    -- 2: Dirt, 4: Lava, 8: Bedrock, 10: Rock, 14: Cave Dirt, 20: Wood Block, 22: Lava Rock, 24: Mars
-    if fg == 2 or fg == 4 or fg == 8 or fg == 10 or fg == 14 or fg == 20 or fg == 22 or fg == 24 then
-        return true
-    end
-
-    -- 3. Properti collidable dari engine Growlauncher
+    -- 2. Properti collidable engine Growlauncher
     if t.collidable == true or t.collidable == 1 then
         return true
     end
 
-    -- 4. Semua block padat Growtopia ID-nya genap (> 0) selain pintu, sign, dan lock
+    -- 3. Semua block padat Growtopia ID-nya genap (> 0) selain pintu, sign, dan lock
     if (fg % 2 == 0) and not isPermanentObstacle(t) then
         if fg ~= 6 and fg ~= 12 and fg ~= 16 and fg ~= 18 and fg ~= 202 and fg ~= 204 and fg ~= 206 and fg ~= 242 then
             return true
@@ -782,7 +904,7 @@ local function moveSafeTo(tx, ty)
     end
 
     -- Tunggu konfirmasi pergerakan karakter tiba di petak tujuan (toleransi <= 1 tile)
-    local maxWait = 350
+    local maxWait = 250
     local elapsed = 0
     while elapsed < maxWait do
         local px, py = getPlayerTilePos()
@@ -794,6 +916,23 @@ local function moveSafeTo(tx, ty)
     end
 
     safeSleep(CFG.step_delay)
+    return true
+end
+
+local function waitForWorldLoaded(timeoutMs)
+    timeoutMs = timeoutMs or 3000
+    local elapsed = 0
+    while elapsed < timeoutMs do
+        local tMid = getTileSafe(50, 30)
+        local tDoor = getTileSafe(0, 0)
+        local tBot = getTileSafe(50, 54)
+        if (tMid.fg and tMid.fg > 0) or (tDoor.fg and tDoor.fg > 0) or (tBot.fg and tBot.fg > 0)
+           or (tMid.bg and tMid.bg > 0) or (tDoor.bg and tDoor.bg > 0) then
+            return true
+        end
+        safeSleep(150)
+        elapsed = elapsed + 150
+    end
     return true
 end
 
@@ -815,10 +954,11 @@ local function detectPlantableRows()
                 supportCount = supportCount + 1
             end
         end
-        -- Baris dianggap platform/dirt farm jika memiliki minimal 5 petak support
-        if supportCount >= 5 then
+        -- Baris dianggap platform/dirt farm jika memiliki minimal 4 petak support
+        if supportCount >= 4 then
             table.insert(rows, y)
         end
+        if y % 15 == 0 then safeSleep(5) end
     end
 
     -- Pastikan baris selalu diurutkan dari paling atas (Y terkecil) ke paling bawah (Y terbesar)
@@ -921,8 +1061,9 @@ end
 
 local function restockFromStorage()
     if #CFG.storage_world_list == 0 then
-        setStatus("Storage Kosong", "Daftar World Storage masih kosong! Silakan isi di tab Storage.")
-        if sendNotification then pcall(sendNotification, "Daftar World Storage kosong! Bot dijeda.") end
+        setStatus("Seed di Tas Habis", "Seed di tas telah habis & tidak ada World Storage!")
+        addLog("[Peringatan] Seed di tas habis dan tidak ada daftar world storage. Bot dijeda.")
+        if sendNotification then pcall(sendNotification, "Seed di tas habis dan tidak ada World Storage! Bot dijeda.") end
         STATE.paused = true
         return false
     end
@@ -1008,11 +1149,13 @@ end
 -- 14. ALUR UTAMA TANAM PER BARIS & WORLD
 -- ============================================================================
 local function hasEnoughSeedInBackpack()
+    -- Jika user tidak mengatur world storage sama sekali, bot menanam sampai seed di tas 0
+    local threshold = (#CFG.storage_world_list > 0) and CFG.min_seed_bp or 0
     local bp1 = getInvCount(CFG.seed_1_id)
-    if bp1 <= CFG.min_seed_bp then return false end
+    if bp1 <= threshold then return false end
     if CFG.splice_mode then
         local bp2 = getInvCount(CFG.seed_2_id)
-        if bp2 <= CFG.min_seed_bp then return false end
+        if bp2 <= threshold then return false end
     end
     return true
 end
@@ -1156,12 +1299,18 @@ local function plantEntireWorld()
         end
     end
 
+    if #rows == 0 then
+        setStatus("World Kosong / Tidak Ada Platform", "Tidak terdeteksi baris platform untuk ditanam!")
+        addLog("[Peringatan] Tidak ditemukan baris tanam yang valid di world " .. curW)
+        return false
+    end
+
     addLog(string.format("Terdeteksi %d baris tanam di %s (Mulai dari baris paling atas: Y=%d)",
         #rows, curW, rows[1] or 0))
 
     for idx, rY in ipairs(rows) do
         if not STATE.running then break end
-        while STATE.paused do safeSleep(500) end
+        while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
         setStatus("Menanam", string.format("Baris Y=%d (%d/%d) di %s", rY, idx, #rows, curW))
         local okRow = executePlantRow(rY, idx)
@@ -1205,8 +1354,37 @@ local function autoPlantMainLoop()
             setStatus("Masuk World Farm", "Menuju " .. entry.name)
             local arrived = warpToWorld(entry.name, entry.door)
             if arrived then
-                safeSleep(1000)
+                safeSleep(800)
+                waitForWorldLoaded(3000)
                 syncInventoryCache()
+
+                -- Auto-detect seed jika Seed 1 di tas 0 tapi ada seed lain di tas
+                if getInvCount(CFG.seed_1_id) == 0 then
+                    local availableSeeds = getSeedsInBackpack()
+                    if #availableSeeds > 0 then
+                        CFG.seed_1_id = availableSeeds[1].id
+                        CFG.seed_1_name = availableSeeds[1].name
+                        persistConfig()
+                        updatePowerStatusList()
+                        addLog(string.format("[Auto-Detect Seed] Memilih bibit terbanyak di tas: %s (ID: %d - %d biji)",
+                            CFG.seed_1_name, CFG.seed_1_id, availableSeeds[1].amount))
+                    end
+                end
+
+                if CFG.splice_mode and getInvCount(CFG.seed_2_id) == 0 then
+                    local availableSeeds = getSeedsInBackpack()
+                    for _, cand in ipairs(availableSeeds) do
+                        if cand.id ~= CFG.seed_1_id then
+                            CFG.seed_2_id = cand.id
+                            CFG.seed_2_name = cand.name
+                            persistConfig()
+                            updatePowerStatusList()
+                            addLog(string.format("[Auto-Detect Seed] Memilih Seed 2 untuk splice: %s (ID: %d - %d biji)",
+                                CFG.seed_2_name, CFG.seed_2_id, cand.amount))
+                            break
+                        end
+                    end
+                end
 
                 -- Cek stok awal
                 if not hasEnoughSeedInBackpack() then
@@ -1224,12 +1402,24 @@ local function autoPlantMainLoop()
                     if sendNotification then
                         pcall(sendNotification, string.format("Farm %s selesai! Menuju world berikutnya...", entry.name))
                     end
+                else
+                    if STATE.paused or not STATE.running then
+                        break
+                    end
                 end
             else
                 addLog("Gagal masuk ke world " .. entry.name .. ", melewati...")
             end
         end
         STATE.active_world_idx = STATE.active_world_idx + 1
+    end
+
+    if STATE.paused then
+        -- Pertahankan status pause agar user tahu kenapa bot berhenti (misal: Seed Habis)
+        STATE.running = false
+        if editToggle then pcall(editToggle, "ap_run_power", false) end
+        updateWorldDisplayList()
+        return
     end
 
     if STATE.running then
@@ -1594,6 +1784,41 @@ local function onSendPacketDialogHook(ptype, pkt)
             return true
         end
         return true
+
+    elseif dName == "boren_bp_seed_picker" then
+        local slot = STATE.bp_picker_target or 1
+        if btn == "boren_btn_search_bp" then
+            local query = pkt:match("boren_bp_search_box|(.-)\n") or fields.boren_bp_search_box or ""
+            openBackpackSeedPickerDialog(slot, query)
+            return true
+        elseif btn == "boren_btn_reset_bp_search" then
+            openBackpackSeedPickerDialog(slot, "")
+            return true
+        end
+
+        local chooseSlot, chooseID = btn:match("^boren_choose_seed_(%d+)_(%d+)$")
+        if chooseSlot and chooseID then
+            local sSlot = tonumber(chooseSlot) or 1
+            local sID = tonumber(chooseID) or 0
+            if sID > 0 then
+                local sName = resolveSeedName(sID)
+                if sSlot == 1 then
+                    CFG.seed_1_id = sID
+                    CFG.seed_1_name = sName
+                    addLog(string.format("[Backpack Picker] Seed 1 (Utama) dipilih: %s (ID: %d)", sName, sID))
+                    if sendNotification then pcall(sendNotification, "Seed 1 diset: " .. sName) end
+                else
+                    CFG.seed_2_id = sID
+                    CFG.seed_2_name = sName
+                    addLog(string.format("[Backpack Picker] Seed 2 (Splice) dipilih: %s (ID: %d)", sName, sID))
+                    if sendNotification then pcall(sendNotification, "Seed 2 diset: " .. sName) end
+                end
+                persistConfig()
+                updatePowerStatusList()
+            end
+            return true
+        end
+        return true
     end
     return false
 end
@@ -1680,8 +1905,10 @@ local function registerNativePlantUI()
     uiFarm:addLabel("Pengaturan Tanam & Splice:")
     uiFarm:addToggle("Tanam 3 Petak Sekaligus (Gaya Lucifer)", CFG.plant_mode == "3zigzag", "ap_toggle_mode_3zigzag", true)
     uiFarm:addToggle("Aktifkan Splice (Kawin 2 Seed)", CFG.splice_mode, "ap_toggle_splice", true)
+    uiFarm:addButton("🎒 Pilih Seed 1 dari Tas (Search BP)", "ap_btn_open_bp_seed_1")
     uiFarm:addItemPicker("Pilih Seed 1 (Utama)", CFG.seed_1_id, CFG.seed_1_name, "ap_picker_seed_1")
     uiFarm:addInputInt("ID Seed 1 (Ketik Angka)", tostring(CFG.seed_1_id), "Seed ID", "Contoh: 3", "Tag", "ap_input_seed_1")
+    uiFarm:addButton("🎒 Pilih Seed 2 dari Tas (Search BP)", "ap_btn_open_bp_seed_2")
     uiFarm:addItemPicker("Pilih Seed 2 (Splice)", CFG.seed_2_id, CFG.seed_2_name, "ap_picker_seed_2")
     uiFarm:addInputInt("ID Seed 2 (Ketik Angka)", tostring(CFG.seed_2_id), "Seed ID", "Contoh: 15", "Tag", "ap_input_seed_2")
     uiFarm:addDivider()
@@ -1777,6 +2004,10 @@ function onValue(typeVal, name, val)
         CFG.splice_mode = (val == true or val == 1)
         persistConfig()
         updatePowerStatusList()
+    elseif name == "ap_btn_open_bp_seed_1" then
+        openBackpackSeedPickerDialog(1)
+    elseif name == "ap_btn_open_bp_seed_2" then
+        openBackpackSeedPickerDialog(2)
     elseif name == "ap_picker_seed_1" or name == "ap_input_seed_1" then
         local id = tonumber(val) or 0
         if id > 0 then
