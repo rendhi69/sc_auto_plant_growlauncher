@@ -877,78 +877,67 @@ end
 
 local function moveSafeTo(tx, ty)
     if not STATE.running then return false end
-    tx = math.max(0, math.min(99, tx))
-    ty = math.max(0, math.min(53, ty))
+    tx = math.max(0, math.min(99, math.floor(tx or 0)))
+    ty = math.max(0, math.min(53, math.floor(ty or 0)))
 
     local curPx, curPy = getPlayerTilePos()
     if curPx == tx and curPy == ty then
         return true
     end
 
+    -- Jika target adalah tile padat (misal seed di atas block solid), arahkan ke petak aman terdekat
+    local sx, sy = tx, ty
+    local t = getTileSafe(tx, ty)
+    if t and t.collidable then
+        if not getTileSafe(tx, ty - 1).collidable then
+            sx, sy = tx, ty - 1
+        elseif not getTileSafe(tx - 1, ty).collidable then
+            sx, sy = tx - 1, ty
+        elseif not getTileSafe(tx + 1, ty).collidable then
+            sx, sy = tx + 1, ty
+        elseif not getTileSafe(tx, ty + 1).collidable then
+            sx, sy = tx, ty + 1
+        end
+    end
+
     local pFn = FindPath or findPath
-    local CHUNK_LIMIT = 10 -- Langkah per hop (10 block) untuk hemat CPU dan gerak mulus
-
-    while STATE.running do
-        local px, py = getPlayerTilePos()
-        if not px or not py then break end
-        if px == tx and py == ty then break end
-
-        local dx = tx - px
-        local dy = ty - py
-        local dist = math.max(math.abs(dx), math.abs(dy))
-        if dist == 0 then break end
-
-        -- Jika jarak jauh (> 10 tile), potong jalur per 10 block
-        local stepX, stepY
-        if dist <= CHUNK_LIMIT then
-            stepX, stepY = tx, ty
-        else
-            local ratio = CHUNK_LIMIT / dist
-            stepX = math.floor(px + (dx * ratio) + 0.5)
-            stepY = math.floor(py + (dy * ratio) + 0.5)
-            stepX = math.max(0, math.min(99, stepX))
-            stepY = math.max(0, math.min(53, stepY))
-        end
-
-        if pFn then
-            pcall(pFn, stepX, stepY)
-        end
-
-        -- Tunggu pergerakan segmen dengan jeda ramah CPU
+    if pFn then
+        pcall(pFn, sx, sy)
+        -- Polling posisi kedatangan dengan jeda ramah CPU
         local waited = 0
-        local stepDist = math.max(math.abs(stepX - px), math.abs(stepY - py))
-        local maxWait = math.max(100, math.min(450, stepDist * 40))
+        local dist = math.max(math.abs(sx - (curPx or sx)), math.abs(sy - (curPy or sy)))
+        local maxWait = math.max(100, math.min(2200, dist * 50))
         while waited < maxWait do
-            local nx, ny = getPlayerTilePos()
-            if nx == stepX and ny == stepY then break end
-            safeSleep(25)
-            waited = waited + 25
-        end
-
-        -- Fallback Packet 0 jika FindPath terhambat udara / ModFly
-        local cnx, cny = getPlayerTilePos()
-        if (cnx ~= stepX or cny ~= stepY) and sendPacketRaw then
-            local state = (cnx > stepX) and 48 or 32
-            pcall(sendPacketRaw, false, {
-                type  = 0,
-                x     = stepX * 32,
-                y     = stepY * 32,
-                state = state,
-            })
+            if not STATE.running then break end
+            local npx, npy = getPlayerTilePos()
+            if npx and npy and math.abs(npx - sx) <= 1 and math.abs(npy - sy) <= 1 then
+                break
+            end
             safeSleep(30)
-        end
-
-        -- Jeda istirahat antar-segmen jika masih ada jarak berikutnya (> 10 block)
-        if dist > CHUNK_LIMIT then
-            safeSleep(35)
+            waited = waited + 30
         end
 
         local fpx, fpy = getPlayerTilePos()
-        if fpx == tx and fpy == ty then break end
+        if fpx and fpy and math.abs(fpx - sx) <= 1 and math.abs(fpy - sy) <= 1 then
+            safeSleep(CFG.step_delay or 40)
+            return true
+        end
     end
 
-    safeSleep(CFG.step_delay)
-    return true
+    -- Fallback Packet 0 jika FindPath terhambat udara / ModFly
+    local okP, p = pcall(getLocal)
+    if okP and p and sendPacketRaw then
+        local state = (curPx and curPx > sx) and 48 or 32
+        pcall(sendPacketRaw, false, {
+            type  = 0,
+            x     = sx * 32,
+            y     = sy * 32,
+            state = state,
+        })
+        safeSleep(CFG.step_delay or 50)
+        return true
+    end
+    return false
 end
 
 local function waitForWorldLoaded(timeoutMs)
@@ -1044,6 +1033,9 @@ local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
     local getObjsFn = getObjects or getObjectList
     if not getObjsFn then return 0 end
 
+    targetSeedID = math.floor(tonumber(targetSeedID) or 0)
+    if targetSeedID <= 0 then return 0 end
+
     local curBP = getInvCount(targetSeedID)
     local needed = math.max(0, targetAmount - curBP)
     if needed <= 0 then return 0 end
@@ -1054,23 +1046,29 @@ local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
 
     for _, obj in pairs(objs) do
         if not STATE.running then break end
-        if obj and obj.pos and obj.id and tonumber(obj.itemid) == targetSeedID then
-            local ox = math.floor((obj.pos.x + 10) / 32)
-            local oy = math.floor((obj.pos.y + 10) / 32)
+        local objItemID = tonumber(obj and (obj.itemid or obj.itemId or obj.item_id or 0)) or 0
+        if obj and obj.id and objItemID == targetSeedID then
+            local rawX = (obj.pos and obj.pos.x) or obj.posX or obj.x or 0
+            local rawY = (obj.pos and obj.pos.y) or obj.posY or obj.y or 0
+            local ox = math.floor((rawX + 10) / 32)
+            local oy = math.floor((rawY + 10) / 32)
+
+            addLog(string.format("[Storage] Menghampiri seed ID %d di tile (%d, %d)...", targetSeedID, ox, oy))
             moveSafeTo(ox, oy)
-            safeSleep(80)
+            safeSleep(100)
 
             -- Ambil objek via packet 11
             if sendPacketRaw then
                 pcall(sendPacketRaw, false, {
                     type  = 11,
                     value = obj.id,
-                    x     = obj.pos.x,
-                    y     = obj.pos.y,
+                    x     = rawX,
+                    y     = rawY,
                 })
             end
-            safeSleep(120)
+            safeSleep(150)
             collected = collected + (tonumber(obj.amount) or 1)
+            syncInventoryCache()
             if getInvCount(targetSeedID) >= targetAmount then break end
         end
     end
@@ -1111,8 +1109,19 @@ local function restockFromStorage()
         setStatus("Storage Check", string.format("Warp ke Storage: %s (%d/%d)", storName, STATE.active_storage_idx, totalStorages))
         local okWarp = warpToWorld(storName, storDoor)
         if okWarp then
-            safeSleep(1000)
+            safeSleep(800)
+            -- Tunggu hingga objek world termuat di memori
+            for _ = 1, 8 do
+                local getObjsFn = getObjects or getObjectList
+                local objs = getObjsFn and getObjsFn()
+                if objs and #objs > 0 then break end
+                safeSleep(150)
+            end
             syncInventoryCache()
+            if editToggle then
+                pcall(editToggle, "Auto Collect", true)
+                pcall(editToggle, "Anti Collect", false)
+            end
 
             -- Ambil Seed 1
             local c1 = collectFloatingSeedsInStorage(CFG.seed_1_id, CFG.target_seed_bp)
