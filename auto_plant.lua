@@ -1735,26 +1735,24 @@ end
 local function safeSendRawDialog(dText)
     if not dText or dText == "" then return false end
     if sendVariant then
-        local ok = pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
-        if ok then return true end
+        -- 1. Format resmi GrowLauncher (v1 = function name, v2 = dialog text)
+        pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        -- 2. Format alternatif 0-based
+        pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
+        -- 3. Format numeric array
+        pcall(sendVariant, { [1] = "OnDialogRequest", [2] = dText })
+        pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
     end
     if growtopia and growtopia.sendDialog then
-        local ok = pcall(growtopia.sendDialog, dText)
-        if ok then return true end
+        pcall(growtopia.sendDialog, dText)
     end
     if sendDialog then
-        local ok = pcall(sendDialog, dText)
-        if ok then return true end
+        pcall(sendDialog, dText)
     end
-    return false
+    return true
 end
 
 openWorldListManagerDialog = function(fmt)
-    local curW = getCurrentWorldSafe()
-    if curW == "" or curW == "EXIT" then
-        if sendNotification then pcall(sendNotification, "Silakan masuk ke dalam world terlebih dahulu untuk melihat/kelola list world!") end
-        return false
-    end
     fmt = fmt or "colon"
 
     local copyLines = {}
@@ -1817,11 +1815,6 @@ openWorldListManagerDialog = function(fmt)
 end
 
 openStorageListManagerDialog = function(fmt)
-    local curW = getCurrentWorldSafe()
-    if curW == "" or curW == "EXIT" then
-        if sendNotification then pcall(sendNotification, "Silakan masuk ke dalam world terlebih dahulu untuk melihat/kelola list gudang!") end
-        return false
-    end
     fmt = fmt or "colon"
 
     local copyLines = {}
@@ -2249,6 +2242,12 @@ end
 -- 18. NATIVE ON-VALUE EVENT DISPATCHER
 -- ============================================================================
 function onValue(typeVal, name, val)
+    -- Shift argumen jika GrowLauncher memanggil onValue(alias, val) atau alias ada di typeVal
+    if type(typeVal) == "string" and (name == nil or type(name) ~= "string" or (type(name) == "string" and typeVal:sub(1, 3) == "ap_")) then
+        val = name
+        name = typeVal
+        typeVal = 0
+    end
     name = tostring(name or "")
     if name == "" then return end
 
