@@ -106,6 +106,8 @@ local STATE = {
     buf_world_door      = "",
     buf_storage_name    = "",
     buf_storage_door    = "",
+    buf_seed_1_id       = CFG.seed_1_id,
+    buf_seed_2_id       = CFG.seed_2_id,
     console_errors_only = false,
     suppress_dialog     = false,
     reconnecting        = false,
@@ -113,6 +115,7 @@ local STATE = {
 
 -- Forward Declarations
 local updatePowerStatusList
+local updateSeedStatusDisplay
 local updateWorldDisplayList
 local updateStorageDisplayList
 local updateFileInfoDisplayList
@@ -1631,12 +1634,18 @@ local function autoPlantMainLoop()
     ensureHooksInstalled()
     applyCheatToggles()
 
-    CFG.seed_1_id = ensureSeedID(CFG.seed_1_id)
-    CFG.seed_1_name = resolveSeedName(CFG.seed_1_id)
-    if CFG.splice_mode and CFG.seed_2_id and CFG.seed_2_id > 0 then
-        CFG.seed_2_id = ensureSeedID(CFG.seed_2_id)
-        CFG.seed_2_name = resolveSeedName(CFG.seed_2_id)
+    if STATE.buf_seed_1_id and STATE.buf_seed_1_id > 0 then
+        CFG.seed_1_id = ensureSeedID(STATE.buf_seed_1_id)
+        CFG.seed_1_name = resolveSeedName(CFG.seed_1_id)
+        STATE.buf_seed_1_id = CFG.seed_1_id
     end
+    if CFG.splice_mode and STATE.buf_seed_2_id and STATE.buf_seed_2_id > 0 then
+        CFG.seed_2_id = ensureSeedID(STATE.buf_seed_2_id)
+        CFG.seed_2_name = resolveSeedName(CFG.seed_2_id)
+        STATE.buf_seed_2_id = CFG.seed_2_id
+    end
+    persistConfig()
+    updateSeedStatusDisplay()
     updatePowerStatusList()
 
     if #CFG.world_list == 0 then
@@ -2124,6 +2133,42 @@ updatePowerStatusList = function()
     }))
 end
 
+updateSeedStatusDisplay = function()
+    if not editValue then return end
+    local s1_id = STATE.buf_seed_1_id or CFG.seed_1_id
+    local s2_id = STATE.buf_seed_2_id or CFG.seed_2_id
+
+    local s1_dirty = (s1_id ~= CFG.seed_1_id)
+    local s2_dirty = (s2_id ~= CFG.seed_2_id)
+
+    local s1_name = resolveSeedName(s1_id)
+    local s2_name = resolveSeedName(s2_id)
+
+    local s1_title = s1_dirty and "⚠️ Seed 1 (Utama) [BELUM DISIMPAN]" or "✅ Seed 1 (Utama) [TERSIMPAN]"
+    local s1_desc = string.format("%s (ID: %d) | Di Tas: %d%s",
+        s1_name, s1_id, getInvCount(s1_id),
+        s1_dirty and " -> Klik 'Simpan Pilihan ID Seed' di bawah!" or " (Siap Ditanam)"
+    )
+
+    local s2_title = ""
+    local s2_desc = ""
+    if CFG.splice_mode then
+        s2_title = s2_dirty and "⚠️ Seed 2 (Splice) [BELUM DISIMPAN]" or "✅ Seed 2 (Splice) [TERSIMPAN]"
+        s2_desc = string.format("%s (ID: %d) | Di Tas: %d%s",
+            s2_name, s2_id, getInvCount(s2_id),
+            s2_dirty and " -> Klik 'Simpan Pilihan ID Seed' di bawah!" or " (Siap Displice)"
+        )
+    else
+        s2_title = "ℹ️ Seed 2 (Splice) [NONAKTIF]"
+        s2_desc = "Mode Splice Nonaktif (Hanya tanam 1 jenis seed)"
+    end
+
+    pcall(editValue, "ap_seed_status_display", jsonEncode({
+        { s1_title, s1_desc },
+        { s2_title, s2_desc },
+    }))
+end
+
 updateBagDisplayList = function()
     if not editValue then return end
     local bList = {}
@@ -2188,11 +2233,11 @@ local function registerNativePlantUI()
     uiFarm:addToggle("Aktifkan Splice (Kawin 2 Seed)", CFG.splice_mode, "ap_toggle_splice", true)
     uiFarm:addDivider()
 
-    uiFarm:addLabel("Pilihan Bibit untuk Ditanam:")
-    uiFarm:addItemPicker("Pilih Seed 1 (Utama)", CFG.seed_1_name, tostring(CFG.seed_1_id), "ap_pick_seed_1")
-    uiFarm:addInputInt("ID Seed 1 (Manual)", tostring(CFG.seed_1_id), "Seed ID", "Contoh: 3", "Tag", "ap_input_seed_1")
-    uiFarm:addItemPicker("Pilih Seed 2 (Splice)", CFG.seed_2_name, tostring(CFG.seed_2_id), "ap_pick_seed_2")
-    uiFarm:addInputInt("ID Seed 2 (Manual)", tostring(CFG.seed_2_id), "Seed ID", "Contoh: 15", "Tag", "ap_input_seed_2")
+    uiFarm:addLabel("Pengaturan Bibit (Input ID Manual):")
+    uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
+    uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
+    uiFarm:addButton("💾 Simpan Pilihan ID Seed", "ap_btn_save_seeds")
+    uiFarm:addDisplayList("Keterangan & Status ID Seed", "Default", "ap_seed_status_display")
     uiFarm:addDivider()
 
     uiFarm:addLabel("Daftar World Farm:")
@@ -2517,66 +2562,49 @@ local function handlePlantUIValue(typeVal, name, val)
         CFG.splice_mode = (val == true or val == 1)
         persistConfig()
         updatePowerStatusList()
-    elseif name == "ap_pick_seed_1" then
-        if isSyncingSeed then return end
-        if not val or val == "" or val == 0 or val == "0" then return end
-        local id = resolvePickedItemID(val)
-        if id and id > 0 and CFG.seed_1_id ~= id then
-            isSyncingSeed = true
-            CFG.seed_1_id = id
-            CFG.seed_1_name = resolveSeedName(id)
-            persistConfig()
-            if editValue then
-                pcall(editValue, "ap_input_seed_1", tostring(id))
-            end
-            updatePowerStatusList()
-            addLog(string.format("[Pick] Seed 1 diset: %s (ID: %d)", CFG.seed_1_name, id))
-            if sendNotification then pcall(sendNotification, "Seed 1: " .. CFG.seed_1_name .. " (ID: " .. id .. ")") end
-            isSyncingSeed = false
-        end
+        updateSeedStatusDisplay()
     elseif name == "ap_input_seed_1" then
-        if isSyncingSeed then return end
-        if not val or val == "" or val == 0 or val == "0" then return end
         local num = tonumber(val)
-        if num and num > 0 and CFG.seed_1_id ~= math.floor(num) then
-            isSyncingSeed = true
-            local id = math.floor(num)
-            CFG.seed_1_id = id
-            CFG.seed_1_name = resolveSeedName(id)
-            persistConfig()
-            updatePowerStatusList()
-            isSyncingSeed = false
-        end
-    elseif name == "ap_pick_seed_2" then
-        if isSyncingSeed then return end
-        if not val or val == "" or val == 0 or val == "0" then return end
-        local id = resolvePickedItemID(val)
-        if id and id > 0 and CFG.seed_2_id ~= id then
-            isSyncingSeed = true
-            CFG.seed_2_id = id
-            CFG.seed_2_name = resolveSeedName(id)
-            persistConfig()
-            if editValue then
-                pcall(editValue, "ap_input_seed_2", tostring(id))
-            end
-            updatePowerStatusList()
-            addLog(string.format("[Pick] Seed 2 diset: %s (ID: %d)", CFG.seed_2_name, id))
-            if sendNotification then pcall(sendNotification, "Seed 2: " .. CFG.seed_2_name .. " (ID: " .. id .. ")") end
-            isSyncingSeed = false
+        if num and num > 0 then
+            STATE.buf_seed_1_id = math.floor(num)
+            updateSeedStatusDisplay()
         end
     elseif name == "ap_input_seed_2" then
-        if isSyncingSeed then return end
-        if not val or val == "" or val == 0 or val == "0" then return end
         local num = tonumber(val)
-        if num and num > 0 and CFG.seed_2_id ~= math.floor(num) then
-            isSyncingSeed = true
-            local id = math.floor(num)
-            CFG.seed_2_id = id
-            CFG.seed_2_name = resolveSeedName(id)
-            persistConfig()
-            updatePowerStatusList()
-            isSyncingSeed = false
+        if num and num > 0 then
+            STATE.buf_seed_2_id = math.floor(num)
+            updateSeedStatusDisplay()
         end
+    elseif name == "ap_btn_save_seeds" then
+        local s1 = STATE.buf_seed_1_id or CFG.seed_1_id
+        local s2 = STATE.buf_seed_2_id or CFG.seed_2_id
+        s1 = ensureSeedID(s1)
+        if CFG.splice_mode and s2 and s2 > 0 then
+            s2 = ensureSeedID(s2)
+        end
+        CFG.seed_1_id = s1
+        CFG.seed_1_name = resolveSeedName(s1)
+        STATE.buf_seed_1_id = s1
+        if CFG.splice_mode then
+            CFG.seed_2_id = s2
+            CFG.seed_2_name = resolveSeedName(s2)
+            STATE.buf_seed_2_id = s2
+        end
+        persistConfig()
+        if editValue then
+            pcall(editValue, "ap_input_seed_1", tostring(CFG.seed_1_id))
+            if CFG.splice_mode then
+                pcall(editValue, "ap_input_seed_2", tostring(CFG.seed_2_id))
+            end
+        end
+        updateSeedStatusDisplay()
+        updatePowerStatusList()
+        local msg = string.format("✅ Berhasil Disimpan: Seed 1 = %s (ID: %d)", CFG.seed_1_name, CFG.seed_1_id)
+        if CFG.splice_mode and CFG.seed_2_id and CFG.seed_2_id > 0 then
+            msg = msg .. string.format(" | Seed 2 = %s (ID: %d)", CFG.seed_2_name, CFG.seed_2_id)
+        end
+        addLog(msg)
+        if sendNotification then pcall(sendNotification, msg) end
     elseif name == "ap_manual_world_input" then
         CFG.manual_world_text = tostring(val or "")
         persistConfig()
@@ -2699,8 +2727,8 @@ onValue = OnValue
 
 local ALL_UI_ALIASES = {
     "ap_run_power", "ap_btn_stop", "ap_pause_toggle", "ap_toggle_mode_3zigzag",
-    "ap_toggle_splice", "ap_pick_seed_1", "ap_input_seed_1", "ap_pick_seed_2",
-    "ap_input_seed_2", "ap_manual_world_input", "ap_manual_door_input", "ap_btn_add_world",
+    "ap_toggle_splice", "ap_input_seed_1", "ap_input_seed_2", "ap_btn_save_seeds",
+    "ap_seed_status_display", "ap_manual_world_input", "ap_manual_door_input", "ap_btn_add_world",
     "ap_btn_add_cur_world", "ap_btn_view_worlds", "ap_btn_clear_worlds", "ap_btn_save_worlds",
     "ap_btn_load_worlds", "ap_slider_min_bp", "ap_slider_target_bp", "ap_slider_collect_range",
     "ap_manual_stor_input", "ap_manual_stor_door_input", "ap_btn_add_storage", "ap_btn_view_storages",
@@ -2740,6 +2768,7 @@ end
 
 registerNativePlantUI()
 updatePowerStatusList()
+updateSeedStatusDisplay()
 updateWorldDisplayList()
 updateStorageDisplayList()
 updateFileInfoDisplayList()
