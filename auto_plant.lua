@@ -939,19 +939,42 @@ local function isPermanentObstacle(t)
     return false
 end
 
-local function isTilePlantable(tx, ty)
-    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
-    local tAt = getTileSafe(tx, ty)
-    local fgAt = tonumber(tAt and tAt.fg) or 0
-
-    -- Petak harus kosong dari foreground solid/pohon yang sudah ada
-    if fgAt ~= 0 then return false end
-
-    -- Petak di bawahnya harus merupakan support / lantai (tanah / platform / bedrock)
+local function getTilePlantStatus(tx, ty)
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return "INVALID" end
     local tBelow = getTileSafe(tx, ty + 1)
-    if not isSupportTile(tBelow) then return false end
+    if not isSupportTile(tBelow) then return "INVALID" end
 
-    return true
+    local tAt = getTileSafe(tx, ty)
+    if isPermanentObstacle(tAt) then return "INVALID" end
+
+    local fgAt = tonumber(tAt and tAt.fg) or 0
+    local s1 = tonumber(CFG.seed_1_id) or 0
+    local s2 = tonumber(CFG.seed_2_id) or 0
+
+    if CFG.splice_mode and s2 > 0 and s1 > 0 and s1 ~= s2 then
+        if fgAt == 0 then
+            return "EMPTY"
+        elseif fgAt == s1 then
+            return "NEEDS_SPLICE_2"
+        elseif fgAt == s2 then
+            return "NEEDS_SPLICE_1"
+        else
+            -- Petak telah tertanam pohon hasil splice (atau block/platform lain)
+            return "DONE"
+        end
+    else
+        -- Mode single seed biasa
+        if fgAt == 0 then
+            return "EMPTY"
+        else
+            return "DONE"
+        end
+    end
+end
+
+local function isTilePlantable(tx, ty)
+    local st = getTilePlantStatus(tx, ty)
+    return (st == "EMPTY" or st == "NEEDS_SPLICE_2" or st == "NEEDS_SPLICE_1")
 end
 
 local function hasPlantableSpotsInRow(plantY)
@@ -1114,53 +1137,138 @@ _G.__detectPlantableRows = detectPlantableRows
 -- ============================================================================
 -- 12. PLANTING ENGINE & SPLICE EXECUTION
 -- ============================================================================
-local function plantSingleSpot(tx, ty)
-    if not STATE.running then return false end
-    if not isTilePlantable(tx, ty) then return false end
-
-    local s1 = CFG.seed_1_id
-    local s2 = CFG.seed_2_id
-
-    -- Pastikan bot berada dalam jangkauan petak (maksimal 1-2 tile) sebelum menembak packet
-    local curPx, curPy = getPlayerTilePos()
-    if math.abs(curPx - tx) > 1 or math.abs(curPy - ty) > 1 then
-        moveSafeTo(tx, ty)
-    end
+local function sendPlantPacket(tx, ty, itemID)
+    if not sendPacketRaw then return false end
+    itemID = tonumber(itemID) or 0
+    if itemID <= 0 then return false end
 
     local okP, p = pcall(getLocal)
     local px = (okP and p and (p.posX or (p.pos and p.pos.x))) or (tx * 32)
     local py = (okP and p and (p.posY or (p.pos and p.pos.y))) or (ty * 32)
     local state = (px > (tx * 32)) and 48 or 32
 
-    -- Step 1: Tanam Seed 1
-    if sendPacketRaw then
-        sendPacketRaw(false, {
-            type  = 3,
-            value = s1,
-            px    = tx,
-            py    = ty,
-            x     = px,
-            y     = py,
-            state = state,
-        })
-    end
-    safeSleep(CFG.plant_delay)
+    local ok = pcall(sendPacketRaw, false, {
+        type  = 3,
+        value = itemID,
+        px    = tx,
+        py    = ty,
+        x     = px,
+        y     = py,
+        state = state,
+    })
+    return ok
+end
 
-    -- Step 2: Jika Splice Aktif, detik itu juga tanam Seed 2 di petak yang sama
-    if CFG.splice_mode and s2 and s2 > 0 then
-        safeSleep(CFG.splice_delay)
-        if sendPacketRaw then
-            sendPacketRaw(false, {
-                type  = 3,
-                value = s2,
-                px    = tx,
-                py    = ty,
-                x     = px,
-                y     = py,
-                state = state,
-            })
+local function plantSingleSpot(tx, ty)
+    if not STATE.running then return false end
+    local st = getTilePlantStatus(tx, ty)
+    if st == "DONE" or st == "INVALID" then return true end
+
+    local s1 = CFG.seed_1_id
+    local s2 = CFG.seed_2_id
+
+    local curPx, curPy = getPlayerTilePos()
+    if math.abs(curPx - tx) > 1 or math.abs(curPy - ty) > 1 then
+        moveSafeTo(tx, ty)
+    end
+
+    local isSplice = (CFG.splice_mode and s2 and s2 > 0 and s1 > 0 and s1 ~= s2)
+
+    if not isSplice then
+        if st == "EMPTY" then
+            sendPlantPacket(tx, ty, s1)
+            safeSleep(math.max(40, CFG.plant_delay))
         end
-        safeSleep(CFG.plant_delay)
+        return true
+    end
+
+    if st == "NEEDS_SPLICE_2" then
+        sendPlantPacket(tx, ty, s2)
+        safeSleep(math.max(60, CFG.splice_delay))
+    elseif st == "NEEDS_SPLICE_1" then
+        sendPlantPacket(tx, ty, s1)
+        safeSleep(math.max(60, CFG.splice_delay))
+    elseif st == "EMPTY" then
+        sendPlantPacket(tx, ty, s1)
+        safeSleep(math.max(80, CFG.splice_delay))
+        sendPlantPacket(tx, ty, s2)
+        safeSleep(math.max(50, CFG.plant_delay))
+    end
+
+    return true
+end
+
+local function plantTileSection(spotList, plantY)
+    if not STATE.running or not spotList or #spotList == 0 then return true end
+
+    local s1 = CFG.seed_1_id
+    local s2 = CFG.seed_2_id
+    local isSplice = (CFG.splice_mode and s2 and s2 > 0 and s1 > 0 and s1 ~= s2)
+
+    for attempt = 1, 3 do
+        if not STATE.running then break end
+        while STATE.paused do safeSleep(500) if not STATE.running then break end end
+
+        local anyAction = false
+
+        if not isSplice then
+            for _, sx in ipairs(spotList) do
+                if isTilePlantable(sx, plantY) then
+                    sendPlantPacket(sx, plantY, s1)
+                    safeSleep(math.max(30, CFG.plant_delay))
+                    anyAction = true
+                end
+            end
+        else
+            -- Mode Splice: Tahap 1 - Selesaikan petak yang sebelumnya tertinggal/hanya ada 1 seed
+            for _, sx in ipairs(spotList) do
+                local st = getTilePlantStatus(sx, plantY)
+                if st == "NEEDS_SPLICE_2" then
+                    sendPlantPacket(sx, plantY, s2)
+                    safeSleep(math.max(35, CFG.plant_delay))
+                    anyAction = true
+                elseif st == "NEEDS_SPLICE_1" then
+                    sendPlantPacket(sx, plantY, s1)
+                    safeSleep(math.max(35, CFG.plant_delay))
+                    anyAction = true
+                end
+            end
+
+            -- Mode Splice: Tahap 2 - Tanam Seed 1 ke semua petak yang masih EMPTY dalam seksi ini
+            local newlyPlantedS1 = {}
+            for _, sx in ipairs(spotList) do
+                local st = getTilePlantStatus(sx, plantY)
+                if st == "EMPTY" then
+                    sendPlantPacket(sx, plantY, s1)
+                    table.insert(newlyPlantedS1, sx)
+                    safeSleep(math.max(35, CFG.plant_delay))
+                    anyAction = true
+                end
+            end
+
+            -- Beri jeda pemrosesan server agar Seed 1 terdaftar sebelum ditimpa Seed 2
+            if #newlyPlantedS1 > 0 then
+                safeSleep(math.max(80, CFG.splice_delay))
+                -- Mode Splice: Tahap 3 - Timpa dengan Seed 2 ke seluruh petak tadi
+                for _, sx in ipairs(newlyPlantedS1) do
+                    sendPlantPacket(sx, plantY, s2)
+                    safeSleep(math.max(35, CFG.plant_delay))
+                end
+            end
+        end
+
+        if not anyAction then break end
+
+        safeSleep(math.max(40, isSplice and CFG.splice_delay or CFG.plant_delay))
+
+        local stillNeed = false
+        for _, sx in ipairs(spotList) do
+            if isTilePlantable(sx, plantY) then
+                stillNeed = true
+                break
+            end
+        end
+        if not stillNeed then break end
     end
 
     return true
@@ -1423,30 +1531,12 @@ local function executePlantRow(plantY)
 
                 moveSafeTo(standX, plantY)
 
-                -- Percobaan tanam dengan verifikasi bertahap (hingga 3x jika lag/packet drop)
-                for attempt = 1, 3 do
-                    local anyPlantedThisRound = false
-                    if sLeft >= 0 and isTilePlantable(sLeft, plantY) then
-                        plantSingleSpot(sLeft, plantY)
-                        anyPlantedThisRound = true
-                    end
-                    if isTilePlantable(sCenter, plantY) then
-                        plantSingleSpot(sCenter, plantY)
-                        anyPlantedThisRound = true
-                    end
-                    if sRight <= 99 and isTilePlantable(sRight, plantY) then
-                        plantSingleSpot(sRight, plantY)
-                        anyPlantedThisRound = true
-                    end
+                local sectionSpots = {}
+                if sLeft >= 0 then table.insert(sectionSpots, sLeft) end
+                table.insert(sectionSpots, sCenter)
+                if sRight <= 99 then table.insert(sectionSpots, sRight) end
 
-                    if not anyPlantedThisRound then break end
-                    safeSleep(math.max(40, CFG.plant_delay))
-
-                    local stillHole = (sLeft >= 0 and isTilePlantable(sLeft, plantY))
-                                   or isTilePlantable(sCenter, plantY)
-                                   or (sRight <= 99 and isTilePlantable(sRight, plantY))
-                    if not stillHole then break end
-                end
+                plantTileSection(sectionSpots, plantY)
             end
 
             standX = standX + 3
@@ -1462,12 +1552,7 @@ local function executePlantRow(plantY)
             end
 
             moveSafeTo(98, plantY)
-            for attempt = 1, 3 do
-                if isTilePlantable(98, plantY) then plantSingleSpot(98, plantY) end
-                if isTilePlantable(99, plantY) then plantSingleSpot(99, plantY) end
-                safeSleep(math.max(40, CFG.plant_delay))
-                if not isTilePlantable(98, plantY) and not isTilePlantable(99, plantY) then break end
-            end
+            plantTileSection({ 98, 99 }, plantY)
         end
 
     else
@@ -1485,11 +1570,7 @@ local function executePlantRow(plantY)
                 end
 
                 moveSafeTo(curX, plantY)
-                for attempt = 1, 3 do
-                    if not isTilePlantable(curX, plantY) then break end
-                    plantSingleSpot(curX, plantY)
-                    safeSleep(math.max(30, CFG.plant_delay))
-                end
+                plantTileSection({ curX }, plantY)
             end
         end
     end
@@ -1506,7 +1587,7 @@ local function executePlantRow(plantY)
         end
 
         if #missedSpots > 0 then
-            addLog(string.format("[Tambal Baris Y=%d] Terdeteksi %d petak belum tertanam, melakukan tambal sisa...", plantY, #missedSpots))
+            addLog(string.format("[Tambal Baris Y=%d] Terdeteksi %d petak belum selesai/tercampur, melakukan tambal...", plantY, #missedSpots))
             for _, mx in ipairs(missedSpots) do
                 if not STATE.running then break end
                 while STATE.paused do safeSleep(500) if not STATE.running then break end end
@@ -1520,11 +1601,7 @@ local function executePlantRow(plantY)
                     end
 
                     moveSafeTo(mx, plantY)
-                    for rep = 1, 3 do
-                        if not isTilePlantable(mx, plantY) then break end
-                        plantSingleSpot(mx, plantY)
-                        safeSleep(math.max(40, CFG.plant_delay))
-                    end
+                    plantTileSection({ mx }, plantY)
                 end
             end
         end
@@ -1643,6 +1720,10 @@ local function autoPlantMainLoop()
         CFG.seed_2_id = ensureSeedID(STATE.buf_seed_2_id)
         CFG.seed_2_name = resolveSeedName(CFG.seed_2_id)
         STATE.buf_seed_2_id = CFG.seed_2_id
+    end
+    if CFG.splice_mode and CFG.seed_1_id > 0 and CFG.seed_1_id == CFG.seed_2_id then
+        addLog("[Peringatan] Seed 1 & Seed 2 bernilai sama (" .. CFG.seed_1_id .. "). Mode Splice membutuhkan 2 jenis seed berbeda!")
+        if sendNotification then pcall(sendNotification, "Peringatan: Seed 1 & 2 tidak boleh sama saat Splice!") end
     end
     persistConfig()
     updateSeedStatusDisplay()
@@ -2153,11 +2234,16 @@ updateSeedStatusDisplay = function()
     local s2_title = ""
     local s2_desc = ""
     if CFG.splice_mode then
-        s2_title = s2_dirty and "⚠️ Seed 2 (Splice) [BELUM DISIMPAN]" or "✅ Seed 2 (Splice) [TERSIMPAN]"
-        s2_desc = string.format("%s (ID: %d) | Di Tas: %d%s",
-            s2_name, s2_id, getInvCount(s2_id),
-            s2_dirty and " -> Klik 'Simpan Pilihan ID Seed' di bawah!" or " (Siap Displice)"
-        )
+        if s1_id > 0 and s1_id == s2_id then
+            s2_title = "⚠️ Seed 2 (Splice) [ID SAMA DENGAN SEED 1]"
+            s2_desc = string.format("%s (ID: %d) -> Seed 1 & 2 tidak boleh sama! Masukkan ID berbeda.", s2_name, s2_id)
+        else
+            s2_title = s2_dirty and "⚠️ Seed 2 (Splice) [BELUM DISIMPAN]" or "✅ Seed 2 (Splice) [TERSIMPAN]"
+            s2_desc = string.format("%s (ID: %d) | Di Tas: %d%s",
+                s2_name, s2_id, getInvCount(s2_id),
+                s2_dirty and " -> Klik 'Simpan Pilihan ID Seed' di bawah!" or " (Siap Displice)"
+            )
+        end
     else
         s2_title = "ℹ️ Seed 2 (Splice) [NONAKTIF]"
         s2_desc = "Mode Splice Nonaktif (Hanya tanam 1 jenis seed)"
