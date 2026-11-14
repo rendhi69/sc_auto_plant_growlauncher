@@ -355,23 +355,37 @@ local function cleanItemName(name)
 end
 
 resolvePickedItemID = function(value)
-    if not value or value == "" then return nil end
+    if not value or value == "" or value == 0 or value == "0" then return nil end
     if type(value) == "table" then
         value = value.id or value.itemID or value.itemid or value.value or value.name
     end
     local num = tonumber(value)
     if num and num > 0 then
-        return ensureSeedID(num)
+        return math.floor(num)
     end
     if type(value) == "string" and value ~= "" then
         local cleanVal = cleanItemName(value)
+        if cleanVal == "" or #cleanVal < 2 then return nil end
+
         local sNum = tonumber(cleanVal)
         if sNum and sNum > 0 then
-            return ensureSeedID(sNum)
+            return math.floor(sNum)
+        end
+
+        local embeddedId = cleanVal:match("%((%d+)%)") or cleanVal:match("#(%d+)")
+        if embeddedId and tonumber(embeddedId) and tonumber(embeddedId) > 0 then
+            return math.floor(tonumber(embeddedId))
+        end
+
+        local cleanLow = cleanVal:lower()
+        for sId, sName in pairs(SEED_NAMES) do
+            if sName and (sName:lower() == cleanLow or sName:lower() == cleanLow .. " seed") then
+                return sId
+            end
         end
 
         local function tryLookup(str)
-            if not str or str == "" then return nil end
+            if not str or str == "" or #str < 2 then return nil end
             -- 1. API C++ Resmi GrowLauncher: getItemInfoByName
             if getItemInfoByName then
                 local ok, info = pcall(getItemInfoByName, str)
@@ -405,12 +419,12 @@ resolvePickedItemID = function(value)
 
         local lookedUp = tryLookup(cleanVal)
         if lookedUp and lookedUp > 0 then
-            return ensureSeedID(lookedUp)
+            return lookedUp
         end
-        if not cleanVal:lower():find("seed", 1, true) then
+        if not cleanLow:find("seed", 1, true) then
             local lookedUpSeed = tryLookup(cleanVal .. " Seed")
             if lookedUpSeed and lookedUpSeed > 0 then
-                return ensureSeedID(lookedUpSeed)
+                return lookedUpSeed
             end
         end
     end
@@ -1617,6 +1631,14 @@ local function autoPlantMainLoop()
     ensureHooksInstalled()
     applyCheatToggles()
 
+    CFG.seed_1_id = ensureSeedID(CFG.seed_1_id)
+    CFG.seed_1_name = resolveSeedName(CFG.seed_1_id)
+    if CFG.splice_mode and CFG.seed_2_id and CFG.seed_2_id > 0 then
+        CFG.seed_2_id = ensureSeedID(CFG.seed_2_id)
+        CFG.seed_2_name = resolveSeedName(CFG.seed_2_id)
+    end
+    updatePowerStatusList()
+
     if #CFG.world_list == 0 then
         local curW = getCurrentWorldSafe()
         if curW ~= "" and curW ~= "EXIT" then
@@ -2447,6 +2469,9 @@ end
 -- ============================================================================
 -- 18. NATIVE ON-VALUE EVENT DISPATCHER
 -- ============================================================================
+local isSyncingSeed = false
+local lastAliasEventTime = {}
+
 local function handlePlantUIValue(typeVal, name, val)
     -- Shift argumen jika GrowLauncher memanggil onValue(alias, val) atau alias ada di typeVal
     if type(typeVal) == "string" and (name == nil or type(name) ~= "string" or (type(name) == "string" and typeVal:sub(1, 3) == "ap_")) then
@@ -2457,17 +2482,20 @@ local function handlePlantUIValue(typeVal, name, val)
     name = tostring(name or "")
     if name == "" then return end
 
-    -- Fallback jika val kosong saat event item picker, ambil langsung via getValue
-    if (val == nil or val == "" or val == 0) and getValue then
-        if name == "ap_pick_seed_1" or name == "ap_pick_seed_2" then
-            for _, vt in ipairs({ 5, 2, 1 }) do
-                local okG, gv = pcall(getValue, vt, name)
-                if okG and gv and gv ~= "" and gv ~= 0 then
-                    val = gv
-                    break
-                end
-            end
+    -- Debounce anti spam event (terutama saat addHook & setOnValue aktif bersamaan)
+    local now = os.clock()
+    local isButton = (name:sub(1, 7) == "ap_btn_")
+    if isButton then
+        if lastAliasEventTime[name] and (now - lastAliasEventTime[name]) < 0.25 then
+            return
         end
+        lastAliasEventTime[name] = now
+    else
+        local evKey = name .. "=" .. tostring(val)
+        if lastAliasEventTime[evKey] and (now - lastAliasEventTime[evKey]) < 0.08 then
+            return
+        end
+        lastAliasEventTime[evKey] = now
     end
 
     if name == "ap_run_power" then
@@ -2490,56 +2518,64 @@ local function handlePlantUIValue(typeVal, name, val)
         persistConfig()
         updatePowerStatusList()
     elseif name == "ap_pick_seed_1" then
+        if isSyncingSeed then return end
+        if not val or val == "" or val == 0 or val == "0" then return end
         local id = resolvePickedItemID(val)
-        if id and id > 0 then
+        if id and id > 0 and CFG.seed_1_id ~= id then
+            isSyncingSeed = true
             CFG.seed_1_id = id
             CFG.seed_1_name = resolveSeedName(id)
             persistConfig()
             if editValue then
                 pcall(editValue, "ap_input_seed_1", tostring(id))
-                pcall(editValue, "ap_pick_seed_1", tostring(id))
             end
             updatePowerStatusList()
             addLog(string.format("[Pick] Seed 1 diset: %s (ID: %d)", CFG.seed_1_name, id))
-            if sendNotification then pcall(sendNotification, "Seed 1 diset: " .. CFG.seed_1_name .. " (ID: " .. id .. ")") end
+            if sendNotification then pcall(sendNotification, "Seed 1: " .. CFG.seed_1_name .. " (ID: " .. id .. ")") end
+            isSyncingSeed = false
         end
     elseif name == "ap_input_seed_1" then
-        local id = resolvePickedItemID(val)
-        if id and id > 0 then
+        if isSyncingSeed then return end
+        if not val or val == "" or val == 0 or val == "0" then return end
+        local num = tonumber(val)
+        if num and num > 0 and CFG.seed_1_id ~= math.floor(num) then
+            isSyncingSeed = true
+            local id = math.floor(num)
             CFG.seed_1_id = id
             CFG.seed_1_name = resolveSeedName(id)
             persistConfig()
-            if editValue then
-                pcall(editValue, "ap_input_seed_1", tostring(id))
-                pcall(editValue, "ap_pick_seed_1", tostring(id))
-            end
             updatePowerStatusList()
+            isSyncingSeed = false
         end
     elseif name == "ap_pick_seed_2" then
+        if isSyncingSeed then return end
+        if not val or val == "" or val == 0 or val == "0" then return end
         local id = resolvePickedItemID(val)
-        if id and id > 0 then
+        if id and id > 0 and CFG.seed_2_id ~= id then
+            isSyncingSeed = true
             CFG.seed_2_id = id
             CFG.seed_2_name = resolveSeedName(id)
             persistConfig()
             if editValue then
                 pcall(editValue, "ap_input_seed_2", tostring(id))
-                pcall(editValue, "ap_pick_seed_2", tostring(id))
             end
             updatePowerStatusList()
             addLog(string.format("[Pick] Seed 2 diset: %s (ID: %d)", CFG.seed_2_name, id))
-            if sendNotification then pcall(sendNotification, "Seed 2 diset: " .. CFG.seed_2_name .. " (ID: " .. id .. ")") end
+            if sendNotification then pcall(sendNotification, "Seed 2: " .. CFG.seed_2_name .. " (ID: " .. id .. ")") end
+            isSyncingSeed = false
         end
     elseif name == "ap_input_seed_2" then
-        local id = resolvePickedItemID(val)
-        if id and id > 0 then
+        if isSyncingSeed then return end
+        if not val or val == "" or val == 0 or val == "0" then return end
+        local num = tonumber(val)
+        if num and num > 0 and CFG.seed_2_id ~= math.floor(num) then
+            isSyncingSeed = true
+            local id = math.floor(num)
             CFG.seed_2_id = id
             CFG.seed_2_name = resolveSeedName(id)
             persistConfig()
-            if editValue then
-                pcall(editValue, "ap_input_seed_2", tostring(id))
-                pcall(editValue, "ap_pick_seed_2", tostring(id))
-            end
             updatePowerStatusList()
+            isSyncingSeed = false
         end
     elseif name == "ap_manual_world_input" then
         CFG.manual_world_text = tostring(val or "")
