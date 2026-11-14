@@ -349,6 +349,11 @@ local function getInvCount(itemID)
     return total
 end
 
+local function cleanItemName(name)
+    if type(name) ~= "string" then return "" end
+    return name:gsub("`.", ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
 resolvePickedItemID = function(value)
     if not value or value == "" then return nil end
     if type(value) == "table" then
@@ -359,33 +364,53 @@ resolvePickedItemID = function(value)
         return ensureSeedID(num)
     end
     if type(value) == "string" and value ~= "" then
-        local cleanVal = value:gsub("^%s+", ""):gsub("%s+$", "")
+        local cleanVal = cleanItemName(value)
         local sNum = tonumber(cleanVal)
         if sNum and sNum > 0 then
             return ensureSeedID(sNum)
         end
-        if findItemID then
-            local ok, id = pcall(findItemID, cleanVal)
-            if ok and tonumber(id) and tonumber(id) > 0 then
-                return ensureSeedID(tonumber(id))
-            end
-            if not cleanVal:lower():find("seed", 1, true) then
-                local ok2, id2 = pcall(findItemID, cleanVal .. " Seed")
-                if ok2 and tonumber(id2) and tonumber(id2) > 0 then
-                    return ensureSeedID(tonumber(id2))
+
+        local function tryLookup(str)
+            if not str or str == "" then return nil end
+            -- 1. API C++ Resmi GrowLauncher: getItemInfoByName
+            if getItemInfoByName then
+                local ok, info = pcall(getItemInfoByName, str)
+                if ok and info and tonumber(info.id) and tonumber(info.id) > 0 then
+                    return tonumber(info.id)
                 end
             end
+            -- 2. API C++ Resmi GrowLauncher: itemInfoManager.getItemInfoByName
+            if itemInfoManager and itemInfoManager.getItemInfoByName then
+                local ok, info = pcall(itemInfoManager.getItemInfoByName, str)
+                if ok and info and tonumber(info.id) and tonumber(info.id) > 0 then
+                    return tonumber(info.id)
+                end
+            end
+            -- 3. Fallback findItemID
+            if findItemID then
+                local ok, id = pcall(findItemID, str)
+                if ok and tonumber(id) and tonumber(id) > 0 then
+                    return tonumber(id)
+                end
+            end
+            -- 4. Fallback growtopia.getItemID
+            if growtopia and growtopia.getItemID then
+                local ok, id = pcall(growtopia.getItemID, str)
+                if ok and tonumber(id) and tonumber(id) > 0 then
+                    return tonumber(id)
+                end
+            end
+            return nil
         end
-        if growtopia and growtopia.getItemID then
-            local ok, id = pcall(growtopia.getItemID, cleanVal)
-            if ok and tonumber(id) and tonumber(id) > 0 then
-                return ensureSeedID(tonumber(id))
-            end
-            if not cleanVal:lower():find("seed", 1, true) then
-                local ok2, id2 = pcall(growtopia.getItemID, cleanVal .. " Seed")
-                if ok2 and tonumber(id2) and tonumber(id2) > 0 then
-                    return ensureSeedID(tonumber(id2))
-                end
+
+        local lookedUp = tryLookup(cleanVal)
+        if lookedUp and lookedUp > 0 then
+            return ensureSeedID(lookedUp)
+        end
+        if not cleanVal:lower():find("seed", 1, true) then
+            local lookedUpSeed = tryLookup(cleanVal .. " Seed")
+            if lookedUpSeed and lookedUpSeed > 0 then
+                return ensureSeedID(lookedUpSeed)
             end
         end
     end
@@ -1707,8 +1732,29 @@ end
 -- ============================================================================
 -- 16. DIALOG MANAGEMENT (UNIFIED MANAGER: COPY, QUICK PASTE, EDIT & HAPUS)
 -- ============================================================================
+local function safeSendRawDialog(dText)
+    if not dText or dText == "" then return false end
+    if sendVariant then
+        local ok = pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
+        if ok then return true end
+    end
+    if growtopia and growtopia.sendDialog then
+        local ok = pcall(growtopia.sendDialog, dText)
+        if ok then return true end
+    end
+    if sendDialog then
+        local ok = pcall(sendDialog, dText)
+        if ok then return true end
+    end
+    return false
+end
+
 openWorldListManagerDialog = function(fmt)
-    if not growtopia or not growtopia.sendDialog then return false end
+    local curW = getCurrentWorldSafe()
+    if curW == "" or curW == "EXIT" then
+        if sendNotification then pcall(sendNotification, "Silakan masuk ke dalam world terlebih dahulu untuk melihat/kelola list world!") end
+        return false
+    end
     fmt = fmt or "colon"
 
     local copyLines = {}
@@ -1767,12 +1813,15 @@ openWorldListManagerDialog = function(fmt)
     end
 
     table.insert(dLines, "end_dialog|boren_plant_world_mgr|Tutup||")
-    pcall(growtopia.sendDialog, table.concat(dLines, "\n"))
-    return true
+    return safeSendRawDialog(table.concat(dLines, "\n"))
 end
 
 openStorageListManagerDialog = function(fmt)
-    if not growtopia or not growtopia.sendDialog then return false end
+    local curW = getCurrentWorldSafe()
+    if curW == "" or curW == "EXIT" then
+        if sendNotification then pcall(sendNotification, "Silakan masuk ke dalam world terlebih dahulu untuk melihat/kelola list gudang!") end
+        return false
+    end
     fmt = fmt or "colon"
 
     local copyLines = {}
@@ -1831,14 +1880,13 @@ openStorageListManagerDialog = function(fmt)
     end
 
     table.insert(dLines, "end_dialog|boren_plant_stor_mgr|Tutup||")
-    pcall(growtopia.sendDialog, table.concat(dLines, "\n"))
-    return true
+    return safeSendRawDialog(table.concat(dLines, "\n"))
 end
 
 openEditWorldEntryDialog = function(idx)
     idx = tonumber(idx) or 0
     local e = CFG.world_list[idx]
-    if not e or not growtopia or not growtopia.sendDialog then return false end
+    if not e then return false end
     local dLines = {
         "set_default_color|`o",
         string.format("add_label_with_icon|big|`wEdit World Farm #%d``|left|2|", idx),
@@ -1850,14 +1898,13 @@ openEditWorldEntryDialog = function(idx)
         string.format("add_button|boren_save_wedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
         "end_dialog|boren_edit_w_dlg|Batal||"
     }
-    pcall(growtopia.sendDialog, table.concat(dLines, "\n"))
-    return true
+    return safeSendRawDialog(table.concat(dLines, "\n"))
 end
 
 openEditStorageEntryDialog = function(idx)
     idx = tonumber(idx) or 0
     local e = CFG.storage_world_list[idx]
-    if not e or not growtopia or not growtopia.sendDialog then return false end
+    if not e then return false end
     local dLines = {
         "set_default_color|`o",
         string.format("add_label_with_icon|big|`wEdit Gudang Seed #%d``|left|242|", idx),
@@ -1869,8 +1916,7 @@ openEditStorageEntryDialog = function(idx)
         string.format("add_button|boren_save_stedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
         "end_dialog|boren_edit_s_dlg|Batal||"
     }
-    pcall(growtopia.sendDialog, table.concat(dLines, "\n"))
-    return true
+    return safeSendRawDialog(table.concat(dLines, "\n"))
 end
 
 openPasteWorldListDialog = function(isStorage)
