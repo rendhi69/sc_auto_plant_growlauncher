@@ -46,8 +46,8 @@ local CFG = {
     seed_2_name         = tostring(loadPref("seed_2_name", "Rock Seed")),
 
     -- Delay & Kecepatan (ms)
-    plant_delay         = tonumber(loadPref("plant_delay", 90)) or 90,
-    splice_delay        = tonumber(loadPref("splice_delay", 100)) or 100,
+    plant_delay         = tonumber(loadPref("plant_delay", 80)) or 80,
+    splice_delay        = tonumber(loadPref("splice_delay", 200)) or 200,
     step_delay          = tonumber(loadPref("step_delay", 110)) or 110,
     warp_delay          = tonumber(loadPref("warp_delay", 3500)) or 3500,
 
@@ -1218,7 +1218,7 @@ local function sendPlantPacket(tx, ty, itemID)
     return ok
 end
 
-local function plantSingleSpot(tx, ty)
+local function plantAndSpliceTile(tx, ty)
     if not STATE.running then return false end
     local st = getTilePlantStatus(tx, ty)
     if st == "DONE" or st == "INVALID" then return true end
@@ -1226,101 +1226,126 @@ local function plantSingleSpot(tx, ty)
     local s1 = CFG.seed_1_id
     local s2 = CFG.seed_2_id
 
-    local curPx, curPy = getPlayerTilePos()
-    if math.abs(curPx - tx) > 1 or math.abs(curPy - ty) > 1 then
-        moveSafeTo(tx, ty)
-    end
-
     local isSplice = (CFG.splice_mode and s2 and s2 > 0 and s1 > 0 and s1 ~= s2)
+
+    -- Jeda lebih tenang & aman agar packet tidak di-drop / di-throttle oleh server Growtopia
+    local delayPlant = math.max(60, CFG.plant_delay or 80)
+    local delaySplice = math.max(140, CFG.splice_delay or 200)
 
     if not isSplice then
         if st == "EMPTY" then
             sendPlantPacket(tx, ty, s1)
-            safeSleep(math.max(40, CFG.plant_delay))
+            safeSleep(delayPlant)
         end
         return true
     end
 
-    if st == "NEEDS_SPLICE_2" then
-        sendPlantPacket(tx, ty, s2)
-        safeSleep(math.max(60, CFG.splice_delay))
-    elseif st == "NEEDS_SPLICE_1" then
-        sendPlantPacket(tx, ty, s1)
-        safeSleep(math.max(60, CFG.splice_delay))
-    elseif st == "EMPTY" then
+    -- =========================================================================
+    -- MODE SPLICE (KAWIN 2 SEED DENGAN VERIFIKASI HINGGA PASTI JADI)
+    -- =========================================================================
+    if st == "EMPTY" then
         if not STATE.fresh_seeds then STATE.fresh_seeds = {} end
         STATE.fresh_seeds[tx .. "_" .. ty] = os.time()
+
+        -- Langkah 1: Pasang Seed 1
         sendPlantPacket(tx, ty, s1)
-        safeSleep(math.max(70, CFG.splice_delay))
+        safeSleep(delaySplice)
+
+        -- Langkah 2: Pasang Seed 2 untuk mengawinkan (splice) sebelum Seed 1 jadi tree
         sendPlantPacket(tx, ty, s2)
-        safeSleep(math.max(40, CFG.plant_delay))
+        safeSleep(delayPlant)
+
+        -- Langkah 3: Verifikasi apakah 2 seed berhasil splice
+        -- Hasil splice adalah pohon baru (ID != s1, != s2, dan != 0).
+        for retry = 1, 3 do
+            local tCheck = getTileSafe(tx, ty)
+            local fgNow = tonumber(tCheck and tCheck.fg) or 0
+            if fgNow == s1 and isFreshlyPlantedSeed(tx, ty) and not isTileTree(tCheck) then
+                -- Seed 1 tertanam tapi Seed 2 sempat miss/drop, timpa ulang Seed 2!
+                safeSleep(delaySplice)
+                sendPlantPacket(tx, ty, s2)
+                safeSleep(delayPlant)
+            elseif fgNow ~= 0 and fgNow ~= s1 and fgNow ~= s2 then
+                -- Berhasil tersplice sempurna menjadi pohon baru!
+                break
+            elseif fgNow == 0 then
+                -- Jika packet Seed 1 sempat hilang/tidak masuk, ulangi dari Seed 1
+                sendPlantPacket(tx, ty, s1)
+                safeSleep(delaySplice)
+                sendPlantPacket(tx, ty, s2)
+                safeSleep(delayPlant)
+            else
+                break
+            end
+        end
+
+    elseif st == "NEEDS_SPLICE_2" then
+        -- Seed 1 sudah ada (bibit segar belum jadi tree), langsung timpa Seed 2
+        sendPlantPacket(tx, ty, s2)
+        safeSleep(delayPlant)
+
+        -- Verifikasi hasil splice
+        for retry = 1, 2 do
+            local tCheck = getTileSafe(tx, ty)
+            local fgNow = tonumber(tCheck and tCheck.fg) or 0
+            if fgNow == s1 and isFreshlyPlantedSeed(tx, ty) and not isTileTree(tCheck) then
+                safeSleep(delaySplice)
+                sendPlantPacket(tx, ty, s2)
+                safeSleep(delayPlant)
+            else
+                break
+            end
+        end
+
+    elseif st == "NEEDS_SPLICE_1" then
+        -- Seed 2 sudah ada, timpa Seed 1
+        sendPlantPacket(tx, ty, s1)
+        safeSleep(delayPlant)
+        for retry = 1, 2 do
+            local tCheck = getTileSafe(tx, ty)
+            local fgNow = tonumber(tCheck and tCheck.fg) or 0
+            if fgNow == s2 and isFreshlyPlantedSeed(tx, ty) and not isTileTree(tCheck) then
+                safeSleep(delaySplice)
+                sendPlantPacket(tx, ty, s1)
+                safeSleep(delayPlant)
+            else
+                break
+            end
+        end
     end
 
     return true
 end
 
+local function plantSingleSpot(tx, ty)
+    if not STATE.running then return false end
+    local curPx, curPy = getPlayerTilePos()
+    if math.abs(curPx - tx) > 1 or math.abs(curPy - ty) > 1 then
+        moveSafeTo(tx, ty)
+    end
+    return plantAndSpliceTile(tx, ty)
+end
+
 local function plantTileSection(spotList, plantY)
     if not STATE.running or not spotList or #spotList == 0 then return true end
 
-    local s1 = CFG.seed_1_id
-    local s2 = CFG.seed_2_id
-    local isSplice = (CFG.splice_mode and s2 and s2 > 0 and s1 > 0 and s1 ~= s2)
-
-    for attempt = 1, 3 do
+    -- Tanam dan splice setiap petak dalam seksi (kiri, tengah, kanan) satu per satu dengan tenang & pasti
+    for _, sx in ipairs(spotList) do
         if not STATE.running then break end
         while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-        local anyAction = false
-
-        if not isSplice then
-            for _, sx in ipairs(spotList) do
-                if isTilePlantable(sx, plantY) then
-                    sendPlantPacket(sx, plantY, s1)
-                    safeSleep(math.max(30, CFG.plant_delay))
-                    anyAction = true
-                end
-            end
-        else
-            -- Mode Splice (Kawin 2 Seed)
-            for _, sx in ipairs(spotList) do
-                local st = getTilePlantStatus(sx, plantY)
-
-                if st == "NEEDS_SPLICE_2" then
-                    -- Bibit segar Seed 1 (belum jadi tree), langsung timpa Seed 2!
-                    sendPlantPacket(sx, plantY, s2)
-                    safeSleep(math.max(50, CFG.splice_delay))
-                    anyAction = true
-
-                elseif st == "NEEDS_SPLICE_1" then
-                    -- Bibit segar Seed 2 (belum jadi tree), langsung timpa Seed 1!
-                    sendPlantPacket(sx, plantY, s1)
-                    safeSleep(math.max(50, CFG.splice_delay))
-                    anyAction = true
-
-                elseif st == "EMPTY" then
-                    -- Petak kosong: Tanam Seed 1, lalu SEGERA timpa Seed 2 sebelum bertunas jadi tree!
-                    if not STATE.fresh_seeds then STATE.fresh_seeds = {} end
-                    STATE.fresh_seeds[sx .. "_" .. plantY] = os.time()
-
-                    sendPlantPacket(sx, plantY, s1)
-                    safeSleep(math.max(70, CFG.splice_delay))
-
-                    sendPlantPacket(sx, plantY, s2)
-                    safeSleep(math.max(35, CFG.plant_delay))
-                    anyAction = true
-                end
-            end
+        if isTilePlantable(sx, plantY) then
+            plantAndSpliceTile(sx, plantY)
         end
+    end
 
-        if not anyAction then break end
-
-        safeSleep(math.max(40, isSplice and CFG.splice_delay or CFG.plant_delay))
-
+    -- Konfirmasi akhir seksi: jika ada paket yang sempat drop karena latency tinggi, ulangi spot tersebut
+    for attempt = 1, 2 do
         local stillNeed = false
         for _, sx in ipairs(spotList) do
             if isTilePlantable(sx, plantY) then
                 stillNeed = true
-                break
+                plantAndSpliceTile(sx, plantY)
             end
         end
         if not stillNeed then break end
@@ -2422,7 +2447,7 @@ local function registerNativePlantUI()
     local uiSetting = createNativeUI("3. Pengaturan & Delay", "Build")
     uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
     uiSetting:addInputInt("Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 70", "Timer", "ap_input_plant_delay")
-    uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 40, 300, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
+    uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 80, 500, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
     uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 500, CFG.step_delay, 10, false, "ap_slider_step_delay")
     uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
     uiSetting:addDivider()
@@ -2823,8 +2848,10 @@ local function handlePlantUIValue(typeVal, name, val)
         persistConfig()
         if sendNotification then pcall(sendNotification, "Delay tanam: " .. CFG.plant_delay .. " ms") end
     elseif name == "ap_slider_splice_delay" then
-        CFG.splice_delay = tonumber(val) or CFG.splice_delay
+        local d = tonumber(val) or 200
+        CFG.splice_delay = math.max(80, math.min(1000, math.floor(d)))
         persistConfig()
+        if sendNotification then pcall(sendNotification, "Jeda splice: " .. CFG.splice_delay .. " ms") end
     elseif name == "ap_slider_step_delay" then
         CFG.step_delay = tonumber(val) or CFG.step_delay
         persistConfig()
