@@ -1734,22 +1734,19 @@ end
 -- ============================================================================
 local function safeSendRawDialog(dText)
     if not dText or dText == "" then return false end
-    if sendVariant then
-        -- 1. Format resmi GrowLauncher (v1 = function name, v2 = dialog text)
-        pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
-        -- 2. Format alternatif 0-based
-        pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
-        -- 3. Format numeric array
-        pcall(sendVariant, { [1] = "OnDialogRequest", [2] = dText })
-        pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
+    if growtopia and type(growtopia.sendDialog) == "function" then
+        local ok = pcall(growtopia.sendDialog, dText)
+        if ok then return true end
     end
-    if growtopia and growtopia.sendDialog then
-        pcall(growtopia.sendDialog, dText)
+    if sendVariant then
+        local ok = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        if ok then return true end
     end
     if sendDialog then
         pcall(sendDialog, dText)
+        return true
     end
-    return true
+    return false
 end
 
 openWorldListManagerDialog = function(fmt)
@@ -1767,19 +1764,21 @@ openWorldListManagerDialog = function(fmt)
         end
     end
     local rawCopy = table.concat(copyLines, "\n")
+    local rawBoxText = table.concat(copyLines, ", ")
     if ImGui and ImGui.SetClipboardText and rawCopy ~= "" then
         pcall(ImGui.SetClipboardText, rawCopy)
     end
 
     local dLines = {
         "set_default_color|`o",
+        "add_quick_exit|",
         string.format("add_label_with_icon|big|`wKelola, Salin & Tempel World (%d)``|left|2|", #CFG.world_list),
         "add_textbox|`oDi sini Anda bisa salin antrean, tempel banyak world baru, dan edit/hapus world.|left|",
         "add_spacer|small|",
 
         -- Bagian 1: Salin Semua World
         "add_textbox|`2[1. Salin Semua World Farm ke Clipboard]|left|",
-        string.format("add_text_input|boren_wcopy_box|Salin Antrean|%s|9999|", rawCopy),
+        string.format("add_text_input|boren_wcopy_box|Salin Antrean|%s|9999|", rawBoxText),
         "add_button|boren_btn_wfmt_colon|Format Titik Dua (:)|noflags|0|0|",
         "add_button|boren_btn_wfmt_pipe|Format Garis (|)|noflags|0|0|",
         "add_button|boren_btn_wfmt_name|Hanya Nama World|noflags|0|0|",
@@ -1829,19 +1828,21 @@ openStorageListManagerDialog = function(fmt)
         end
     end
     local rawCopy = table.concat(copyLines, "\n")
+    local rawBoxText = table.concat(copyLines, ", ")
     if ImGui and ImGui.SetClipboardText and rawCopy ~= "" then
         pcall(ImGui.SetClipboardText, rawCopy)
     end
 
     local dLines = {
         "set_default_color|`o",
+        "add_quick_exit|",
         string.format("add_label_with_icon|big|`wKelola, Salin & Tempel Gudang (%d)``|left|242|", #CFG.storage_world_list),
         "add_textbox|`oDi sini Anda bisa salin daftar gudang, tempel banyak gudang baru, dan edit/hapus gudang.|left|",
         "add_spacer|small|",
 
         -- Bagian 1: Salin Semua Gudang
         "add_textbox|`2[1. Salin Semua Gudang Seed ke Clipboard]|left|",
-        string.format("add_text_input|boren_stcopy_box|Salin Gudang|%s|9999|", rawCopy),
+        string.format("add_text_input|boren_stcopy_box|Salin Gudang|%s|9999|", rawBoxText),
         "add_button|boren_btn_stfmt_colon|Format Titik Dua (:)|noflags|0|0|",
         "add_button|boren_btn_stfmt_pipe|Format Garis (|)|noflags|0|0|",
         "add_button|boren_btn_stfmt_name|Hanya Nama Gudang|noflags|0|0|",
@@ -2201,6 +2202,8 @@ local function registerNativePlantUI()
     uiStorage:addInputString("Door ID (Opsional)", CFG.manual_stor_door, "Door ID", "Kosongkan jika White Door", "DoorFront", "ap_manual_stor_door_input")
     uiStorage:addButton("+ Tambah Gudang ke Antrean", "ap_btn_add_storage")
     uiStorage:addButton("📋 Kelola, Salin & Tempel Gudang", "ap_btn_view_storages")
+    uiStorage:addButton("📥 Simpan Antrean Gudang ke File", "ap_btn_save_storages")
+    uiStorage:addButton("📤 Muat Antrean Gudang dari File", "ap_btn_load_storages")
     uiStorage:addButton("🗑️ Kosongkan Semua Gudang", "ap_btn_clear_storages")
     uiStorage:addDivider()
     uiStorage:addDisplayList("Daftar World Gudang Seed", "Default", "ap_storage_display_list")
@@ -2239,9 +2242,212 @@ local function registerNativePlantUI()
 end
 
 -- ============================================================================
+-- 17B. FILE BACKUP ENGINE (FARM WORLDS & STORAGE WORLDS)
+-- ============================================================================
+local function savePlantWorldsToFile()
+    persistConfig()
+    local exportLines = {}
+    for _, e in ipairs(CFG.world_list) do
+        local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
+        table.insert(exportLines, line)
+    end
+    local exportTxt = table.concat(exportLines, "\n")
+    local fullPath, dir, fName = resolveFilePath(CFG.world_file_name, "boren_plant_worlds.txt")
+
+    local saved = false
+    if io and io.open then
+        local okF, fh = pcall(io.open, fullPath, "w")
+        if okF and fh then
+            pcall(function()
+                fh:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
+                fh:close()
+            end)
+            saved = true
+        end
+        if not saved and not isSystemWindows() then
+            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "w")
+            if okA and fhA then
+                pcall(function()
+                    fhA:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
+                    fhA:close()
+                end)
+                saved = true
+            end
+        end
+        if not saved then
+            local okLoc, fhLoc = pcall(io.open, fName, "w")
+            if okLoc and fhLoc then
+                pcall(function()
+                    fhLoc:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
+                    fhLoc:close()
+                end)
+                saved = true
+            end
+        end
+    end
+    if writeToLocal then
+        pcall(writeToLocal, fullPath, exportTxt)
+        pcall(writeToLocal, fName, exportTxt)
+        saved = true
+    end
+
+    local summary = string.format("Tersimpan %d world farm ke %s & Preferences.", #CFG.world_list, saved and fullPath or fName)
+    addLog("[Save World] " .. summary)
+    if sendNotification then pcall(sendNotification, summary) end
+    if updateFileInfoDisplayList then pcall(updateFileInfoDisplayList) end
+    return true
+end
+
+local function loadPlantWorldsFromFile()
+    local fullPath, dir, fName = resolveFilePath(CFG.world_file_name, "boren_plant_worlds.txt")
+    local raw = ""
+    local source = ""
+    if io and io.open then
+        local okF, fh = pcall(io.open, fullPath, "r")
+        if okF and fh then
+            pcall(function()
+                raw = fh:read("*all") or ""
+                fh:close()
+            end)
+            if raw ~= "" then source = fullPath end
+        end
+        if raw == "" and not isSystemWindows() then
+            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "r")
+            if okA and fhA then
+                pcall(function()
+                    raw = fhA:read("*all") or ""
+                    fhA:close()
+                end)
+                if raw ~= "" then source = "/sdcard/Download/" .. fName end
+            end
+        end
+        if raw == "" then
+            local okLoc, fhLoc = pcall(io.open, fName, "r")
+            if okLoc and fhLoc then
+                pcall(function()
+                    raw = fhLoc:read("*all") or ""
+                    fhLoc:close()
+                end)
+                if raw ~= "" then source = fName end
+            end
+        end
+    end
+
+    if raw ~= "" then
+        local added, dups, ignored, summary = parseAndValidateWorldBatch(raw, true)
+        addLog(string.format("[Load World] Berhasil memuat %d world dari %s", added, source))
+        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d world dari Download!", added)) end
+    else
+        addLog("[Load World] File world tidak ditemukan atau kosong!")
+        if sendNotification then pcall(sendNotification, "File world belum ada atau kosong!") end
+    end
+    if updateFileInfoDisplayList then pcall(updateFileInfoDisplayList) end
+    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
+end
+
+local function savePlantStoragesToFile()
+    persistConfig()
+    local exportLines = {}
+    for _, e in ipairs(CFG.storage_world_list) do
+        local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
+        table.insert(exportLines, line)
+    end
+    local exportTxt = table.concat(exportLines, "\n")
+    local fullPath, dir, fName = resolveFilePath("boren_plant_storages.txt", "boren_plant_storages.txt")
+
+    local saved = false
+    if io and io.open then
+        local okF, fh = pcall(io.open, fullPath, "w")
+        if okF and fh then
+            pcall(function()
+                fh:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
+                fh:close()
+            end)
+            saved = true
+        end
+        if not saved and not isSystemWindows() then
+            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "w")
+            if okA and fhA then
+                pcall(function()
+                    fhA:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
+                    fhA:close()
+                end)
+                saved = true
+            end
+        end
+        if not saved then
+            local okLoc, fhLoc = pcall(io.open, fName, "w")
+            if okLoc and fhLoc then
+                pcall(function()
+                    fhLoc:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
+                    fhLoc:close()
+                end)
+                saved = true
+            end
+        end
+    end
+    if writeToLocal then
+        pcall(writeToLocal, fullPath, exportTxt)
+        pcall(writeToLocal, fName, exportTxt)
+        saved = true
+    end
+
+    local summary = string.format("Tersimpan %d gudang ke %s & Preferences.", #CFG.storage_world_list, saved and fullPath or fName)
+    addLog("[Save Storage] " .. summary)
+    if sendNotification then pcall(sendNotification, summary) end
+    return true
+end
+
+local function loadPlantStoragesFromFile()
+    local fullPath, dir, fName = resolveFilePath("boren_plant_storages.txt", "boren_plant_storages.txt")
+    local raw = ""
+    local source = ""
+    if io and io.open then
+        local okF, fh = pcall(io.open, fullPath, "r")
+        if okF and fh then
+            pcall(function()
+                raw = fh:read("*all") or ""
+                fh:close()
+            end)
+            if raw ~= "" then source = fullPath end
+        end
+        if raw == "" and not isSystemWindows() then
+            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "r")
+            if okA and fhA then
+                pcall(function()
+                    raw = fhA:read("*all") or ""
+                    fhA:close()
+                end)
+                if raw ~= "" then source = "/sdcard/Download/" .. fName end
+            end
+        end
+        if raw == "" then
+            local okLoc, fhLoc = pcall(io.open, fName, "r")
+            if okLoc and fhLoc then
+                pcall(function()
+                    raw = fhLoc:read("*all") or ""
+                    fhLoc:close()
+                end)
+                if raw ~= "" then source = fName end
+            end
+        end
+    end
+
+    if raw ~= "" then
+        local added, dups, ignored, summary = parseAndValidateStorageBatch(raw, true)
+        addLog(string.format("[Load Storage] Berhasil memuat %d gudang dari %s", added, source))
+        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d gudang dari Download!", added)) end
+    else
+        addLog("[Load Storage] File gudang tidak ditemukan atau kosong!")
+        if sendNotification then pcall(sendNotification, "File gudang belum ada atau kosong!") end
+    end
+    if updateStorageDisplayList then pcall(updateStorageDisplayList) end
+end
+
+-- ============================================================================
 -- 18. NATIVE ON-VALUE EVENT DISPATCHER
 -- ============================================================================
-function onValue(typeVal, name, val)
+local function handlePlantUIValue(typeVal, name, val)
     -- Shift argumen jika GrowLauncher memanggil onValue(alias, val) atau alias ada di typeVal
     if type(typeVal) == "string" and (name == nil or type(name) ~= "string" or (type(name) == "string" and typeVal:sub(1, 3) == "ap_")) then
         val = name
@@ -2372,27 +2578,9 @@ function onValue(typeVal, name, val)
     elseif name == "ap_btn_view_worlds" or name == "ap_btn_paste_worlds" or name == "ap_btn_copy_all_worlds" then
         openWorldListManagerDialog()
     elseif name == "ap_btn_save_worlds" then
-        local fullPath, _, _ = resolveFilePath(CFG.world_file_name, "boren_plant_worlds.txt")
-        local fh = io.open(fullPath, "w")
-        if fh then
-            for _, e in ipairs(CFG.world_list) do
-                local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
-                fh:write(line .. "\n")
-            end
-            fh:close()
-            updateFileInfoDisplayList()
-            if sendNotification then pcall(sendNotification, "Tersimpan ke folder Download!") end
-        end
+        savePlantWorldsToFile()
     elseif name == "ap_btn_load_worlds" then
-        local fullPath, _, _ = resolveFilePath(CFG.world_file_name, "boren_plant_worlds.txt")
-        local fh = io.open(fullPath, "r")
-        if fh then
-            local raw = fh:read("*all")
-            fh:close()
-            parseAndValidateWorldBatch(raw, true)
-            updateFileInfoDisplayList()
-            if sendNotification then pcall(sendNotification, "Berhasil memuat dari Download!") end
-        end
+        loadPlantWorldsFromFile()
     elseif name == "ap_btn_add_storage" then
         local w = tostring(CFG.manual_storage_text or ""):gsub("%s+", ""):upper()
         local d = tostring(CFG.manual_stor_door or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -2409,6 +2597,10 @@ function onValue(typeVal, name, val)
         if sendNotification then pcall(sendNotification, "Daftar Storage dikosongkan!") end
     elseif name == "ap_btn_view_storages" or name == "ap_btn_paste_storages" or name == "ap_btn_copy_all_storages" then
         openStorageListManagerDialog()
+    elseif name == "ap_btn_save_storages" then
+        savePlantStoragesToFile()
+    elseif name == "ap_btn_load_storages" then
+        loadPlantStoragesFromFile()
     elseif name == "ap_slider_min_bp" then
         CFG.min_seed_bp = tonumber(val) or CFG.min_seed_bp
         persistConfig()
@@ -2462,7 +2654,7 @@ end
 
 -- Alias global OnValue & onValue agar dipanggil oleh engine Growlauncher di semua platform
 function OnValue(typeVal, name, val)
-    local ok, err = pcall(onValue, typeVal, name, val)
+    local ok, err = pcall(handlePlantUIValue, typeVal, name, val)
     if not ok then
         addLog("[Plant UI Err] " .. tostring(err))
     end
@@ -2476,7 +2668,8 @@ local ALL_UI_ALIASES = {
     "ap_btn_add_cur_world", "ap_btn_view_worlds", "ap_btn_clear_worlds", "ap_btn_save_worlds",
     "ap_btn_load_worlds", "ap_slider_min_bp", "ap_slider_target_bp", "ap_slider_collect_range",
     "ap_manual_stor_input", "ap_manual_stor_door_input", "ap_btn_add_storage", "ap_btn_view_storages",
-    "ap_btn_clear_storages", "ap_input_plant_delay", "ap_slider_plant_delay", "ap_slider_splice_delay", "ap_slider_step_delay",
+    "ap_btn_save_storages", "ap_btn_load_storages", "ap_btn_clear_storages", "ap_input_plant_delay",
+    "ap_slider_plant_delay", "ap_slider_splice_delay", "ap_slider_step_delay",
     "ap_slider_warp_delay", "ap_toggle_ignore_gems", "ap_toggle_modfly", "ap_toggle_anti_lava",
     "ap_toggle_reconnect", "ap_btn_clear_logs", "ap_toggle_err_only", "ap_btn_refresh_bag"
 }
@@ -2499,6 +2692,8 @@ end
 -- 19. INITIALIZATION & HOOK BINDINGS
 -- ============================================================================
 ensureHooksInstalled()
+onSendPacket = onSendPacketDialogHook
+OnSendPacket = onSendPacketDialogHook
 if addHook then
     pcall(addHook, OnValue, "onvalue")
     pcall(addHook, onSendPacketDialogHook, "onsendpacket")
