@@ -108,6 +108,7 @@ local STATE = {
     buf_storage_door    = "",
     buf_seed_1_id       = CFG.seed_1_id,
     buf_seed_2_id       = CFG.seed_2_id,
+    fresh_seeds         = {},
     console_errors_only = false,
     suppress_dialog     = false,
     reconnecting        = false,
@@ -939,6 +940,45 @@ local function isPermanentObstacle(t)
     return false
 end
 
+local function isTileTree(t)
+    if not t then return false end
+    local fg = tonumber(t.fg) or 0
+    if fg <= 0 then return false end
+
+    -- 1. Siap panen (pasti pohon matang)
+    if t.readyharvest == true then return true end
+    if t.canHarvest and type(t.canHarvest) == "function" then
+        local okH, resH = pcall(t.canHarvest, t)
+        if okH and resH == true then return true end
+    end
+
+    -- 2. Memiliki buah di pohon atau waktu pertumbuhan sudah berjalan
+    if t.extra and type(t.extra) == "table" then
+        local fruits = tonumber(t.extra.fruitcount) or 0
+        if fruits > 0 then return true end
+
+        -- Jika growth sudah berjalan lebih dari 15 detik, berarti sudah bertunas menjadi tree
+        local growthSec = tonumber(t.extra.growth) or 0
+        if growthSec > 15 then return true end
+    end
+
+    -- 3. Progres pertumbuhan engine Growlauncher
+    local prog = tonumber(t.progress) or 0
+    if prog >= 1 then return true end
+
+    return false
+end
+
+local function isFreshlyPlantedSeed(tx, ty)
+    if not STATE.fresh_seeds then return false end
+    local key = tx .. "_" .. ty
+    local plantTime = STATE.fresh_seeds[key]
+    if plantTime and (os.time() - plantTime) <= 25 then
+        return true
+    end
+    return false
+end
+
 local function getTilePlantStatus(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return "INVALID" end
     local tBelow = getTileSafe(tx, ty + 1)
@@ -951,18 +991,7 @@ local function getTilePlantStatus(tx, ty)
     local s1 = tonumber(CFG.seed_1_id) or 0
     local s2 = tonumber(CFG.seed_2_id) or 0
 
-    if CFG.splice_mode and s2 > 0 and s1 > 0 and s1 ~= s2 then
-        if fgAt == 0 then
-            return "EMPTY"
-        elseif fgAt == s1 then
-            return "NEEDS_SPLICE_2"
-        elseif fgAt == s2 then
-            return "NEEDS_SPLICE_1"
-        else
-            -- Petak telah tertanam pohon hasil splice (atau block/platform lain)
-            return "DONE"
-        end
-    else
+    if not CFG.splice_mode or s2 <= 0 or s1 <= 0 or s1 == s2 then
         -- Mode single seed biasa
         if fgAt == 0 then
             return "EMPTY"
@@ -970,6 +999,36 @@ local function getTilePlantStatus(tx, ty)
             return "DONE"
         end
     end
+
+    -- Mode Splice (2 Seed):
+    if fgAt == 0 then
+        -- Petak kosong: siap ditanam Seed 1 & Seed 2
+        return "EMPTY"
+    end
+
+    -- Jika petak memiliki fg == s1 (Seed 1)
+    if fgAt == s1 then
+        -- KOREKSI UTAMA: Jika petak ini SUDAH JADI TREE (sudah matang / sudah bertunas / pohon lama),
+        -- MAKA TIDAK BISA DI-SPLICE LAGI! Tandai DONE agar bot TIDAK MEMAKSA menimpa tree!
+        if isTileTree(tAt) or not isFreshlyPlantedSeed(tx, ty) then
+            return "DONE"
+        end
+        -- Ini adalah SEED yang baru ditanam dan BELUM MENJADI TREE!
+        -- Wajib ditimpa Seed 2 sebelum berubah menjadi tree!
+        return "NEEDS_SPLICE_2"
+    end
+
+    -- Jika petak memiliki fg == s2 (Seed 2)
+    if fgAt == s2 then
+        if isTileTree(tAt) or not isFreshlyPlantedSeed(tx, ty) then
+            return "DONE"
+        end
+        return "NEEDS_SPLICE_1"
+    end
+
+    -- fgAt sudah bukan 0, bukan s1, dan bukan s2.
+    -- Berarti pohon hasil splice sudah terbentuk (atau platform/block lain)!
+    return "DONE"
 end
 
 local function isTilePlantable(tx, ty)
@@ -1189,10 +1248,12 @@ local function plantSingleSpot(tx, ty)
         sendPlantPacket(tx, ty, s1)
         safeSleep(math.max(60, CFG.splice_delay))
     elseif st == "EMPTY" then
+        if not STATE.fresh_seeds then STATE.fresh_seeds = {} end
+        STATE.fresh_seeds[tx .. "_" .. ty] = os.time()
         sendPlantPacket(tx, ty, s1)
-        safeSleep(math.max(80, CFG.splice_delay))
+        safeSleep(math.max(70, CFG.splice_delay))
         sendPlantPacket(tx, ty, s2)
-        safeSleep(math.max(50, CFG.plant_delay))
+        safeSleep(math.max(40, CFG.plant_delay))
     end
 
     return true
@@ -1220,39 +1281,33 @@ local function plantTileSection(spotList, plantY)
                 end
             end
         else
-            -- Mode Splice: Tahap 1 - Selesaikan petak yang sebelumnya tertinggal/hanya ada 1 seed
+            -- Mode Splice (Kawin 2 Seed)
             for _, sx in ipairs(spotList) do
                 local st = getTilePlantStatus(sx, plantY)
+
                 if st == "NEEDS_SPLICE_2" then
+                    -- Bibit segar Seed 1 (belum jadi tree), langsung timpa Seed 2!
                     sendPlantPacket(sx, plantY, s2)
-                    safeSleep(math.max(35, CFG.plant_delay))
+                    safeSleep(math.max(50, CFG.splice_delay))
                     anyAction = true
+
                 elseif st == "NEEDS_SPLICE_1" then
+                    -- Bibit segar Seed 2 (belum jadi tree), langsung timpa Seed 1!
                     sendPlantPacket(sx, plantY, s1)
-                    safeSleep(math.max(35, CFG.plant_delay))
+                    safeSleep(math.max(50, CFG.splice_delay))
                     anyAction = true
-                end
-            end
 
-            -- Mode Splice: Tahap 2 - Tanam Seed 1 ke semua petak yang masih EMPTY dalam seksi ini
-            local newlyPlantedS1 = {}
-            for _, sx in ipairs(spotList) do
-                local st = getTilePlantStatus(sx, plantY)
-                if st == "EMPTY" then
+                elseif st == "EMPTY" then
+                    -- Petak kosong: Tanam Seed 1, lalu SEGERA timpa Seed 2 sebelum bertunas jadi tree!
+                    if not STATE.fresh_seeds then STATE.fresh_seeds = {} end
+                    STATE.fresh_seeds[sx .. "_" .. plantY] = os.time()
+
                     sendPlantPacket(sx, plantY, s1)
-                    table.insert(newlyPlantedS1, sx)
-                    safeSleep(math.max(35, CFG.plant_delay))
-                    anyAction = true
-                end
-            end
+                    safeSleep(math.max(70, CFG.splice_delay))
 
-            -- Beri jeda pemrosesan server agar Seed 1 terdaftar sebelum ditimpa Seed 2
-            if #newlyPlantedS1 > 0 then
-                safeSleep(math.max(80, CFG.splice_delay))
-                -- Mode Splice: Tahap 3 - Timpa dengan Seed 2 ke seluruh petak tadi
-                for _, sx in ipairs(newlyPlantedS1) do
                     sendPlantPacket(sx, plantY, s2)
                     safeSleep(math.max(35, CFG.plant_delay))
+                    anyAction = true
                 end
             end
         end
@@ -1611,6 +1666,7 @@ local function executePlantRow(plantY)
 end
 
 local function plantEntireWorld()
+    STATE.fresh_seeds = {}
     local curW = getCurrentWorldSafe()
     setStatus("Menanam", "Memulai proses tanam dari baris paling atas di world " .. curW)
     addLog(string.format("Memulai tanam world %s (Urut dari baris paling atas Y=0 s/d Y=53, kiri ke kanan)", curW))
@@ -1708,6 +1764,7 @@ end
 local function autoPlantMainLoop()
     STATE.running = true
     STATE.paused  = false
+    STATE.fresh_seeds = {}
     ensureHooksInstalled()
     applyCheatToggles()
 
