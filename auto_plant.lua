@@ -1300,6 +1300,145 @@ local function hasPlantableSpotsInRow(plantY)
     return false
 end
 
+local function isTilePlanted(tx, ty)
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    local tBelow = getTileSafe(tx, ty + 1)
+    if not isSupportTile(tBelow) then return false end
+
+    local tAt = getTileSafe(tx, ty)
+    if not tAt or isPermanentObstacle(tAt) then return false end
+    local fgAt = tonumber(tAt.fg) or 0
+    if fgAt <= 0 then return false end
+
+    local s1 = tonumber(CFG.seed_1_id) or 0
+    local s2 = tonumber(CFG.seed_2_id) or 0
+
+    if CFG.splice_mode and s2 > 0 and s1 > 0 and s1 ~= s2 then
+        local st = getTilePlantStatus(tx, ty)
+        if st == "DONE" then return true end
+        if fgAt == s1 or fgAt == s2 then return true end
+        if isTileTree(tAt) or (fgAt % 2 == 1) then return true end
+        return false
+    end
+
+    if s1 > 0 and fgAt == s1 then return true end
+    if isTileTree(tAt) then return true end
+    if fgAt % 2 == 1 then return true end
+    return false
+end
+
+-- ============================================================================
+-- PENDETEKSI CERDAS: CARI SEED TERAKHIR & TENTUKAN ARAH TANAM SECARA OTOMATIS
+-- Menghilangkan keharusan bot pergi ke ujung 0 atau 98 dahulu sebelum menanam!
+-- ============================================================================
+local function findRowPlantPlan(plantY, curPx)
+    if plantY < 0 or plantY > 53 then return nil, nil, nil, 0 end
+
+    local planted = {}
+    local plantable = {}
+    local plantableSet = {}
+
+    for x = 0, 99 do
+        if isTilePlantable(x, plantY) then
+            table.insert(plantable, x)
+            plantableSet[x] = true
+        elseif isTilePlanted(x, plantY) then
+            table.insert(planted, x)
+        end
+    end
+
+    if #plantable == 0 then
+        return nil, nil, nil, 0
+    end
+
+    curPx = tonumber(curPx) or 0
+
+    -- 1. Jika baris benar-benar fresh (0 seed tertanam di baris ini)
+    if #planted == 0 then
+        if curPx >= 50 then
+            return false, plantable[#plantable], nil, #plantable
+        else
+            return true, plantable[1], nil, #plantable
+        end
+    end
+
+    local minPlanted   = planted[1]
+    local maxPlanted   = planted[#planted]
+    local minPlantable = plantable[1]
+    local maxPlantable = plantable[#plantable]
+
+    -- 2. KASUS A: Pola Tanam Kiri ke Kanan
+    -- Seed sudah terpasang di sisi kiri dan sisa petak kosong di sisi kanan
+    if minPlanted <= minPlantable and maxPlantable > maxPlanted then
+        local startX = nil
+        for _, px in ipairs(plantable) do
+            if px > maxPlanted then
+                startX = px
+                break
+            end
+        end
+        if startX then
+            return true, startX, maxPlanted, #plantable
+        end
+    end
+
+    -- 3. KASUS B: Pola Tanam Kanan ke Kiri
+    -- Seed sudah terpasang di sisi kanan dan sisa petak kosong di sisi kiri
+    if maxPlanted >= maxPlantable and minPlantable < minPlanted then
+        local startX = nil
+        for i = #plantable, 1, -1 do
+            local px = plantable[i]
+            if px < minPlanted then
+                startX = px
+                break
+            end
+        end
+        if startX then
+            return false, startX, minPlanted, #plantable
+        end
+    end
+
+    -- 4. KASUS C: Titik batas transisi (boundary) terdekat dengan posisi bot
+    local bestDist = 9999
+    local bestDir = true
+    local bestStartX = plantable[1]
+    local bestLastSeed = planted[1]
+
+    for _, p in ipairs(planted) do
+        -- Transisi: p (seed) -> p + 1 (kosong) => arah KANAN
+        if plantableSet[p + 1] then
+            local dist = math.abs((p + 1) - curPx)
+            if dist < bestDist then
+                bestDist = dist
+                bestDir = true
+                bestStartX = p + 1
+                bestLastSeed = p
+            end
+        end
+        -- Transisi: p - 1 (kosong) <- p (seed) => arah KIRI
+        if plantableSet[p - 1] then
+            local dist = math.abs((p - 1) - curPx)
+            if dist < bestDist then
+                bestDist = dist
+                bestDir = false
+                bestStartX = p - 1
+                bestLastSeed = p
+            end
+        end
+    end
+
+    if bestDist < 9999 then
+        return bestDir, bestStartX, bestLastSeed, #plantable
+    end
+
+    -- Fallback: pilih sisi yang lebih dekat dengan posisi bot saat ini
+    if curPx >= 50 then
+        return false, maxPlantable, maxPlanted, #plantable
+    else
+        return true, minPlantable, minPlanted, #plantable
+    end
+end
+
 local function moveSafeTo(tx, ty)
     if not STATE.running then return false end
     tx = math.max(0, math.min(99, math.floor(tx or 0)))
@@ -1985,23 +2124,23 @@ local function hasEnoughSeedInBackpack()
     return false
 end
 
-local function executePlantRow(plantY, goingRight)
-    if goingRight == nil then
-        local curPx = getPlayerTilePos()
-        goingRight = not (curPx and curPx >= 50)
+local function executePlantRow(plantY, goingRight, startX)
+    local curPx = getPlayerTilePos()
+    if goingRight == nil or startX == nil then
+        local detectedDir, detectedStartX = findRowPlantPlan(plantY, curPx)
+        if detectedDir == nil then return true end
+        if goingRight == nil then goingRight = detectedDir end
+        if startX == nil then startX = detectedStartX end
     end
     STATE.current_plant_dir = goingRight
 
     if CFG.plant_mode == "3zigzag" then
         if goingRight then
             -- =================================================================
-            -- POLA 3-ZIGZAG: KIRI KE KANAN (X = 0 s/d 99)
+            -- POLA 3-ZIGZAG: KIRI KE KANAN
             -- =================================================================
-            -- Pastikan bot mulai dari sisi kiri baris baru
-            moveSafeTo(0, plantY)
-
-            -- 1. Tangani petak paling kiri (x = 0) jika butuh tanam
-            if isTilePlantable(0, plantY) then
+            -- 1. Tangani petak paling kiri (x = 0) HANYA jika mulai dari sisi kiri (startX <= 0)
+            if (not startX or startX <= 0) and isTilePlantable(0, plantY) then
                 if not hasEnoughSeedInBackpack() then
                     local remHoles = countPlantableSpotsInWorld()
                     if remHoles == 0 then return true end
@@ -2012,8 +2151,17 @@ local function executePlantRow(plantY, goingRight)
                 plantTileSection({ 0 }, plantY)
             end
 
-            -- 2. Tanam 3-zigzag maju dari standX = 1 sampai 97
-            local standX = 1
+            -- 2. Tanam 3-zigzag maju mulai dari standX terdekat dari startX
+            local firstStandX = 1
+            if startX and startX > 0 then
+                local k = math.floor(startX / 3)
+                firstStandX = math.max(1, math.min(97, k * 3 + 1))
+            end
+
+            -- Langsung menuju posisi berdiri awal tanpa harus kembali ke ujung kiri x = 0
+            moveSafeTo(firstStandX, plantY)
+
+            local standX = firstStandX
             while standX <= 97 do
                 if not STATE.running then break end
                 while STATE.paused do safeSleep(500) if not STATE.running then break end end
@@ -2049,6 +2197,8 @@ local function executePlantRow(plantY, goingRight)
                 standX = standX + 3
             end
 
+            if not STATE.running then return false end
+
             -- 3. Tangani ujung kanan platform (petak 98 dan 99 agar tidak bolong di ujung)
             if isTilePlantable(98, plantY) or isTilePlantable(99, plantY) then
                 if not hasEnoughSeedInBackpack() then
@@ -2072,13 +2222,10 @@ local function executePlantRow(plantY, goingRight)
 
         else
             -- =================================================================
-            -- POLA 3-ZIGZAG: KANAN KE KIRI (Langsung turun di sisi kanan, tanam ke kiri!)
+            -- POLA 3-ZIGZAG: KANAN KE KIRI
             -- =================================================================
-            -- KUNCI UTAMA: Dari ujung kanan atas, langsung turun ke ujung kanan baris baru!
-            moveSafeTo(98, plantY)
-
-            -- 1. Tangani ujung kanan (99, 98) terlebih dahulu
-            if isTilePlantable(99, plantY) or isTilePlantable(98, plantY) then
+            -- 1. Tangani ujung kanan (99, 98) HANYA jika mulai dari sisi kanan (startX >= 98)
+            if (not startX or startX >= 98) and (isTilePlantable(99, plantY) or isTilePlantable(98, plantY)) then
                 if not hasEnoughSeedInBackpack() then
                     local remHoles = countPlantableSpotsInWorld()
                     if remHoles == 0 then return true end
@@ -2095,8 +2242,17 @@ local function executePlantRow(plantY, goingRight)
                 end
             end
 
-            -- 2. Tanam 3-zigzag mundur dari standX = 97 ke 1
-            local standX = 97
+            -- 2. Tanam 3-zigzag mundur mulai dari standX terdekat dari startX
+            local firstStandX = 97
+            if startX and startX < 98 then
+                local k = math.floor(startX / 3)
+                firstStandX = math.max(1, math.min(97, k * 3 + 1))
+            end
+
+            -- Langsung menuju posisi berdiri awal tanpa harus ke ujung kanan x = 98 dahulu
+            moveSafeTo(firstStandX, plantY)
+
+            local standX = firstStandX
             while standX >= 1 do
                 if not STATE.running then break end
                 while STATE.paused do safeSleep(500) if not STATE.running then break end end
@@ -2132,6 +2288,8 @@ local function executePlantRow(plantY, goingRight)
                 standX = standX - 3
             end
 
+            if not STATE.running then return false end
+
             -- 3. Tangani petak paling kiri (x = 0) jika masih butuh
             if isTilePlantable(0, plantY) then
                 if not hasEnoughSeedInBackpack() then
@@ -2150,11 +2308,12 @@ local function executePlantRow(plantY, goingRight)
 
     else
         -- =====================================================================
-        -- MODE 1 BY 1 (Tanam per petak urut sesuai arah aktif)
+        -- MODE 1 BY 1
         -- =====================================================================
         if goingRight then
-            moveSafeTo(0, plantY)
-            for curX = 0, 99 do
+            local beginX = (startX and startX > 0) and startX or 0
+            moveSafeTo(beginX, plantY)
+            for curX = beginX, 99 do
                 if not STATE.running then break end
                 while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
@@ -2172,8 +2331,9 @@ local function executePlantRow(plantY, goingRight)
             end
             moveSafeTo(98, plantY)
         else
-            moveSafeTo(98, plantY)
-            for curX = 99, 0, -1 do
+            local beginX = (startX and startX < 98) and startX or 99
+            moveSafeTo(beginX, plantY)
+            for curX = beginX, 0, -1 do
                 if not STATE.running then break end
                 while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
@@ -2229,6 +2389,13 @@ local function executePlantRow(plantY, goingRight)
         end
     end
 
+    -- Posisikan bot di ujung baris untuk persiapan baris berikutnya
+    if goingRight then
+        moveSafeTo(98, plantY)
+    else
+        moveSafeTo(0, plantY)
+    end
+
     return true
 end
 
@@ -2277,20 +2444,20 @@ local function plantEntireWorld()
             return false, "DISCONNECTED"
         end
 
-        -- Tentukan arah tanam secara dinamis berdasarkan posisi bot saat ini:
-        -- Jika bot di sisi kanan (X >= 50), langsung turun dan tanam ke arah KIRI!
-        -- Jika bot di sisi kiri (X < 50), langsung turun dan tanam ke arah KANAN!
+        -- Tentukan arah dan titik awal tanam secara cerdas berdasarkan seed terakhir / petak yang sudah ditanam:
         local curPx = getPlayerTilePos()
-        local goingRight = true
-        if curPx and curPx >= 50 then
-            goingRight = false
-        else
-            goingRight = true
-        end
+        local goingRight, startX, lastSeedX, holesCount = findRowPlantPlan(plantY, curPx)
+        if goingRight ~= nil then
+            local dirStr = goingRight and "Kiri->Kanan" or "Kanan->Kiri"
+            local seedInfo = lastSeedX and string.format("X=%d", lastSeedX) or "Fresh"
+            local infoMsg = string.format("Baris Y=%d (%d/%d) [%s] Mulai X=%d (Seed Terakhir: %s | Sisa: %d petak) di %s",
+                plantY, idx, #activeRows, dirStr, startX or 0, seedInfo, holesCount or 0, curW)
+            setStatus("Menanam", infoMsg)
+            addLog("[Auto Plant] " .. infoMsg)
 
-        setStatus("Menanam", string.format("Baris Y=%d (%d/%d) [%s] di %s", plantY, idx, #activeRows, goingRight and "Kiri->Kanan" or "Kanan->Kiri", curW))
-        local okRow = executePlantRow(plantY, goingRight)
-        if not okRow then return false end
+            local okRow = executePlantRow(plantY, goingRight, startX)
+            if not okRow then return false end
+        end
     end
 
     -- =========================================================================
@@ -2336,10 +2503,11 @@ local function plantEntireWorld()
                 return false, "DISCONNECTED"
             end
             local curPx = getPlayerTilePos()
-            local sweepDir = true
-            if curPx and curPx > 50 then sweepDir = false end
-            local okRow = executePlantRow(sweepY, sweepDir)
-            if not okRow then return false end
+            local sweepDir, sweepStartX, sweepLastSeed, sweepHoles = findRowPlantPlan(sweepY, curPx)
+            if sweepDir ~= nil then
+                local okRow = executePlantRow(sweepY, sweepDir, sweepStartX)
+                if not okRow then return false end
+            end
         end
     end
 
@@ -3618,6 +3786,8 @@ _G.getPlayerTilePos = getPlayerTilePos
 _G.getTilePlantStatus = getTilePlantStatus
 _G.plantAndSpliceTile = plantAndSpliceTile
 _G.isTilePlantable = isTilePlantable
+_G.isTilePlanted = isTilePlanted
+_G.findRowPlantPlan = findRowPlantPlan
 _G.executePlantRow = executePlantRow
 _G.plantEntireWorld = plantEntireWorld
 _G.parseSavedWorldList = parseSavedWorldList
