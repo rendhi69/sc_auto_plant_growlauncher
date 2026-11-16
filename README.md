@@ -2,36 +2,25 @@
 
 Script otomatisasi tanam (Plant) dan kawin bibit (Splice) untuk Growlauncher Android & PC.
 
-## Fitur Utama
-1. **Item Picker Native (Sama Seperti SC DF)**:
-   - Menggunakan item picker native Growlauncher: tinggal pegang/pilih item langsung dari tas (backpack) tanpa tebak-tebak ID ngawur.
-   - Didukung input ID manual jika ingin mengetik ID bibit secara langsung.
-2. **Mode Tanam 3 Zig-Zag Rapat & Anti Bolong (Zero Hole)**:
-   - Bot berdiri tepat di titik pijakan (X tengah) dan menanam 3 petak sekaligus (kiri - tengah - kanan) dalam radius 1 tile.
-   - Dilengkapi verifikasi seketika di tempat: jika ada petak yang belum tertanam akibat lag/packet drop, bot langsung menanam ulang sebelum melangkah 3 tile maju.
-   - Menjamin seluruh deretan platform tertanam rata tanpa ada bolong seperti pada foto.
-3. **Penyapuan Template dari Paling Atas (Y=0 s/d 53 Urut Kiri ke Kanan)**:
-   - Langsung menanam dari baris lantai paling atas ke bawah tanpa terjebak deteksi layout.
-   - Otomatis menanam world saat ini jika daftar antrean world kosong saat START BOT.
-4. **Fitur Splice (Kawin Bibit Otomatis)**:
-   - Toggle ON / OFF Splice.
-   - Bot menanam Seed 1 lalu langsung detik itu juga menanam Seed 2 di petak yang sama.
-5. **Menu Kelola World Farm & Gudang Terpadu (Unified Dialog)**:
-   - Salin semua daftar world farm ke clipboard (: / | / Nama Saja).
-   - Tempel banyak world farm sekaligus (Quick Paste cerdas) dengan auto validasi format koma/titik koma/enter acak.
-   - Edit nama world dan Door ID langsung di dalam dialog game.
-   - Simpan dan muat antrean paten dari folder Download HP (`boren_plant_worlds.txt`).
-6. **Gudang Seed Cerdas & Mode Tanpa Gudang (Zero-Storage)**:
-   - Multi-world gudang seed dengan Door ID.
-   - Auto restock dan auto-skip ke gudang berikutnya jika stok gudang habis.
-   - Jika tidak ada gudang, bot menanam sampai seed di tas habis 0 tanpa pernah macet.
-7. **Anti-Collect & Ignore Gems**:
-   - Interceptor TankPacket Type 11 mengabaikan Gems (ID 112) agar tas tidak cepat penuh.
+## Fitur Utama & Pembaruan
+1. **Navigasi Serpentine Dinamis (S-Pattern Traversal)**:
+   - Dari ujung kanan baris platform (`x >= 50`), bot langsung turun ke baris bawahnya dan menanam ke arah kiri (`Kanan -> Kiri`).
+   - Dari ujung kiri baris platform (`x < 50`), bot langsung turun dan menanam ke arah kanan (`Kiri -> Kanan`).
+   - Mengeliminasi gerakan bolak-balik yang membuang waktu dan menghemat durasi penanaman hingga 50%.
+2. **Pacing Delay Riil 180ms Terintegrasi**:
+   - Delay default terset ke **180 ms** (`plant_delay` & `splice_delay`).
+   - Eksekusi real delay presisi tanpa clamping / batas minimum palsu.
+   - Sinkronisasi dua arah real-time antara slider UI dan input teks angka (Int).
+3. **Batch Section Splicing & Auto-Recovery (Punch Sprouted Trees)**:
+   - Splicing batch 3 petak sekaligus (tanam bibit 1, tunggu cooldown server, lalu timpa bibit 2).
+   - Validasi kepastian splice dengan verifikasi multi-retry langsung di tempat.
+   - Fitur pemulihan cerdas: jika terdeteksi bibit yang gagal splice dan telanjur bertunas, bot otomatis memukul (punch) untuk mereset petak dan menanam bibit baru.
+4. **Anti False Completion saat Disconnect**:
+   - Jika koneksi terputus saat proses tanam berlangsung, status world TIDAK ditandai selesai (DONE). World tetap berstatus ANTRI untuk dilanjutkan saat reconnect.
+5. **Penyimpanan Daftar World & Storage Anti-Crash**:
+   - Form dan list terpadu dengan sinkronisasi instan ke file teks penyimpanan (`boren_plant_worlds.txt` & `boren_plant_storage.txt`), mencegah daftar hilang saat force close, restart, atau crash.
+6. **Dukungan Modular Component**:
+   - Tersedia modul komponen siap pakai di folder `component/` untuk arsitektur skrip modular.
 
-## Cara Menggunakan Loader
-Jalankan kode loader di Growlauncher untuk selalu mendapatkan pembaruan otomatis dari GitHub:
-```lua
-local RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/auto_plant.lua"
-local content = fetch(RAW_URL .. "?v=" .. tostring(os.time()))
-load(content)()
-```
+## Cara Menggunakan
+Jalankan `loader_plant.lua` pada Growlauncher untuk selalu mendapatkan versi skrip terbaru secara otomatis langsung dari GitHub.

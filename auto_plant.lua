@@ -17,23 +17,249 @@ elseif Preferences and Preferences.new then
     pcall(function() pref = Preferences:new(PREF_FILE) end)
 end
 
-local function savePrefs(cfg)
-    if not pref then return end
-    pcall(function()
-        for k, v in pairs(cfg) do
-            if type(v) ~= "function" and type(v) ~= "userdata" then
-                pref:set(k, v)
+local function isSystemWindows()
+    local osEnv = os.getenv("OS") or ""
+    return osEnv:lower():find("windows") ~= nil
+end
+
+local function resolveFilePath(rawFileName, defaultName)
+    local fn = tostring(rawFileName or defaultName):gsub("^%s+", ""):gsub("%s+$", "")
+    if fn == "" then fn = defaultName end
+    if not fn:lower():match("%.txt$") then fn = fn .. ".txt" end
+
+    if fn:sub(1, 1) == "/" or fn:match("^%a:[/\\]") then
+        local dir = fn:match("^(.*[/\\])") or ""
+        local nameOnly = fn:sub(#dir + 1)
+        return fn, dir, nameOnly
+    end
+
+    local dir = ""
+    if isSystemWindows() then
+        local userProfile = os.getenv("USERPROFILE")
+        if userProfile and userProfile ~= "" then
+            dir = userProfile:gsub("\\", "/") .. "/Downloads/"
+        else
+            dir = ""
+        end
+    else
+        dir = "/storage/emulated/0/Download/"
+    end
+    return dir .. fn, dir, fn
+end
+
+local function readTextFileIfExists(fileName)
+    if not fileName or fileName == "" then return nil end
+    local fullPath, _, fName = resolveFilePath(fileName, fileName)
+    local candidates = {
+        fullPath,
+        fName,
+        "/sdcard/Download/" .. fName,
+        "/storage/emulated/0/Download/" .. fName
+    }
+    if io and io.open then
+        for _, path in ipairs(candidates) do
+            local ok, fh = pcall(io.open, path, "r")
+            if ok and fh then
+                local content = nil
+                pcall(function()
+                    content = fh:read("*a")
+                    fh:close()
+                end)
+                if content and content ~= "" then
+                    return content
+                end
             end
         end
-        if pref.save then pref:save() end
-    end)
+    end
+    return nil
+end
+
+local function writeTextFileIfExists(fileName, content)
+    if not fileName or fileName == "" then return false end
+    content = tostring(content or "")
+    local fullPath, _, fName = resolveFilePath(fileName, fileName)
+    local targets = {
+        fullPath,
+        fName,
+        "/sdcard/Download/" .. fName,
+        "/storage/emulated/0/Download/" .. fName
+    }
+    local wroteAny = false
+    if io and io.open then
+        for _, path in ipairs(targets) do
+            local ok, fh = pcall(io.open, path, "w")
+            if ok and fh then
+                pcall(function()
+                    fh:write(content .. (content ~= "" and "\n" or ""))
+                    fh:close()
+                end)
+                wroteAny = true
+            end
+        end
+    end
+    if writeToLocal then
+        pcall(writeToLocal, fullPath, content)
+        pcall(writeToLocal, fName, content)
+        wroteAny = true
+    end
+    return wroteAny
 end
 
 local function loadPref(key, default)
-    if not pref then return default end
-    local ok, val = pcall(function() return pref:get(key, default) end)
-    if ok and val ~= nil then return val end
+    if saved and saved.get then
+        local ok, val = pcall(function() return saved:get(key, default) end)
+        if ok and val ~= nil then return val end
+    end
+    if pref and pref.get then
+        local ok, val = pcall(function() return pref:get(key, default) end)
+        if ok and val ~= nil then return val end
+    end
     return default
+end
+
+local function savePrefs(cfg_table)
+    local function doSave(storageObj)
+        if not storageObj or not storageObj.set then return end
+        for k, v in pairs(cfg_table) do
+            local vt = type(v)
+            if vt == "string" or vt == "number" or vt == "boolean" then
+                storageObj:set(k, v)
+            end
+        end
+        -- Simpan daftar world farm sebagai string sederhana flat (NAME|DOOR|STATUS)
+        local wParts = {}
+        if type(cfg_table.world_list) == "table" then
+            for _, entry in ipairs(cfg_table.world_list) do
+                if type(entry) == "table" and entry.name and entry.name ~= "" then
+                    local flag = entry.done and "1" or "0"
+                    table.insert(wParts, tostring(entry.name) .. "|" .. tostring(entry.door or "") .. "|" .. flag)
+                end
+            end
+        end
+        storageObj:set("world_list_str", table.concat(wParts, ";"))
+
+        -- Simpan daftar world storage sebagai string sederhana flat (NAME|DOOR)
+        local sParts = {}
+        if type(cfg_table.storage_world_list) == "table" then
+            for _, entry in ipairs(cfg_table.storage_world_list) do
+                if type(entry) == "table" and entry.name and entry.name ~= "" then
+                    table.insert(sParts, tostring(entry.name) .. "|" .. tostring(entry.door or ""))
+                end
+            end
+        end
+        storageObj:set("storage_world_list_str", table.concat(sParts, ";"))
+
+        if storageObj.save then storageObj:save() end
+    end
+
+    pcall(doSave, saved)
+    pcall(doSave, pref)
+end
+
+local function isWorldInList(wList, worldName)
+    local wTarget = tostring(worldName or ""):upper():gsub("%s+", "")
+    if wTarget == "" or type(wList) ~= "table" then return false end
+    for _, e in ipairs(wList) do
+        if type(e) == "table" and tostring(e.name or ""):upper():gsub("%s+", "") == wTarget then
+            return true
+        end
+    end
+    return false
+end
+
+local function parseWorldEntryToken(rawToken, defaultDoor)
+    local clean = tostring(rawToken or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if clean == "" or clean:sub(1, 1) == "#" then return nil end
+
+    -- Dukung format: WORLD:ID, WORLD|ID, plus opsional status |1 / |0 / |DONE / |ANTRI / :DONE
+    local body = clean
+    local isDone = false
+    local statusTag = nil
+
+    local b1, tag1 = clean:match("^(.-)[|:](DONE)$")
+    if not b1 then b1, tag1 = clean:match("^(.-)[|:](done)$") end
+    if not b1 then b1, tag1 = clean:match("^(.-)[|:](PROSES)$") end
+    if not b1 then b1, tag1 = clean:match("^(.-)[|:](ANTRI)$") end
+    if not b1 then b1, tag1 = clean:match("^(.-)|([01])$") end
+    if b1 and tag1 then
+        body = b1
+        statusTag = tag1:upper()
+        isDone = (statusTag == "DONE" or statusTag == "1")
+    end
+
+    local wName, dId = body:match("^([^|:]+)[|:](.*)$")
+    if not wName then
+        wName = body
+        dId = defaultDoor or ""
+    end
+    wName = wName:upper():gsub("%s+", "")
+    dId = (dId or ""):gsub("%s+", "")
+    if wName == "" or wName == "EXIT" or wName == "0" then return nil end
+
+    local validName = wName:match("^([%w_]+)$")
+    if not validName or #validName < 1 or #validName > 24 then return nil end
+
+    return {
+        name = validName:upper(),
+        door = dId,
+        done = isDone,
+        status = isDone and "DONE" or (statusTag or "ANTRI")
+    }
+end
+
+local function parseSavedWorldList()
+    local list = {}
+    local rawStr = loadPref("world_list_str", "")
+    if type(rawStr) == "string" and rawStr ~= "" then
+        for token in rawStr:gmatch("[^;\r\n]+") do
+            local entry = parseWorldEntryToken(token, "")
+            if entry and not isWorldInList(list, entry.name) then
+                table.insert(list, entry)
+            end
+        end
+    end
+    if #list == 0 then
+        local rawFile = readTextFileIfExists("boren_plant_worlds.txt")
+        if rawFile and rawFile ~= "" then
+            local cleaned = rawFile:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
+            for token in cleaned:gmatch("[^\r\n;,]+") do
+                local entry = parseWorldEntryToken(token, "")
+                if entry and not isWorldInList(list, entry.name) then
+                    table.insert(list, entry)
+                end
+            end
+        end
+    end
+    return list
+end
+
+local function parseSavedStorageList()
+    local list = {}
+    local rawStr = loadPref("storage_world_list_str", "")
+    if type(rawStr) == "string" and rawStr ~= "" then
+        for token in rawStr:gmatch("[^;\r\n]+") do
+            local entry = parseWorldEntryToken(token, "")
+            if entry and not isWorldInList(list, entry.name) then
+                table.insert(list, { name = entry.name, door = entry.door })
+            end
+        end
+    end
+    if #list == 0 then
+        local rawFile = readTextFileIfExists("boren_plant_storage.txt")
+        if not rawFile or rawFile == "" then
+            rawFile = readTextFileIfExists("boren_plant_storages.txt")
+        end
+        if rawFile and rawFile ~= "" then
+            local cleaned = rawFile:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
+            for token in cleaned:gmatch("[^\r\n;,]+") do
+                local entry = parseWorldEntryToken(token, "")
+                if entry and not isWorldInList(list, entry.name) then
+                    table.insert(list, { name = entry.name, door = entry.door })
+                end
+            end
+        end
+    end
+    return list
 end
 
 local CFG = {
@@ -46,8 +272,8 @@ local CFG = {
     seed_2_name         = tostring(loadPref("seed_2_name", "Rock Seed")),
 
     -- Delay & Kecepatan (ms)
-    plant_delay         = tonumber(loadPref("plant_delay", 80)) or 80,
-    splice_delay        = tonumber(loadPref("splice_delay", 200)) or 200,
+    plant_delay         = tonumber(loadPref("plant_delay", 180)) or 180,
+    splice_delay        = tonumber(loadPref("splice_delay", 180)) or 180,
     step_delay          = tonumber(loadPref("step_delay", 110)) or 110,
     warp_delay          = tonumber(loadPref("warp_delay", 3500)) or 3500,
 
@@ -58,14 +284,15 @@ local CFG = {
     collect_range       = tonumber(loadPref("collect_range", 3)) or 3,
 
     -- Toggles & Keamanan
-    ignore_gems         = loadPref("ignore_gems", true),        -- Abaikan gems (ID 112)
-    use_modfly          = loadPref("use_modfly", true),
-    auto_reconnect      = loadPref("auto_reconnect", true),
-    anti_lava           = loadPref("anti_lava", true),
+    ignore_gems              = loadPref("ignore_gems", true),        -- Abaikan gems (ID 112)
+    use_modfly               = loadPref("use_modfly", true),
+    auto_reconnect           = loadPref("auto_reconnect", true),
+    anti_lava                = loadPref("anti_lava", true),
+    auto_clear_failed_splice = loadPref("auto_clear_failed_splice", true), -- Auto punch & replant pohon bertunas yg gagal splice
 
-    -- World Lists
-    world_list          = loadPref("world_list", {}),           -- Antrean World Farm
-    storage_world_list  = loadPref("storage_world_list", {}),   -- Antrean World Storage Seed
+    -- World Lists (Safe Persistence Anti-Crash)
+    world_list          = parseSavedWorldList(),
+    storage_world_list  = parseSavedStorageList(),
 
     -- Buffer Input Manual
     manual_world_text   = loadPref("manual_world_text", ""),
@@ -132,6 +359,8 @@ local openCopyAllWorldsDialog
 local parseAndValidateWorldBatch
 local parseAndValidateStorageBatch
 local resolvePickedItemID
+local savePlantWorldsToFile
+local savePlantStoragesToFile
 
 -- JSON Encoder Sederhana
 local function jsonEncode(val)
@@ -200,8 +429,12 @@ local function setStatus(step, detail)
     if updatePowerStatusList then pcall(updatePowerStatusList) end
 end
 
-local function persistConfig()
+local function persistConfig(silentFileSave)
     savePrefs(CFG)
+    if silentFileSave ~= false then
+        if savePlantWorldsToFile then pcall(savePlantWorldsToFile, true) end
+        if savePlantStoragesToFile then pcall(savePlantStoragesToFile, true) end
+    end
 end
 
 -- ============================================================================
@@ -507,33 +740,9 @@ updateStorageDisplayList = function()
     pcall(editValue, "ap_storage_display_list", jsonEncode(buildStorageDisplayRows()))
 end
 
-local function isWorldInList(wList, worldName)
-    local wTarget = tostring(worldName or ""):upper():gsub("%s+", "")
-    if wTarget == "" or type(wList) ~= "table" then return false end
-    for _, e in ipairs(wList) do
-        if type(e) == "table" and tostring(e.name or ""):upper():gsub("%s+", "") == wTarget then
-            return true
-        end
-    end
-    return false
-end
-
 -- ============================================================================
 -- 5. QUICK PASTE BATCH VALIDATOR (FARM & STORAGE)
 -- ============================================================================
-local function parseWorldEntryToken(token)
-    token = tostring(token or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if token == "" then return nil end
-    local w, d = token:match("^([^:|]+)[:|](.*)$")
-    if not w then
-        w = token
-        d = ""
-    end
-    w = w:gsub("%s+", ""):upper()
-    d = d:gsub("^%s+", ""):gsub("%s+$", "")
-    if w == "" then return nil end
-    return { name = w, door = d, done = false, status = "ANTRI" }
-end
 
 parseAndValidateWorldBatch = function(rawText, replaceMode)
     if type(rawText) ~= "string" or rawText == "" then
@@ -952,19 +1161,11 @@ local function isTileTree(t)
         if okH and resH == true then return true end
     end
 
-    -- 2. Memiliki buah di pohon atau waktu pertumbuhan sudah berjalan
+    -- 2. Memiliki buah di pohon
     if t.extra and type(t.extra) == "table" then
         local fruits = tonumber(t.extra.fruitcount) or 0
         if fruits > 0 then return true end
-
-        -- Jika growth sudah berjalan lebih dari 15 detik, berarti sudah bertunas menjadi tree
-        local growthSec = tonumber(t.extra.growth) or 0
-        if growthSec > 15 then return true end
     end
-
-    -- 3. Progres pertumbuhan engine Growlauncher
-    local prog = tonumber(t.progress) or 0
-    if prog >= 1 then return true end
 
     return false
 end
@@ -973,7 +1174,7 @@ local function isFreshlyPlantedSeed(tx, ty)
     if not STATE.fresh_seeds then return false end
     local key = tx .. "_" .. ty
     local plantTime = STATE.fresh_seeds[key]
-    if plantTime and (os.time() - plantTime) <= 25 then
+    if plantTime and (os.time() - plantTime) <= 60 then
         return true
     end
     return false
@@ -1008,21 +1209,21 @@ local function getTilePlantStatus(tx, ty)
 
     -- Jika petak memiliki fg == s1 (Seed 1)
     if fgAt == s1 then
-        -- KOREKSI UTAMA: Jika petak ini SUDAH JADI TREE (sudah matang / sudah bertunas / pohon lama),
-        -- MAKA TIDAK BISA DI-SPLICE LAGI! Tandai DONE agar bot TIDAK MEMAKSA menimpa tree!
-        if isTileTree(tAt) or not isFreshlyPlantedSeed(tx, ty) then
+        -- Jika pohon sudah berbuah / siap panen, jangan ditimpa
+        if isTileTree(tAt) then
             return "DONE"
         end
-        -- Ini adalah SEED yang baru ditanam dan BELUM MENJADI TREE!
-        -- Wajib ditimpa Seed 2 sebelum berubah menjadi tree!
+        -- Bibit Seed 1 belum jadi pohon berbuah (baik baru ditanam maupun sudah ada di world):
+        -- Validasi: WAJIB DICOBA SPLICE (timpa Seed 2)!
         return "NEEDS_SPLICE_2"
     end
 
     -- Jika petak memiliki fg == s2 (Seed 2)
     if fgAt == s2 then
-        if isTileTree(tAt) or not isFreshlyPlantedSeed(tx, ty) then
+        if isTileTree(tAt) then
             return "DONE"
         end
+        -- Bibit Seed 2 belum jadi pohon berbuah: WAJIB DICOBA SPLICE (timpa Seed 1)!
         return "NEEDS_SPLICE_1"
     end
 
@@ -1162,21 +1363,45 @@ local function moveSafeTo(tx, ty)
     return false
 end
 
-local function waitForWorldLoaded(timeoutMs)
-    timeoutMs = timeoutMs or 3000
+local function isWorldProperlyLoaded(expectedWorld)
+    local curW = getCurrentWorldSafe()
+    if curW == "" or curW == "EXIT" then return false end
+    if expectedWorld and expectedWorld ~= "" and curW ~= expectedWorld:upper() then return false end
+
+    -- Cek ketersediaan tile map (bukan nil atau kosong total)
+    local hasAnyTile = false
+    for checkY = 0, 59, 10 do
+        local t = getTileSafe(50, checkY)
+        if t and ((t.fg and t.fg > 0) or (t.bg and t.bg > 0)) then
+            hasAnyTile = true
+            break
+        end
+    end
+    if not hasAnyTile then
+        -- Cek dasar world (bedrock Y=54..59)
+        for checkY = 54, 59 do
+            local t = getTileSafe(1, checkY)
+            if t and (t.fg and t.fg > 0) then
+                hasAnyTile = true
+                break
+            end
+        end
+    end
+    return hasAnyTile
+end
+
+local function waitForWorldLoaded(timeoutMs, expectedWorld)
+    timeoutMs = timeoutMs or 3500
     local elapsed = 0
     while elapsed < timeoutMs do
-        local tMid = getTileSafe(50, 30)
-        local tDoor = getTileSafe(0, 0)
-        local tBot = getTileSafe(50, 54)
-        if (tMid.fg and tMid.fg > 0) or (tDoor.fg and tDoor.fg > 0) or (tBot.fg and tBot.fg > 0)
-           or (tMid.bg and tMid.bg > 0) or (tDoor.bg and tDoor.bg > 0) then
+        if not STATE.running then return false end
+        if isWorldProperlyLoaded(expectedWorld) then
             return true
         end
-        safeSleep(150)
-        elapsed = elapsed + 150
+        safeSleep(200)
+        elapsed = elapsed + 200
     end
-    return true
+    return isWorldProperlyLoaded(expectedWorld)
 end
 
 -- ============================================================================
@@ -1218,6 +1443,52 @@ local function sendPlantPacket(tx, ty, itemID)
     return ok
 end
 
+local function sendRawAction(tx, ty, value)
+    if not sendPacketRaw then return false end
+    value = tonumber(value) or 18
+
+    local okP, p = pcall(getLocal)
+    local px = (okP and p and (p.posX or (p.pos and p.pos.x))) or (tx * 32)
+    local py = (okP and p and (p.posY or (p.pos and p.pos.y))) or (ty * 32)
+    local state = (px > (tx * 32)) and 48 or 32
+
+    local ok = pcall(sendPacketRaw, false, {
+        type  = 3,
+        value = value,
+        px    = tx,
+        py    = ty,
+        x     = px,
+        y     = py,
+        state = state,
+    })
+    return ok
+end
+
+local function punchTile(tx, ty)
+    return sendRawAction(tx, ty, 18)
+end
+
+local function clearFailedSpliceTile(tx, ty)
+    if not STATE.running then return false end
+    local s1 = CFG.seed_1_id
+    local s2 = CFG.seed_2_id
+
+    for punchCount = 1, 4 do
+        if not STATE.running then return false end
+        punchTile(tx, ty)
+        safeSleep(150)
+        local t = getTileSafe(tx, ty)
+        local fgNow = tonumber(t and t.fg) or 0
+        if fgNow == 0 then
+            return true -- Berhasil dihancurkan dan petak kosong!
+        end
+        if fgNow ~= s1 and fgNow ~= s2 then
+            return true -- Berubah jadi item lain / pohon
+        end
+    end
+    return false
+end
+
 local function plantAndSpliceTile(tx, ty)
     if not STATE.running then return false end
     local st = getTilePlantStatus(tx, ty)
@@ -1228,9 +1499,8 @@ local function plantAndSpliceTile(tx, ty)
 
     local isSplice = (CFG.splice_mode and s2 and s2 > 0 and s1 > 0 and s1 ~= s2)
 
-    -- Jeda lebih tenang & aman agar packet tidak di-drop / di-throttle oleh server Growtopia
-    local delayPlant = math.max(60, CFG.plant_delay or 80)
-    local delaySplice = math.max(140, CFG.splice_delay or 200)
+    local delayPlant = tonumber(CFG.plant_delay) or 180
+    local delaySplice = tonumber(CFG.splice_delay) or 180
 
     if not isSplice then
         if st == "EMPTY" then
@@ -1241,75 +1511,63 @@ local function plantAndSpliceTile(tx, ty)
     end
 
     -- =========================================================================
-    -- MODE SPLICE (KAWIN 2 SEED DENGAN VERIFIKASI HINGGA PASTI JADI)
+    -- MODE SPLICE 1 PETAK (DENGAN MULTI-RETRY & AUTO-RECOVERY PUNCH)
     -- =========================================================================
-    if st == "EMPTY" then
-        if not STATE.fresh_seeds then STATE.fresh_seeds = {} end
-        STATE.fresh_seeds[tx .. "_" .. ty] = os.time()
+    local maxSpliceAttempts = 3
+    for attempt = 1, maxSpliceAttempts do
+        if not STATE.running then return false end
+        while STATE.paused do safeSleep(500) if not STATE.running then return false end end
 
-        -- Langkah 1: Pasang Seed 1
-        sendPlantPacket(tx, ty, s1)
-        safeSleep(delaySplice)
+        local curSt = getTilePlantStatus(tx, ty)
+        if curSt == "DONE" then
+            return true
+        end
 
-        -- Langkah 2: Pasang Seed 2 untuk mengawinkan (splice) sebelum Seed 1 jadi tree
-        sendPlantPacket(tx, ty, s2)
-        safeSleep(delayPlant)
+        if curSt == "EMPTY" then
+            sendPlantPacket(tx, ty, s1)
+            safeSleep(delaySplice)
+            sendPlantPacket(tx, ty, s2)
+            safeSleep(delayPlant)
+        elseif curSt == "NEEDS_SPLICE_2" then
+            sendPlantPacket(tx, ty, s2)
+            safeSleep(delayPlant)
+        elseif curSt == "NEEDS_SPLICE_1" then
+            sendPlantPacket(tx, ty, s1)
+            safeSleep(delayPlant)
+        end
 
-        -- Langkah 3: Verifikasi apakah 2 seed berhasil splice
-        -- Hasil splice adalah pohon baru (ID != s1, != s2, dan != 0).
-        for retry = 1, 3 do
+        -- Verifikasi hasil: apakah splice berhasil (fg bukan 0, bukan s1, dan bukan s2)
+        local confirmed = false
+        for _ = 1, 3 do
+            safeSleep(50)
             local tCheck = getTileSafe(tx, ty)
             local fgNow = tonumber(tCheck and tCheck.fg) or 0
-            if fgNow == s1 and isFreshlyPlantedSeed(tx, ty) and not isTileTree(tCheck) then
-                -- Seed 1 tertanam tapi Seed 2 sempat miss/drop, timpa ulang Seed 2!
-                safeSleep(delaySplice)
-                sendPlantPacket(tx, ty, s2)
-                safeSleep(delayPlant)
-            elseif fgNow ~= 0 and fgNow ~= s1 and fgNow ~= s2 then
-                -- Berhasil tersplice sempurna menjadi pohon baru!
-                break
-            elseif fgNow == 0 then
-                -- Jika packet Seed 1 sempat hilang/tidak masuk, ulangi dari Seed 1
-                sendPlantPacket(tx, ty, s1)
-                safeSleep(delaySplice)
-                sendPlantPacket(tx, ty, s2)
-                safeSleep(delayPlant)
-            else
+            if fgNow ~= 0 and fgNow ~= s1 and fgNow ~= s2 then
+                confirmed = true
                 break
             end
         end
 
-    elseif st == "NEEDS_SPLICE_2" then
-        -- Seed 1 sudah ada (bibit segar belum jadi tree), langsung timpa Seed 2
-        sendPlantPacket(tx, ty, s2)
-        safeSleep(delayPlant)
+        if confirmed then
+            return true
+        end
 
-        -- Verifikasi hasil splice
-        for retry = 1, 2 do
-            local tCheck = getTileSafe(tx, ty)
-            local fgNow = tonumber(tCheck and tCheck.fg) or 0
-            if fgNow == s1 and isFreshlyPlantedSeed(tx, ty) and not isTileTree(tCheck) then
+        safeSleep(80)
+    end
+
+    -- Jika setelah 3 percobaan masih gagal (karena sudah bertunas/sprouted un-spliced)
+    if CFG.auto_clear_failed_splice ~= false then
+        local lastSt = getTilePlantStatus(tx, ty)
+        if lastSt == "NEEDS_SPLICE_2" or lastSt == "NEEDS_SPLICE_1" then
+            addLog(string.format("[Splice Recovery] Mereset semak bertunas gagal splice di (%d, %d)...", tx, ty))
+            local cleared = clearFailedSpliceTile(tx, ty)
+            if cleared then
+                safeSleep(100)
+                sendPlantPacket(tx, ty, s1)
                 safeSleep(delaySplice)
                 sendPlantPacket(tx, ty, s2)
                 safeSleep(delayPlant)
-            else
-                break
-            end
-        end
-
-    elseif st == "NEEDS_SPLICE_1" then
-        -- Seed 2 sudah ada, timpa Seed 1
-        sendPlantPacket(tx, ty, s1)
-        safeSleep(delayPlant)
-        for retry = 1, 2 do
-            local tCheck = getTileSafe(tx, ty)
-            local fgNow = tonumber(tCheck and tCheck.fg) or 0
-            if fgNow == s2 and isFreshlyPlantedSeed(tx, ty) and not isTileTree(tCheck) then
-                safeSleep(delaySplice)
-                sendPlantPacket(tx, ty, s1)
-                safeSleep(delayPlant)
-            else
-                break
+                return true
             end
         end
     end
@@ -1329,26 +1587,117 @@ end
 local function plantTileSection(spotList, plantY)
     if not STATE.running or not spotList or #spotList == 0 then return true end
 
-    -- Tanam dan splice setiap petak dalam seksi (kiri, tengah, kanan) satu per satu dengan tenang & pasti
+    local s1 = CFG.seed_1_id
+    local s2 = CFG.seed_2_id
+    local isSplice = (CFG.splice_mode and s2 and s2 > 0 and s1 > 0 and s1 ~= s2)
+    local delayPlant = tonumber(CFG.plant_delay) or 180
+    local delaySplice = tonumber(CFG.splice_delay) or 180
+
+    -- -------------------------------------------------------------------------
+    -- A. SINGLE SEED MODE
+    -- -------------------------------------------------------------------------
+    if not isSplice then
+        for _, sx in ipairs(spotList) do
+            if not STATE.running then break end
+            while STATE.paused do safeSleep(500) if not STATE.running then break end end
+            if getTilePlantStatus(sx, plantY) == "EMPTY" then
+                sendPlantPacket(sx, plantY, s1)
+                safeSleep(delayPlant)
+            end
+        end
+
+        -- Verifikasi konfirmasi
+        for _ = 1, 2 do
+            local needRetry = false
+            for _, sx in ipairs(spotList) do
+                if getTilePlantStatus(sx, plantY) == "EMPTY" then
+                    needRetry = true
+                    sendPlantPacket(sx, plantY, s1)
+                    safeSleep(delayPlant)
+                end
+            end
+            if not needRetry then break end
+        end
+        return true
+    end
+
+    -- -------------------------------------------------------------------------
+    -- B. BATCH SECTION SPLICING (3-Petak Sekaligus Bebas Cooldown Server)
+    -- -------------------------------------------------------------------------
+    -- TAHAP 1: Pasang Seed 1 pada semua petak EMPTY dalam seksi
+    local plantedS1 = {}
     for _, sx in ipairs(spotList) do
         if not STATE.running then break end
         while STATE.paused do safeSleep(500) if not STATE.running then break end end
-
-        if isTilePlantable(sx, plantY) then
-            plantAndSpliceTile(sx, plantY)
+        local st = getTilePlantStatus(sx, plantY)
+        if st == "EMPTY" then
+            sendPlantPacket(sx, plantY, s1)
+            plantedS1[sx] = true
+            safeSleep(delayPlant)
         end
     end
 
-    -- Konfirmasi akhir seksi: jika ada paket yang sempat drop karena latency tinggi, ulangi spot tersebut
-    for attempt = 1, 2 do
-        local stillNeed = false
+    -- TAHAP 2: Jeda Cooldown Server Growtopia (> 200ms per-tile)
+    safeSleep(delaySplice)
+
+    -- TAHAP 3: Pasang Seed 2 untuk menimpa Seed 1 (Splice Execution)
+    for _, sx in ipairs(spotList) do
+        if not STATE.running then break end
+        while STATE.paused do safeSleep(500) if not STATE.running then break end end
+        local st = getTilePlantStatus(sx, plantY)
+        if plantedS1[sx] or st == "NEEDS_SPLICE_2" or st == "EMPTY" then
+            sendPlantPacket(sx, plantY, s2)
+            safeSleep(delayPlant)
+        elseif st == "NEEDS_SPLICE_1" then
+            sendPlantPacket(sx, plantY, s1)
+            safeSleep(delayPlant)
+        end
+    end
+
+    -- TAHAP 4: Verifikasi Langsung di Tempat Sebelum Bot Melangkah
+    safeSleep(140)
+    for retry = 1, 3 do
+        if not STATE.running then break end
+        local allDone = true
         for _, sx in ipairs(spotList) do
-            if isTilePlantable(sx, plantY) then
-                stillNeed = true
-                plantAndSpliceTile(sx, plantY)
+            local st = getTilePlantStatus(sx, plantY)
+            if st == "NEEDS_SPLICE_2" then
+                allDone = false
+                sendPlantPacket(sx, plantY, s2)
+                safeSleep(delayPlant)
+            elseif st == "NEEDS_SPLICE_1" then
+                allDone = false
+                sendPlantPacket(sx, plantY, s1)
+                safeSleep(delayPlant)
+            elseif st == "EMPTY" then
+                allDone = false
+                sendPlantPacket(sx, plantY, s1)
+                safeSleep(delaySplice)
+                sendPlantPacket(sx, plantY, s2)
+                safeSleep(delayPlant)
             end
         end
-        if not stillNeed then break end
+        if allDone then break end
+        safeSleep(120)
+    end
+
+    -- TAHAP 5: Auto-Recovery untuk Bibit yang Terlewat & Sudah Bertunas (Punch & Replant)
+    if CFG.auto_clear_failed_splice ~= false then
+        for _, sx in ipairs(spotList) do
+            if not STATE.running then break end
+            local st = getTilePlantStatus(sx, plantY)
+            if st == "NEEDS_SPLICE_2" or st == "NEEDS_SPLICE_1" then
+                addLog(string.format("[Splice Recovery] Mendeteksi semak bertunas gagal splice di (%d, %d). Mereset...", sx, plantY))
+                local cleared = clearFailedSpliceTile(sx, plantY)
+                if cleared then
+                    safeSleep(100)
+                    sendPlantPacket(sx, plantY, s1)
+                    safeSleep(delaySplice)
+                    sendPlantPacket(sx, plantY, s2)
+                    safeSleep(delayPlant)
+                end
+            end
+        end
     end
 
     return true
@@ -1543,6 +1892,9 @@ end
 -- 14. ALUR UTAMA TANAM PER BARIS & WORLD
 -- ============================================================================
 local function countPlantableSpotsInWorld()
+    if not isWorldProperlyLoaded() then
+        return -1
+    end
     local cnt = 0
     for y = 0, 53 do
         for x = 0, 99 do
@@ -1580,68 +1932,72 @@ local function hasEnoughSeedInBackpack()
     return false
 end
 
-local function executePlantRow(plantY)
+local function executePlantRow(plantY, goingRight)
+    if goingRight == nil then
+        local curPx = getPlayerTilePos()
+        goingRight = not (curPx and curPx >= 50)
+    end
+    STATE.current_plant_dir = goingRight
+
     if CFG.plant_mode == "3zigzag" then
-        -- Mode Plant 3 Zig-Zag ala Lucifer (Kiri, Tengah, Kanan lalu melangkah 3 petak)
-        -- Selalu bergerak dari Kiri ke Kanan (X = 0 s/d 99)
-        local standX = 1
-        while standX <= 97 do
-            if not STATE.running then break end
-            while STATE.paused do safeSleep(500) if not STATE.running then break end end
+        if goingRight then
+            -- =================================================================
+            -- POLA 3-ZIGZAG: KIRI KE KANAN (X = 0 s/d 99)
+            -- =================================================================
+            -- Pastikan bot mulai dari sisi kiri baris baru
+            moveSafeTo(0, plantY)
 
-            local sLeft   = standX - 1
-            local sCenter = standX
-            local sRight  = standX + 1
-
-            local needPlant = (sLeft >= 0 and isTilePlantable(sLeft, plantY))
-                           or isTilePlantable(sCenter, plantY)
-                           or (sRight <= 99 and isTilePlantable(sRight, plantY))
-
-            if needPlant then
-                -- VALIDASI 3: Cek stok tas HANYA saat petak benar-benar butuh tanam!
+            -- 1. Tangani petak paling kiri (x = 0) jika butuh tanam
+            if isTilePlantable(0, plantY) then
                 if not hasEnoughSeedInBackpack() then
                     local remHoles = countPlantableSpotsInWorld()
-                    if remHoles == 0 then
-                        -- World sudah ter-plant semua! Tidak perlu restock lagi!
-                        return true
-                    end
+                    if remHoles == 0 then return true end
                     local okRestock = restockFromStorage()
                     if not okRestock then return false end
                 end
-
-                moveSafeTo(standX, plantY)
-
-                local sectionSpots = {}
-                if sLeft >= 0 then table.insert(sectionSpots, sLeft) end
-                table.insert(sectionSpots, sCenter)
-                if sRight <= 99 then table.insert(sectionSpots, sRight) end
-
-                plantTileSection(sectionSpots, plantY)
+                moveSafeTo(0, plantY)
+                plantTileSection({ 0 }, plantY)
             end
 
-            standX = standX + 3
-        end
+            -- 2. Tanam 3-zigzag maju dari standX = 1 sampai 97
+            local standX = 1
+            while standX <= 97 do
+                if not STATE.running then break end
+                while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-        -- Tangani ujung kanan platform (petak 98 dan 99 agar tidak bolong di ujung)
-        if isTilePlantable(98, plantY) or isTilePlantable(99, plantY) then
-            if not hasEnoughSeedInBackpack() then
-                local remHoles = countPlantableSpotsInWorld()
-                if remHoles == 0 then return true end
-                local okRestock = restockFromStorage()
-                if not okRestock then return false end
+                local sLeft   = standX - 1
+                local sCenter = standX
+                local sRight  = standX + 1
+
+                local needPlant = (sLeft >= 0 and isTilePlantable(sLeft, plantY))
+                               or isTilePlantable(sCenter, plantY)
+                               or (sRight <= 99 and isTilePlantable(sRight, plantY))
+
+                if needPlant then
+                    if not hasEnoughSeedInBackpack() then
+                        local remHoles = countPlantableSpotsInWorld()
+                        if remHoles == 0 then return true end
+                        local okRestock = restockFromStorage()
+                        if not okRestock then return false end
+                    end
+
+                    moveSafeTo(standX, plantY)
+
+                    local sectionSpots = {}
+                    if sLeft >= 0 and isTilePlantable(sLeft, plantY) then table.insert(sectionSpots, sLeft) end
+                    if isTilePlantable(sCenter, plantY) then table.insert(sectionSpots, sCenter) end
+                    if sRight <= 99 and isTilePlantable(sRight, plantY) then table.insert(sectionSpots, sRight) end
+
+                    if #sectionSpots > 0 then
+                        plantTileSection(sectionSpots, plantY)
+                    end
+                end
+
+                standX = standX + 3
             end
 
-            moveSafeTo(98, plantY)
-            plantTileSection({ 98, 99 }, plantY)
-        end
-
-    else
-        -- Mode 1 by 1 (Tanam per petak demi petak penuh dari ujung kiri ke kanan 0 s/d 99)
-        for curX = 0, 99 do
-            if not STATE.running then break end
-            while STATE.paused do safeSleep(500) if not STATE.running then break end end
-
-            if isTilePlantable(curX, plantY) then
+            -- 3. Tangani ujung kanan platform (petak 98 dan 99 agar tidak bolong di ujung)
+            if isTilePlantable(98, plantY) or isTilePlantable(99, plantY) then
                 if not hasEnoughSeedInBackpack() then
                     local remHoles = countPlantableSpotsInWorld()
                     if remHoles == 0 then return true end
@@ -1649,25 +2005,158 @@ local function executePlantRow(plantY)
                     if not okRestock then return false end
                 end
 
-                moveSafeTo(curX, plantY)
-                plantTileSection({ curX }, plantY)
+                moveSafeTo(98, plantY)
+                local endSpots = {}
+                if isTilePlantable(98, plantY) then table.insert(endSpots, 98) end
+                if isTilePlantable(99, plantY) then table.insert(endSpots, 99) end
+                if #endSpots > 0 then
+                    plantTileSection(endSpots, plantY)
+                end
+            else
+                -- Mendarat di ujung kanan (x=98) agar siap langsung turun ke baris bawahnya
+                moveSafeTo(98, plantY)
             end
+
+        else
+            -- =================================================================
+            -- POLA 3-ZIGZAG: KANAN KE KIRI (Langsung turun di sisi kanan, tanam ke kiri!)
+            -- =================================================================
+            -- KUNCI UTAMA: Dari ujung kanan atas, langsung turun ke ujung kanan baris baru!
+            moveSafeTo(98, plantY)
+
+            -- 1. Tangani ujung kanan (99, 98) terlebih dahulu
+            if isTilePlantable(99, plantY) or isTilePlantable(98, plantY) then
+                if not hasEnoughSeedInBackpack() then
+                    local remHoles = countPlantableSpotsInWorld()
+                    if remHoles == 0 then return true end
+                    local okRestock = restockFromStorage()
+                    if not okRestock then return false end
+                end
+
+                moveSafeTo(98, plantY)
+                local endSpots = {}
+                if isTilePlantable(99, plantY) then table.insert(endSpots, 99) end
+                if isTilePlantable(98, plantY) then table.insert(endSpots, 98) end
+                if #endSpots > 0 then
+                    plantTileSection(endSpots, plantY)
+                end
+            end
+
+            -- 2. Tanam 3-zigzag mundur dari standX = 97 ke 1
+            local standX = 97
+            while standX >= 1 do
+                if not STATE.running then break end
+                while STATE.paused do safeSleep(500) if not STATE.running then break end end
+
+                local sRight  = standX + 1
+                local sCenter = standX
+                local sLeft   = standX - 1
+
+                local needPlant = (sRight <= 99 and isTilePlantable(sRight, plantY))
+                               or isTilePlantable(sCenter, plantY)
+                               or (sLeft >= 0 and isTilePlantable(sLeft, plantY))
+
+                if needPlant then
+                    if not hasEnoughSeedInBackpack() then
+                        local remHoles = countPlantableSpotsInWorld()
+                        if remHoles == 0 then return true end
+                        local okRestock = restockFromStorage()
+                        if not okRestock then return false end
+                    end
+
+                    moveSafeTo(standX, plantY)
+
+                    local sectionSpots = {}
+                    if sRight <= 99 and isTilePlantable(sRight, plantY) then table.insert(sectionSpots, sRight) end
+                    if isTilePlantable(sCenter, plantY) then table.insert(sectionSpots, sCenter) end
+                    if sLeft >= 0 and isTilePlantable(sLeft, plantY) then table.insert(sectionSpots, sLeft) end
+
+                    if #sectionSpots > 0 then
+                        plantTileSection(sectionSpots, plantY)
+                    end
+                end
+
+                standX = standX - 3
+            end
+
+            -- 3. Tangani petak paling kiri (x = 0) jika masih butuh
+            if isTilePlantable(0, plantY) then
+                if not hasEnoughSeedInBackpack() then
+                    local remHoles = countPlantableSpotsInWorld()
+                    if remHoles == 0 then return true end
+                    local okRestock = restockFromStorage()
+                    if not okRestock then return false end
+                end
+                moveSafeTo(0, plantY)
+                plantTileSection({ 0 }, plantY)
+            else
+                -- Mendarat di ujung kiri (x=0) agar siap langsung turun ke baris bawahnya
+                moveSafeTo(0, plantY)
+            end
+        end
+
+    else
+        -- =====================================================================
+        -- MODE 1 BY 1 (Tanam per petak urut sesuai arah aktif)
+        -- =====================================================================
+        if goingRight then
+            moveSafeTo(0, plantY)
+            for curX = 0, 99 do
+                if not STATE.running then break end
+                while STATE.paused do safeSleep(500) if not STATE.running then break end end
+
+                if isTilePlantable(curX, plantY) then
+                    if not hasEnoughSeedInBackpack() then
+                        local remHoles = countPlantableSpotsInWorld()
+                        if remHoles == 0 then return true end
+                        local okRestock = restockFromStorage()
+                        if not okRestock then return false end
+                    end
+
+                    moveSafeTo(curX, plantY)
+                    plantTileSection({ curX }, plantY)
+                end
+            end
+            moveSafeTo(98, plantY)
+        else
+            moveSafeTo(98, plantY)
+            for curX = 99, 0, -1 do
+                if not STATE.running then break end
+                while STATE.paused do safeSleep(500) if not STATE.running then break end end
+
+                if isTilePlantable(curX, plantY) then
+                    if not hasEnoughSeedInBackpack() then
+                        local remHoles = countPlantableSpotsInWorld()
+                        if remHoles == 0 then return true end
+                        local okRestock = restockFromStorage()
+                        if not okRestock then return false end
+                    end
+
+                    moveSafeTo(curX, plantY)
+                    plantTileSection({ curX }, plantY)
+                end
+            end
+            moveSafeTo(0, plantY)
         end
     end
 
     -- =========================================================================
-    -- ROW SWEEPER: Deteksi & tambal otomatis setiap petak yang terlewat di baris ini
+    -- ROW SWEEPER: Tambal otomatis setiap petak yang terlewat di baris ini
+    -- Urutkan dari yang terdekat dengan posisi bot agar tidak bolak-balik
     -- =========================================================================
     if hasPlantableSpotsInRow(plantY) then
         local missedSpots = {}
         for x = 0, 99 do
-            if isTilePlantable(x, plantY) then
-                table.insert(missedSpots, x)
-            end
+            if isTilePlantable(x, plantY) then table.insert(missedSpots, x) end
         end
 
         if #missedSpots > 0 then
-            addLog(string.format("[Tambal Baris Y=%d] Terdeteksi %d petak belum selesai/tercampur, melakukan tambal...", plantY, #missedSpots))
+            local curPx = getPlayerTilePos()
+            table.sort(missedSpots, function(a, b)
+                return math.abs(a - curPx) < math.abs(b - curPx)
+            end)
+
+            addLog(string.format("[Tambal Baris Y=%d] Menyelesaikan %d petak terlewat/tersplice...", plantY, #missedSpots))
             for _, mx in ipairs(missedSpots) do
                 if not STATE.running then break end
                 while STATE.paused do safeSleep(500) if not STATE.running then break end end
@@ -1693,8 +2182,13 @@ end
 local function plantEntireWorld()
     STATE.fresh_seeds = {}
     local curW = getCurrentWorldSafe()
+    if not isWorldProperlyLoaded(curW) then
+        addLog("[Peringatan] World belum termuat atau bot terputus (disconnect). Tanam ditunda.")
+        return false, "DISCONNECTED"
+    end
+
     setStatus("Menanam", "Memulai proses tanam dari baris paling atas di world " .. curW)
-    addLog(string.format("Memulai tanam world %s (Urut dari baris paling atas Y=0 s/d Y=53, kiri ke kanan)", curW))
+    addLog(string.format("Memulai tanam serpentine world %s (Urut baris Y=0 s/d 53, zigzag kiri-kanan & kanan-kiri)", curW))
 
     -- Pindai dan kumpulkan baris yang memiliki petak kosong berlantai (Y=0 s/d Y=53)
     local activeRows = {}
@@ -1705,20 +2199,44 @@ local function plantEntireWorld()
     end
 
     if #activeRows == 0 then
-        setStatus("World Penuh / Selesai", "Tidak ada petak kosong yang dapat ditanam di world " .. curW)
-        addLog("[Info] World " .. curW .. " tidak memiliki petak kosong berlantai. Ditandai selesai.")
-        return true
+        if not isWorldProperlyLoaded(curW) then
+            return false, "DISCONNECTED"
+        end
+        local chkHoles = countPlantableSpotsInWorld()
+        if chkHoles == 0 then
+            setStatus("World Penuh / Selesai", "Tidak ada petak kosong yang dapat ditanam di world " .. curW)
+            addLog("[Info] World " .. curW .. " tidak memiliki petak kosong berlantai. Ditandai selesai.")
+            return true
+        else
+            return false, "DISCONNECTED"
+        end
     end
 
-    addLog(string.format("Terdeteksi %d baris tanam di %s (Mulai dari baris paling atas: Y=%d)",
+    addLog(string.format("Terdeteksi %d baris tanam di %s (Mulai baris Y=%d secara serpentine)",
         #activeRows, curW, activeRows[1]))
 
     for idx, plantY in ipairs(activeRows) do
         if not STATE.running then break end
         while STATE.paused do safeSleep(500) if not STATE.running then break end end
 
-        setStatus("Menanam", string.format("Baris Y=%d (%d/%d) di %s", plantY, idx, #activeRows, curW))
-        local okRow = executePlantRow(plantY)
+        if not isWorldProperlyLoaded(curW) then
+            addLog("[Disconnect] Terputus saat menanam baris Y=" .. plantY .. ". World TIDAK ditandai selesai.")
+            return false, "DISCONNECTED"
+        end
+
+        -- Tentukan arah tanam secara dinamis berdasarkan posisi bot saat ini:
+        -- Jika bot di sisi kanan (X >= 50), langsung turun dan tanam ke arah KIRI!
+        -- Jika bot di sisi kiri (X < 50), langsung turun dan tanam ke arah KANAN!
+        local curPx = getPlayerTilePos()
+        local goingRight = true
+        if curPx and curPx >= 50 then
+            goingRight = false
+        else
+            goingRight = true
+        end
+
+        setStatus("Menanam", string.format("Baris Y=%d (%d/%d) [%s] di %s", plantY, idx, #activeRows, goingRight and "Kiri->Kanan" or "Kanan->Kiri", curW))
+        local okRow = executePlantRow(plantY, goingRight)
         if not okRow then return false end
     end
 
@@ -1729,6 +2247,10 @@ local function plantEntireWorld()
     for sweepCycle = 1, maxWorldSweeps do
         if not STATE.running then break end
         while STATE.paused do safeSleep(500) if not STATE.running then break end end
+
+        if not isWorldProperlyLoaded(curW) then
+            return false, "DISCONNECTED"
+        end
 
         local remainingRows = {}
         local totalRemainingHoles = 0
@@ -1757,30 +2279,31 @@ local function plantEntireWorld()
         for _, sweepY in ipairs(remainingRows) do
             if not STATE.running then break end
             while STATE.paused do safeSleep(500) if not STATE.running then break end end
-            local okRow = executePlantRow(sweepY)
+            if not isWorldProperlyLoaded(curW) then
+                return false, "DISCONNECTED"
+            end
+            local curPx = getPlayerTilePos()
+            local sweepDir = true
+            if curPx and curPx > 50 then sweepDir = false end
+            local okRow = executePlantRow(sweepY, sweepDir)
             if not okRow then return false end
         end
     end
 
     -- Verifikasi Akhir Jumlah Petak Kosong
-    local finalHoles = 0
-    for y = 0, 53 do
-        for x = 0, 99 do
-            if isTilePlantable(x, y) then
-                finalHoles = finalHoles + 1
-            end
-        end
+    if not isWorldProperlyLoaded(curW) then
+        return false, "DISCONNECTED"
     end
-
+    local finalHoles = countPlantableSpotsInWorld()
     if finalHoles == 0 then
         addLog(string.format("World Farm %s SELESAI ditanam! (100%% Penuh, 0 Bolong)", curW))
         setStatus("World Selesai", string.format("World %s 100%% tuntas tertanam!", curW))
+        return true
     else
-        addLog(string.format("[Peringatan] World %s masih menyisakan %d petak kosong (kehabisan seed).", curW, finalHoles))
+        addLog(string.format("[Peringatan] World %s masih menyisakan %d petak kosong. Status belum selesai.", curW, finalHoles))
         setStatus("Selesai Sebagian", string.format("Tersisa %d petak kosong di %s", finalHoles, curW))
+        return false, "INCOMPLETE"
     end
-
-    return true
 end
 
 -- ============================================================================
@@ -1842,11 +2365,11 @@ local function autoPlantMainLoop()
 
             setStatus("Masuk World Farm", "Menuju " .. entry.name)
             local arrived = warpToWorld(entry.name, entry.door)
-            if arrived then
-                safeSleep(800)
-                waitForWorldLoaded(3000)
-                syncInventoryCache()
+            local isLoaded = arrived and waitForWorldLoaded(4000, entry.name)
 
+            if isLoaded and isWorldProperlyLoaded(entry.name) then
+                safeSleep(500)
+                syncInventoryCache()
 
                 -- Validasi awal: Cek apakah world ini memang masih memiliki petak kosong berlantai
                 local initialHoles = countPlantableSpotsInWorld()
@@ -1854,19 +2377,26 @@ local function autoPlantMainLoop()
                     addLog(string.format("[Info] World %s sudah ter-plant penuh (0 petak kosong tersisa). Selesai!", entry.name))
                     entry.done = true
                     entry.status = "DONE"
+                    STATE.active_world_idx = STATE.active_world_idx + 1
                     persistConfig()
                     updateWorldDisplayList()
-                else
+                elseif initialHoles > 0 then
                     -- Cek stok awal HANYA jika world masih membutuhkan penanaman
                     if not hasEnoughSeedInBackpack() then
                         local okR = restockFromStorage()
-                        if not okR then break end
+                        if not okR then
+                            entry.status = "ANTRI"
+                            persistConfig()
+                            updateWorldDisplayList()
+                            break
+                        end
                     end
 
-                    local okPlant = plantEntireWorld()
-                    if okPlant and STATE.running then
+                    local okPlant, plantReason = plantEntireWorld()
+                    if okPlant and STATE.running and isWorldProperlyLoaded(entry.name) then
                         entry.done = true
                         entry.status = "DONE"
+                        STATE.active_world_idx = STATE.active_world_idx + 1
                         persistConfig()
                         updateWorldDisplayList()
                         addLog(string.format("World Farm %s SELESAI ditanam!", entry.name))
@@ -1874,16 +2404,64 @@ local function autoPlantMainLoop()
                             pcall(sendNotification, string.format("Farm %s selesai! Menuju world berikutnya...", entry.name))
                         end
                     else
-                        if STATE.paused or not STATE.running then
-                            break
+                        -- Terputus / Disconnect / Pause / Belum tuntas
+                        entry.done = false
+                        entry.status = "ANTRI"
+                        persistConfig()
+                        updateWorldDisplayList()
+
+                        if plantReason == "DISCONNECTED" or not isWorldProperlyLoaded(entry.name) then
+                            addLog(string.format("[Disconnect] Bot terputus di %s. World TETAP 'ANTRI' & TIDAK ditandai selesai.", entry.name))
+                            if CFG.auto_reconnect then
+                                addLog("[Reconnect] Menunggu 4 detik untuk mencoba kembali ke world " .. entry.name .. "...")
+                                safeSleep(4000)
+                                -- Loop akan mencoba ulang world yang sama karena STATE.active_world_idx TIDAK bertambah!
+                            else
+                                addLog("[Info] Auto reconnect non-aktif. Bot dihentikan aman.")
+                                STATE.running = false
+                                if editToggle then pcall(editToggle, "ap_run_power", false) end
+                                break
+                            end
+                        else
+                            if STATE.paused or not STATE.running then
+                                break
+                            end
+                            -- Alasan lain (misal kehabisan seed): pindah indeks agar tidak infinite loop
+                            STATE.active_world_idx = STATE.active_world_idx + 1
                         end
+                    end
+                else
+                    -- initialHoles == -1 (terputus / tile map belum ready)
+                    entry.done = false
+                    entry.status = "ANTRI"
+                    persistConfig()
+                    updateWorldDisplayList()
+                    addLog(string.format("[Disconnect] World %s gagal memuat tile map. Status tetap 'ANTRI'.", entry.name))
+                    if CFG.auto_reconnect then
+                        safeSleep(3000)
+                    else
+                        break
                     end
                 end
             else
-                addLog("Gagal masuk ke world " .. entry.name .. ", melewati...")
+                -- Gagal warp atau terputus
+                entry.done = false
+                entry.status = "ANTRI"
+                persistConfig()
+                updateWorldDisplayList()
+                addLog(string.format("[Gagal Masuk/Disconnect] Tidak dapat mengakses world %s. World tetap 'ANTRI'.", entry.name))
+                if CFG.auto_reconnect then
+                    addLog("[Reconnect] Mencoba menghubungkan ulang ke " .. entry.name .. "...")
+                    safeSleep(3500)
+                else
+                    -- Jika auto reconnect non-aktif, lewati ke world berikutnya
+                    STATE.active_world_idx = STATE.active_world_idx + 1
+                end
             end
+        else
+            -- World memang sudah berstatus DONE, lewati ke indeks berikutnya
+            STATE.active_world_idx = STATE.active_world_idx + 1
         end
-        STATE.active_world_idx = STATE.active_world_idx + 1
     end
 
     if STATE.paused then
@@ -1987,7 +2565,9 @@ openWorldListManagerDialog = function(fmt)
         "add_spacer|small|",
 
         -- Bagian 3: Daftar World & Aksi Edit/Hapus
-        string.format("add_textbox|`2[3. Daftar Antrean Saat Ini (%d World)]|left|", #CFG.world_list)
+        string.format("add_textbox|`2[3. Daftar Antrean Saat Ini (%d World)]|left|", #CFG.world_list),
+        "add_button|boren_btn_wreset_all|`2🔄 Reset Semua Status World (Tanam Ulang)|noflags|0|0|",
+        "add_spacer|small|"
     }
 
     if #CFG.world_list == 0 then
@@ -1997,6 +2577,7 @@ openWorldListManagerDialog = function(fmt)
             local st = getWorldEntryStatusTag(e)
             local d = (e.door and e.door ~= "") and e.door or "-"
             table.insert(dLines, string.format("add_textbox|`w%d. `9%s `o[Door: %s] `2[%s]|left|", i, e.name, d, st))
+            table.insert(dLines, string.format("add_button|boren_wreset_%d|Reset Status|noflags|0|0|", i))
             table.insert(dLines, string.format("add_button|boren_wedit_%d|Edit|noflags|0|0|", i))
             table.insert(dLines, string.format("add_button|boren_whapus_%d|Hapus|noflags|0|0|", i))
             table.insert(dLines, "add_spacer|small|")
@@ -2135,6 +2716,35 @@ local function onSendPacketDialogHook(ptype, pkt)
     local btn = fields.buttonClicked or ""
 
     if dName == "boren_plant_world_mgr" or dName == "boren_paste_farm_mgr" or dName == "boren_copy_farm_mgr" then
+        if btn == "boren_btn_wreset_all" then
+            for _, w in ipairs(CFG.world_list) do
+                w.done = false
+                w.status = "ANTRI"
+            end
+            STATE.active_world_idx = 1
+            persistConfig()
+            updateWorldDisplayList()
+            addLog("[World Farm] Semua status world berhasil di-reset ke ANTRE!")
+            if sendNotification then pcall(sendNotification, "Semua status world di-reset ke ANTRE!") end
+            openWorldListManagerDialog()
+            return true
+        end
+
+        local resetIdx = btn:match("^boren_wreset_(%d+)$")
+        if resetIdx then
+            local idx = tonumber(resetIdx)
+            if idx and CFG.world_list[idx] then
+                CFG.world_list[idx].done = false
+                CFG.world_list[idx].status = "ANTRI"
+                persistConfig()
+                updateWorldDisplayList()
+                addLog(string.format("[World Farm] Status %s di-reset ke ANTRE.", CFG.world_list[idx].name))
+                if sendNotification then pcall(sendNotification, "Status " .. CFG.world_list[idx].name .. " di-reset!") end
+                openWorldListManagerDialog()
+            end
+            return true
+        end
+
         if btn == "boren_btn_wfmt_colon" or btn == "boren_btn_fmt_colon" then
             openWorldListManagerDialog("colon")
             return true
@@ -2381,6 +2991,7 @@ local function createNativeUI(subName, iconName)
     function ui:addExpandableToggle(text, default, alias, autoExpand, background) return { list_child = alias .. "_child" } end
     function ui:addChildButton(childRef, text, alias) table.insert(self.menu, { type = "child_button", child = childRef, text = text, alias = alias }) return self end
     function ui:addChildToggle(childRef, text, default, alias) table.insert(self.menu, { type = "child_toggle", child = childRef, text = text, default = default == true, alias = alias }) return self end
+    function ui:generateJSON() return jsonEncode(self) end
     return ui
 end
 
@@ -2414,6 +3025,7 @@ local function registerNativePlantUI()
     uiFarm:addButton("+ Tambah World ke Antrean", "ap_btn_add_world")
     uiFarm:addButton("+ Tambah World Saya Sekarang", "ap_btn_add_cur_world")
     uiFarm:addButton("📋 Kelola, Salin & Tempel World", "ap_btn_view_worlds")
+    uiFarm:addButton("🔄 Reset Status Selesai (Tanam Ulang Semua)", "ap_btn_reset_status")
     uiFarm:addButton("🗑️ Kosongkan Semua World Farm", "ap_btn_clear_worlds")
     uiFarm:addDivider()
 
@@ -2446,8 +3058,10 @@ local function registerNativePlantUI()
     -- Tab 3: Pengaturan & Delay
     local uiSetting = createNativeUI("3. Pengaturan & Delay", "Build")
     uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
-    uiSetting:addInputInt("Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 70", "Timer", "ap_input_plant_delay")
-    uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 80, 500, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
+    uiSetting:addSlider("Kecepatan Tanam (ms)", 30, 500, CFG.plant_delay, 10, false, "ap_slider_plant_delay")
+    uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
+    uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 30, 500, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
+    uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
     uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 500, CFG.step_delay, 10, false, "ap_slider_step_delay")
     uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
     uiSetting:addDivider()
@@ -2457,6 +3071,7 @@ local function registerNativePlantUI()
     uiSetting:addToggle("ModFly (Terbang Bebas)", CFG.use_modfly, "ap_toggle_modfly", true)
     uiSetting:addToggle("Anti Lava / Rintangan Berbahaya", CFG.anti_lava, "ap_toggle_anti_lava", true)
     uiSetting:addToggle("Login Ulang Otomatis (Auto Reconnect)", CFG.auto_reconnect, "ap_toggle_reconnect", true)
+    uiSetting:addToggle("Auto Fix Gagal Splice (Punch Semak Miss & Tanam Ulang)", CFG.auto_clear_failed_splice, "ap_toggle_fix_splice", true)
 
     -- Tab 4: Console & Tas
     local uiConsole = createNativeUI("4. Console & Tas", "Terminal")
@@ -2479,98 +3094,31 @@ end
 -- ============================================================================
 -- 17B. FILE BACKUP ENGINE (FARM WORLDS & STORAGE WORLDS)
 -- ============================================================================
-local function savePlantWorldsToFile()
-    persistConfig()
+savePlantWorldsToFile = function(silent)
     local exportLines = {}
     for _, e in ipairs(CFG.world_list) do
         local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
         table.insert(exportLines, line)
     end
     local exportTxt = table.concat(exportLines, "\n")
-    local fullPath, dir, fName = resolveFilePath(CFG.world_file_name, "boren_plant_worlds.txt")
+    local fn = CFG.world_file_name or "boren_plant_worlds.txt"
+    local wrote = writeTextFileIfExists(fn, exportTxt)
 
-    local saved = false
-    if io and io.open then
-        local okF, fh = pcall(io.open, fullPath, "w")
-        if okF and fh then
-            pcall(function()
-                fh:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
-                fh:close()
-            end)
-            saved = true
-        end
-        if not saved and not isSystemWindows() then
-            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "w")
-            if okA and fhA then
-                pcall(function()
-                    fhA:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
-                    fhA:close()
-                end)
-                saved = true
-            end
-        end
-        if not saved then
-            local okLoc, fhLoc = pcall(io.open, fName, "w")
-            if okLoc and fhLoc then
-                pcall(function()
-                    fhLoc:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
-                    fhLoc:close()
-                end)
-                saved = true
-            end
-        end
+    if not silent then
+        local summary = string.format("Tersimpan %d world farm ke %s & Preferences.", #CFG.world_list, fn)
+        addLog("[Save World] " .. summary)
+        if sendNotification then pcall(sendNotification, summary) end
+        if updateFileInfoDisplayList then pcall(updateFileInfoDisplayList) end
     end
-    if writeToLocal then
-        pcall(writeToLocal, fullPath, exportTxt)
-        pcall(writeToLocal, fName, exportTxt)
-        saved = true
-    end
-
-    local summary = string.format("Tersimpan %d world farm ke %s & Preferences.", #CFG.world_list, saved and fullPath or fName)
-    addLog("[Save World] " .. summary)
-    if sendNotification then pcall(sendNotification, summary) end
-    if updateFileInfoDisplayList then pcall(updateFileInfoDisplayList) end
-    return true
+    return wrote
 end
 
 local function loadPlantWorldsFromFile()
-    local fullPath, dir, fName = resolveFilePath(CFG.world_file_name, "boren_plant_worlds.txt")
-    local raw = ""
-    local source = ""
-    if io and io.open then
-        local okF, fh = pcall(io.open, fullPath, "r")
-        if okF and fh then
-            pcall(function()
-                raw = fh:read("*all") or ""
-                fh:close()
-            end)
-            if raw ~= "" then source = fullPath end
-        end
-        if raw == "" and not isSystemWindows() then
-            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "r")
-            if okA and fhA then
-                pcall(function()
-                    raw = fhA:read("*all") or ""
-                    fhA:close()
-                end)
-                if raw ~= "" then source = "/sdcard/Download/" .. fName end
-            end
-        end
-        if raw == "" then
-            local okLoc, fhLoc = pcall(io.open, fName, "r")
-            if okLoc and fhLoc then
-                pcall(function()
-                    raw = fhLoc:read("*all") or ""
-                    fhLoc:close()
-                end)
-                if raw ~= "" then source = fName end
-            end
-        end
-    end
-
-    if raw ~= "" then
+    local fn = CFG.world_file_name or "boren_plant_worlds.txt"
+    local raw = readTextFileIfExists(fn)
+    if raw and raw ~= "" then
         local added, dups, ignored, summary = parseAndValidateWorldBatch(raw, true)
-        addLog(string.format("[Load World] Berhasil memuat %d world dari %s", added, source))
+        addLog(string.format("[Load World] Berhasil memuat %d world dari %s", added, fn))
         if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d world dari Download!", added)) end
     else
         addLog("[Load World] File world tidak ditemukan atau kosong!")
@@ -2580,98 +3128,36 @@ local function loadPlantWorldsFromFile()
     if updateWorldDisplayList then pcall(updateWorldDisplayList) end
 end
 
-local function savePlantStoragesToFile()
-    persistConfig()
+savePlantStoragesToFile = function(silent)
     local exportLines = {}
     for _, e in ipairs(CFG.storage_world_list) do
         local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
         table.insert(exportLines, line)
     end
     local exportTxt = table.concat(exportLines, "\n")
-    local fullPath, dir, fName = resolveFilePath("boren_plant_storages.txt", "boren_plant_storages.txt")
+    local fn = CFG.storage_file_name or "boren_plant_storage.txt"
+    local wrote = writeTextFileIfExists(fn, exportTxt)
+    writeTextFileIfExists("boren_plant_storages.txt", exportTxt)
 
-    local saved = false
-    if io and io.open then
-        local okF, fh = pcall(io.open, fullPath, "w")
-        if okF and fh then
-            pcall(function()
-                fh:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
-                fh:close()
-            end)
-            saved = true
-        end
-        if not saved and not isSystemWindows() then
-            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "w")
-            if okA and fhA then
-                pcall(function()
-                    fhA:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
-                    fhA:close()
-                end)
-                saved = true
-            end
-        end
-        if not saved then
-            local okLoc, fhLoc = pcall(io.open, fName, "w")
-            if okLoc and fhLoc then
-                pcall(function()
-                    fhLoc:write(exportTxt .. (exportTxt ~= "" and "\n" or ""))
-                    fhLoc:close()
-                end)
-                saved = true
-            end
-        end
+    if not silent then
+        local summary = string.format("Tersimpan %d gudang ke %s & Preferences.", #CFG.storage_world_list, fn)
+        addLog("[Save Storage] " .. summary)
+        if sendNotification then pcall(sendNotification, summary) end
     end
-    if writeToLocal then
-        pcall(writeToLocal, fullPath, exportTxt)
-        pcall(writeToLocal, fName, exportTxt)
-        saved = true
-    end
-
-    local summary = string.format("Tersimpan %d gudang ke %s & Preferences.", #CFG.storage_world_list, saved and fullPath or fName)
-    addLog("[Save Storage] " .. summary)
-    if sendNotification then pcall(sendNotification, summary) end
-    return true
+    return wrote
 end
 
 local function loadPlantStoragesFromFile()
-    local fullPath, dir, fName = resolveFilePath("boren_plant_storages.txt", "boren_plant_storages.txt")
-    local raw = ""
-    local source = ""
-    if io and io.open then
-        local okF, fh = pcall(io.open, fullPath, "r")
-        if okF and fh then
-            pcall(function()
-                raw = fh:read("*all") or ""
-                fh:close()
-            end)
-            if raw ~= "" then source = fullPath end
-        end
-        if raw == "" and not isSystemWindows() then
-            local okA, fhA = pcall(io.open, "/sdcard/Download/" .. fName, "r")
-            if okA and fhA then
-                pcall(function()
-                    raw = fhA:read("*all") or ""
-                    fhA:close()
-                end)
-                if raw ~= "" then source = "/sdcard/Download/" .. fName end
-            end
-        end
-        if raw == "" then
-            local okLoc, fhLoc = pcall(io.open, fName, "r")
-            if okLoc and fhLoc then
-                pcall(function()
-                    raw = fhLoc:read("*all") or ""
-                    fhLoc:close()
-                end)
-                if raw ~= "" then source = fName end
-            end
-        end
+    local fn = CFG.storage_file_name or "boren_plant_storage.txt"
+    local raw = readTextFileIfExists(fn)
+    if not raw or raw == "" then
+        raw = readTextFileIfExists("boren_plant_storages.txt")
+        if raw and raw ~= "" then fn = "boren_plant_storages.txt" end
     end
-
-    if raw ~= "" then
+    if raw and raw ~= "" then
         local added, dups, ignored, summary = parseAndValidateStorageBatch(raw, true)
-        addLog(string.format("[Load Storage] Berhasil memuat %d gudang dari %s", added, source))
-        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d gudang dari Download!", added)) end
+        addLog(string.format("[Load Storage] Berhasil memuat %d gudang dari %s", added, fn))
+        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d gudang dari file!", added)) end
     else
         addLog("[Load Storage] File gudang tidak ditemukan atau kosong!")
         if sendNotification then pcall(sendNotification, "File gudang belum ada atau kosong!") end
@@ -2786,41 +3272,96 @@ local function handlePlantUIValue(typeVal, name, val)
         CFG.manual_stor_door = tostring(val or "")
         persistConfig()
     elseif name == "ap_btn_add_world" then
-        local w = tostring(CFG.manual_world_text or ""):gsub("%s+", ""):upper()
-        local d = tostring(CFG.manual_door_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if w ~= "" then
-            table.insert(CFG.world_list, { name = w, door = d, done = false, status = "ANTRI" })
-            persistConfig()
-            updateWorldDisplayList()
-            if sendNotification then pcall(sendNotification, "World Farm ditambahkan: " .. w) end
+        local rawW = tostring(CFG.manual_world_text or "")
+        local rawD = tostring(CFG.manual_door_text or "")
+        if rawW:gsub("%s+", "") ~= "" then
+            local added, dups, ignored, summary = parseAndValidateWorldBatch(rawW, false)
+            if added == 0 and not rawW:find("[:|,;%s]") then
+                local parsed = parseWorldEntryToken(rawW, rawD)
+                if parsed and parsed.name ~= "" then
+                    if not isWorldInList(CFG.world_list, parsed.name) then
+                        table.insert(CFG.world_list, parsed)
+                        added = 1
+                    end
+                end
+            end
+            if added > 0 then
+                CFG.manual_world_text = ""
+                CFG.manual_door_text = ""
+                if editValue then
+                    pcall(editValue, "ap_manual_world_input", "")
+                    pcall(editValue, "ap_manual_door_input", "")
+                end
+                persistConfig()
+                updateWorldDisplayList()
+                if sendNotification then pcall(sendNotification, "World Farm ditambahkan!") end
+            else
+                if sendNotification then pcall(sendNotification, "World sudah ada atau tidak valid!") end
+            end
         end
     elseif name == "ap_btn_add_cur_world" then
         local curW = getCurrentWorldSafe()
         if curW ~= "" and curW ~= "EXIT" then
-            table.insert(CFG.world_list, { name = curW, door = "", done = false, status = "ANTRI" })
-            persistConfig()
-            updateWorldDisplayList()
-            if sendNotification then pcall(sendNotification, "World Farm ditambahkan: " .. curW) end
+            if not isWorldInList(CFG.world_list, curW) then
+                table.insert(CFG.world_list, { name = curW, door = "", done = false, status = "ANTRI" })
+                persistConfig()
+                updateWorldDisplayList()
+                if sendNotification then pcall(sendNotification, "World Farm ditambahkan: " .. curW) end
+            else
+                if sendNotification then pcall(sendNotification, "World saat ini sudah ada di antrean!") end
+            end
         end
     elseif name == "ap_btn_clear_worlds" then
         CFG.world_list = {}
         persistConfig()
         updateWorldDisplayList()
         if sendNotification then pcall(sendNotification, "Daftar World Farm dikosongkan!") end
+    elseif name == "ap_btn_reset_status" then
+        local cnt = 0
+        for _, w in ipairs(CFG.world_list) do
+            w.done = false
+            w.status = "ANTRI"
+            cnt = cnt + 1
+        end
+        STATE.active_world_idx = 1
+        persistConfig()
+        updateWorldDisplayList()
+        local msg = string.format("Status %d World Farm di-reset ke ANTRE! Siap ditanam ulang.", cnt)
+        addLog(msg)
+        if sendNotification then pcall(sendNotification, msg) end
     elseif name == "ap_btn_view_worlds" or name == "ap_btn_paste_worlds" or name == "ap_btn_copy_all_worlds" then
         openWorldListManagerDialog()
     elseif name == "ap_btn_save_worlds" then
-        savePlantWorldsToFile()
+        savePlantWorldsToFile(false)
     elseif name == "ap_btn_load_worlds" then
         loadPlantWorldsFromFile()
     elseif name == "ap_btn_add_storage" then
-        local w = tostring(CFG.manual_storage_text or ""):gsub("%s+", ""):upper()
-        local d = tostring(CFG.manual_stor_door or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if w ~= "" then
-            table.insert(CFG.storage_world_list, { name = w, door = d })
-            persistConfig()
-            updateStorageDisplayList()
-            if sendNotification then pcall(sendNotification, "World Storage ditambahkan: " .. w) end
+        local rawW = tostring(CFG.manual_storage_text or "")
+        local rawD = tostring(CFG.manual_stor_door or "")
+        if rawW:gsub("%s+", "") ~= "" then
+            local added, dups, ignored, summary = parseAndValidateStorageBatch(rawW, false)
+            if added == 0 and not rawW:find("[:|,;%s]") then
+                local parsed = parseWorldEntryToken(rawW, rawD)
+                if parsed and parsed.name ~= "" then
+                    if not isWorldInList(CFG.storage_world_list, parsed.name) then
+                        table.insert(CFG.storage_world_list, { name = parsed.name, door = parsed.door })
+                        added = 1
+                    end
+                end
+            end
+            if added > 0 then
+                CFG.manual_storage_text = ""
+                CFG.manual_stor_door = ""
+                if editValue then
+                    pcall(editValue, "ap_manual_stor_input", "")
+                    pcall(editValue, "ap_manual_stor_door_input", "")
+                end
+                persistConfig()
+                updateStorageDisplayList()
+                if sendNotification then pcall(sendNotification, "World Storage ditambahkan!") end
+            else
+                if sendNotification then pcall(sendNotification, "Storage sudah ada atau tidak valid!") end
+            end
         end
     elseif name == "ap_btn_clear_storages" then
         CFG.storage_world_list = {}
@@ -2843,15 +3384,23 @@ local function handlePlantUIValue(typeVal, name, val)
         CFG.collect_range = tonumber(val) or CFG.collect_range
         persistConfig()
     elseif name == "ap_input_plant_delay" or name == "ap_slider_plant_delay" then
-        local d = tonumber(val) or 70
+        local d = tonumber(val) or 180
         CFG.plant_delay = math.max(10, math.min(5000, math.floor(d)))
         persistConfig()
-        if sendNotification then pcall(sendNotification, "Delay tanam: " .. CFG.plant_delay .. " ms") end
-    elseif name == "ap_slider_splice_delay" then
-        local d = tonumber(val) or 200
-        CFG.splice_delay = math.max(80, math.min(1000, math.floor(d)))
+        if editValue then
+            pcall(editValue, "ap_slider_plant_delay", CFG.plant_delay)
+            pcall(editValue, "ap_input_plant_delay", tostring(CFG.plant_delay))
+        end
+        if sendNotification then pcall(sendNotification, "Delay tanam real: " .. CFG.plant_delay .. " ms") end
+    elseif name == "ap_slider_splice_delay" or name == "ap_input_splice_delay" then
+        local d = tonumber(val) or 180
+        CFG.splice_delay = math.max(10, math.min(5000, math.floor(d)))
         persistConfig()
-        if sendNotification then pcall(sendNotification, "Jeda splice: " .. CFG.splice_delay .. " ms") end
+        if editValue then
+            pcall(editValue, "ap_slider_splice_delay", CFG.splice_delay)
+            pcall(editValue, "ap_input_splice_delay", tostring(CFG.splice_delay))
+        end
+        if sendNotification then pcall(sendNotification, "Jeda splice real: " .. CFG.splice_delay .. " ms") end
     elseif name == "ap_slider_step_delay" then
         CFG.step_delay = tonumber(val) or CFG.step_delay
         persistConfig()
@@ -2873,6 +3422,12 @@ local function handlePlantUIValue(typeVal, name, val)
         CFG.auto_reconnect = (val == true or val == 1)
         persistConfig()
         applyCheatToggles()
+    elseif name == "ap_toggle_fix_splice" then
+        CFG.auto_clear_failed_splice = (val == true or val == 1)
+        persistConfig()
+        if sendNotification then
+            pcall(sendNotification, "Auto Fix Gagal Splice: " .. (CFG.auto_clear_failed_splice and "AKTIF" or "NONAKTIF"))
+        end
     elseif name == "ap_btn_clear_logs" then
         STATE.logs = {}
         STATE.error_logs = {}
@@ -2899,13 +3454,13 @@ local ALL_UI_ALIASES = {
     "ap_run_power", "ap_btn_stop", "ap_pause_toggle", "ap_toggle_mode_3zigzag",
     "ap_toggle_splice", "ap_input_seed_1", "ap_input_seed_2", "ap_btn_save_seeds",
     "ap_seed_status_display", "ap_manual_world_input", "ap_manual_door_input", "ap_btn_add_world",
-    "ap_btn_add_cur_world", "ap_btn_view_worlds", "ap_btn_clear_worlds", "ap_btn_save_worlds",
+    "ap_btn_add_cur_world", "ap_btn_view_worlds", "ap_btn_reset_status", "ap_btn_clear_worlds", "ap_btn_save_worlds",
     "ap_btn_load_worlds", "ap_slider_min_bp", "ap_slider_target_bp", "ap_slider_collect_range",
     "ap_manual_stor_input", "ap_manual_stor_door_input", "ap_btn_add_storage", "ap_btn_view_storages",
     "ap_btn_save_storages", "ap_btn_load_storages", "ap_btn_clear_storages", "ap_input_plant_delay",
-    "ap_slider_plant_delay", "ap_slider_splice_delay", "ap_slider_step_delay",
+    "ap_slider_plant_delay", "ap_input_splice_delay", "ap_slider_splice_delay", "ap_slider_step_delay",
     "ap_slider_warp_delay", "ap_toggle_ignore_gems", "ap_toggle_modfly", "ap_toggle_anti_lava",
-    "ap_toggle_reconnect", "ap_btn_clear_logs", "ap_toggle_err_only", "ap_btn_refresh_bag"
+    "ap_toggle_reconnect", "ap_toggle_fix_splice", "ap_btn_clear_logs", "ap_toggle_err_only", "ap_btn_refresh_bag"
 }
 
 if setOnValue then
@@ -2949,4 +3504,42 @@ addLog("Auto Plant & Splice by Boren Store berhasil dimuat!")
 if sendNotification then
     pcall(sendNotification, "Auto Plant & Splice v2.0 siap digunakan!")
 end
+
+_G.CFG = CFG
+_G.STATE = STATE
+_G.persistConfig = persistConfig
+_G.getPlayerTilePos = getPlayerTilePos
+_G.getTilePlantStatus = getTilePlantStatus
+_G.plantAndSpliceTile = plantAndSpliceTile
+_G.isTilePlantable = isTilePlantable
+_G.executePlantRow = executePlantRow
+_G.plantEntireWorld = plantEntireWorld
+_G.parseSavedWorldList = parseSavedWorldList
+_G.parseSavedStorageList = parseSavedStorageList
+_G.parseAndValidateWorldBatch = parseAndValidateWorldBatch
+_G.parseAndValidateStorageBatch = parseAndValidateStorageBatch
+_G.savePlantWorldsToFile = savePlantWorldsToFile
+_G.loadPlantWorldsFromFile = loadPlantWorldsFromFile
+_G.savePlantStoragesToFile = savePlantStoragesToFile
+_G.loadPlantStoragesFromFile = loadPlantStoragesFromFile
+_G.handlePlantUIValue = handlePlantUIValue
+_G.onSendPacketDialogHook = onSendPacketDialogHook
+
+return {
+    CFG = CFG,
+    STATE = STATE,
+    persistConfig = persistConfig,
+    executePlantRow = executePlantRow,
+    plantEntireWorld = plantEntireWorld,
+    parseSavedWorldList = parseSavedWorldList,
+    parseSavedStorageList = parseSavedStorageList,
+    parseAndValidateWorldBatch = parseAndValidateWorldBatch,
+    parseAndValidateStorageBatch = parseAndValidateStorageBatch,
+    savePlantWorldsToFile = savePlantWorldsToFile,
+    loadPlantWorldsFromFile = loadPlantWorldsFromFile,
+    savePlantStoragesToFile = savePlantStoragesToFile,
+    loadPlantStoragesFromFile = loadPlantStoragesFromFile,
+    handlePlantUIValue = handlePlantUIValue,
+    onSendPacketDialogHook = onSendPacketDialogHook,
+}
 
