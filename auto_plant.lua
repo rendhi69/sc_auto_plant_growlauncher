@@ -11,11 +11,16 @@ local PREF_FILE      = "boren_auto_plant_prefs.json"
 -- 1. PREFERENCES & DEFAULT CONFIGURATION
 -- ============================================================================
 local pref = nil
-if preferences and preferences.new then
-    pcall(function() pref = preferences:new(PREF_FILE) end)
-elseif Preferences and Preferences.new then
-    pcall(function() pref = Preferences:new(PREF_FILE) end)
-end
+pcall(function()
+    if preferences and preferences.new then
+        pref = preferences:new(PREF_FILE)
+    end
+end)
+pcall(function()
+    if not pref and Preferences and Preferences.new then
+        pref = Preferences:new(PREF_FILE)
+    end
+end)
 
 local function isSystemWindows()
     local osEnv = os.getenv("OS") or ""
@@ -106,14 +111,18 @@ local function writeTextFileIfExists(fileName, content)
 end
 
 local function loadPref(key, default)
-    if saved then
-        local ok, val = pcall(function() return saved:get(key, default) end)
-        if ok and val ~= nil then return val end
-    end
-    if pref then
-        local ok, val = pcall(function() return pref:get(key, default) end)
-        if ok and val ~= nil then return val end
-    end
+    pcall(function()
+        if saved and type(saved) ~= "boolean" and saved.get then
+            local val = saved:get(key, default)
+            if val ~= nil then default = val end
+        end
+    end)
+    pcall(function()
+        if pref and type(pref) ~= "boolean" and pref.get then
+            local val = pref:get(key, default)
+            if val ~= nil then default = val end
+        end
+    end)
     return default
 end
 
@@ -462,8 +471,11 @@ local function getItemNameSafe(itemID)
 
     if getItemInfoByID then
         local ok, info = pcall(getItemInfoByID, itemID)
-        if ok and info and info.name and info.name ~= "" then
-            return tostring(info.name)
+        if ok and info then
+            local okName, nameVal = pcall(function() return info.name end)
+            if okName and nameVal and nameVal ~= "" then
+                return tostring(nameVal)
+            end
         end
     end
 
@@ -483,8 +495,11 @@ local function getItemNameSafe(itemID)
 
     if ItemInfo and ItemInfo.getItem then
         local ok, info = pcall(ItemInfo.getItem, itemID)
-        if ok and info and info.name and info.name ~= "" then
-            return tostring(info.name)
+        if ok and info then
+            local okName, nameVal = pcall(function() return info.name end)
+            if okName and nameVal and nameVal ~= "" then
+                return tostring(nameVal)
+            end
         end
     end
 
@@ -580,9 +595,13 @@ local function getInvCount(itemID)
     local inv = getInventorySafe()
     local total = 0
     for _, it in pairs(inv) do
-        local id = tonumber(it.id or it.itemid or it.itemID) or 0
-        if id == itemID then
-            total = total + (tonumber(it.amount or it.count) or 0)
+        if type(it) == "table" or type(it) == "userdata" then
+            local okId, idVal = pcall(function() return it.id or it.itemid or it.itemID end)
+            local id = (okId and tonumber(idVal)) or 0
+            if id == itemID then
+                local okAmt, amtVal = pcall(function() return it.amount or it.count end)
+                total = total + ((okAmt and tonumber(amtVal)) or 0)
+            end
         end
     end
     return total
@@ -674,15 +693,18 @@ syncInventoryCache = function()
     local inv = getInventorySafe()
     local map = {}
     for _, it in pairs(inv) do
-        local id = tonumber(it.id or it.itemid or it.itemID) or 0
-        if id > 0 then
-            local cnt = getInvCount(id)
-            if cnt > 0 then
-                map[id] = {
-                    id = id,
-                    name = resolveSeedName(id),
-                    amount = cnt
-                }
+        if type(it) == "table" or type(it) == "userdata" then
+            local okId, idVal = pcall(function() return it.id or it.itemid or it.itemID end)
+            local id = (okId and tonumber(idVal)) or 0
+            if id > 0 then
+                local cnt = getInvCount(id)
+                if cnt > 0 then
+                    map[id] = {
+                        id = id,
+                        name = resolveSeedName(id),
+                        amount = cnt
+                    }
+                end
             end
         end
     end
@@ -690,7 +712,7 @@ syncInventoryCache = function()
     for _, it in pairs(map) do
         table.insert(c, it)
     end
-    table.sort(c, function(a, b) return a.amount > b.amount end)
+    table.sort(c, function(a, b) return (a.amount or 0) > (b.amount or 0) end)
     STATE.cached_inv = c
     if updateBagDisplayList then pcall(updateBagDisplayList) end
 end
@@ -2989,7 +3011,7 @@ local function createNativeUI(subName, iconName)
     function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias) table.insert(self.menu, { type = "slider", text = text, min = minVal, max = maxVal, default = defaultVal, step = stepVal, use_dot = useDot == true, alias = alias }) return self end
     function ui:addTooltip(text, supportText, icon, background) table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = background == true }) return self end
     function ui:addItemPicker(text, item, default, alias) table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias }) return self end
-    function ui:addDisplayList(text, displayType, alias) table.insert(self.menu, { type = "display_list", text = text, display_type = displayType or "Default", alias = alias }) return self end
+    function ui:addDisplayList(text, default, alias) table.insert(self.menu, { type = "display_list", text = text, default = default or "Default", alias = alias }) return self end
     function ui:addExpandableToggle(text, default, alias, autoExpand, background) return { list_child = alias .. "_child" } end
     function ui:addChildButton(childRef, text, alias) table.insert(self.menu, { type = "child_button", child = childRef, text = text, alias = alias }) return self end
     function ui:addChildToggle(childRef, text, default, alias) table.insert(self.menu, { type = "child_toggle", child = childRef, text = text, default = default == true, alias = alias }) return self end
@@ -3015,8 +3037,8 @@ local function registerNativePlantUI()
     uiFarm:addDivider()
 
     uiFarm:addLabel("Pengaturan Bibit (Input ID Manual):")
-    uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
-    uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
+    uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Category", "ap_input_seed_1")
+    uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Category", "ap_input_seed_2")
     uiFarm:addButton("💾 Simpan Pilihan ID Seed", "ap_btn_save_seeds")
     uiFarm:addDisplayList("Keterangan & Status ID Seed", "Default", "ap_seed_status_display")
     uiFarm:addDivider()
@@ -3061,9 +3083,9 @@ local function registerNativePlantUI()
     local uiSetting = createNativeUI("3. Pengaturan & Delay", "Build")
     uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
     uiSetting:addSlider("Kecepatan Tanam (ms)", 30, 500, CFG.plant_delay, 10, false, "ap_slider_plant_delay")
-    uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
+    uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Build", "ap_input_plant_delay")
     uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 30, 500, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
-    uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
+    uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Build", "ap_input_splice_delay")
     uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 500, CFG.step_delay, 10, false, "ap_slider_step_delay")
     uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
     uiSetting:addDivider()
@@ -3086,25 +3108,18 @@ local function registerNativePlantUI()
     uiConsole:addButton("🔄 Perbarui Tampilan Tas", "ap_btn_refresh_bag")
     uiConsole:addDisplayList("Daftar Barang di Tas", "Default", "ap_bag_display_list")
 
+    -- Registrasi Kategori Tunggal & 4 Sub-Menu Resmi ke GrowLauncher
     pcall(addCategory, "Boren Plant", "Storefront")
-    pcall(addCategory, "Boren Store", "Storefront")
 
-    local jsonFarm = uiFarm:generateJSON()
-    local jsonStorage = uiStorage:generateJSON()
-    local jsonSetting = uiSetting:generateJSON()
-    local jsonConsole = uiConsole:generateJSON()
+    local ok1, jsonFarm = pcall(function() return uiFarm:generateJSON() end)
+    local ok2, jsonStorage = pcall(function() return uiStorage:generateJSON() end)
+    local ok3, jsonSetting = pcall(function() return uiSetting:generateJSON() end)
+    local ok4, jsonConsole = pcall(function() return uiConsole:generateJSON() end)
 
-    -- Registrasi kategori Boren Plant
-    pcall(addIntoModule, jsonFarm, "Boren Plant")
-    pcall(addIntoModule, jsonStorage, "Boren Plant")
-    pcall(addIntoModule, jsonSetting, "Boren Plant")
-    pcall(addIntoModule, jsonConsole, "Boren Plant")
-
-    -- Registrasi juga ke Boren Store agar selalu muncul di drawer
-    pcall(addIntoModule, jsonFarm, "Boren Store")
-    pcall(addIntoModule, jsonStorage, "Boren Store")
-    pcall(addIntoModule, jsonSetting, "Boren Store")
-    pcall(addIntoModule, jsonConsole, "Boren Store")
+    if ok1 and jsonFarm then pcall(addIntoModule, jsonFarm, "Boren Plant") end
+    if ok2 and jsonStorage then pcall(addIntoModule, jsonStorage, "Boren Plant") end
+    if ok3 and jsonSetting then pcall(addIntoModule, jsonSetting, "Boren Plant") end
+    if ok4 and jsonConsole then pcall(addIntoModule, jsonConsole, "Boren Plant") end
 end
 
 -- ============================================================================
@@ -3185,6 +3200,7 @@ end
 -- 18. NATIVE ON-VALUE EVENT DISPATCHER
 -- ============================================================================
 local isSyncingSeed = false
+local isSyncingDelay = false
 local lastAliasEventTime = {}
 
 local function handlePlantUIValue(typeVal, name, val)
@@ -3277,16 +3293,16 @@ local function handlePlantUIValue(typeVal, name, val)
         if sendNotification then pcall(sendNotification, msg) end
     elseif name == "ap_manual_world_input" then
         CFG.manual_world_text = tostring(val or "")
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_manual_door_input" then
         CFG.manual_door_text = tostring(val or "")
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_manual_stor_input" then
         CFG.manual_storage_text = tostring(val or "")
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_manual_stor_door_input" then
         CFG.manual_stor_door = tostring(val or "")
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_btn_add_world" then
         local rawW = tostring(CFG.manual_world_text or "")
         local rawD = tostring(CFG.manual_door_text or "")
@@ -3392,37 +3408,73 @@ local function handlePlantUIValue(typeVal, name, val)
         loadPlantStoragesFromFile()
     elseif name == "ap_slider_min_bp" then
         CFG.min_seed_bp = tonumber(val) or CFG.min_seed_bp
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_slider_target_bp" then
         CFG.target_seed_bp = tonumber(val) or CFG.target_seed_bp
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_slider_collect_range" then
         CFG.collect_range = tonumber(val) or CFG.collect_range
-        persistConfig()
-    elseif name == "ap_input_plant_delay" or name == "ap_slider_plant_delay" then
-        local d = tonumber(val) or 180
-        CFG.plant_delay = math.max(10, math.min(5000, math.floor(d)))
-        persistConfig()
-        if editValue then
-            pcall(editValue, "ap_slider_plant_delay", CFG.plant_delay)
-            pcall(editValue, "ap_input_plant_delay", tostring(CFG.plant_delay))
+        savePrefs(CFG)
+    elseif name == "ap_slider_plant_delay" then
+        if not isSyncingDelay then
+            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
+            if d ~= CFG.plant_delay then
+                CFG.plant_delay = d
+                savePrefs(CFG)
+                if editValue then
+                    isSyncingDelay = true
+                    pcall(editValue, "ap_input_plant_delay", tostring(CFG.plant_delay))
+                    isSyncingDelay = false
+                end
+            end
         end
-        if sendNotification then pcall(sendNotification, "Delay tanam real: " .. CFG.plant_delay .. " ms") end
-    elseif name == "ap_slider_splice_delay" or name == "ap_input_splice_delay" then
-        local d = tonumber(val) or 180
-        CFG.splice_delay = math.max(10, math.min(5000, math.floor(d)))
-        persistConfig()
-        if editValue then
-            pcall(editValue, "ap_slider_splice_delay", CFG.splice_delay)
-            pcall(editValue, "ap_input_splice_delay", tostring(CFG.splice_delay))
+    elseif name == "ap_input_plant_delay" then
+        if not isSyncingDelay then
+            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
+            if d ~= CFG.plant_delay then
+                CFG.plant_delay = d
+                savePrefs(CFG)
+                if editValue then
+                    isSyncingDelay = true
+                    pcall(editValue, "ap_slider_plant_delay", CFG.plant_delay)
+                    isSyncingDelay = false
+                end
+                if sendNotification then pcall(sendNotification, "Delay tanam: " .. CFG.plant_delay .. " ms") end
+            end
         end
-        if sendNotification then pcall(sendNotification, "Jeda splice real: " .. CFG.splice_delay .. " ms") end
+    elseif name == "ap_slider_splice_delay" then
+        if not isSyncingDelay then
+            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
+            if d ~= CFG.splice_delay then
+                CFG.splice_delay = d
+                savePrefs(CFG)
+                if editValue then
+                    isSyncingDelay = true
+                    pcall(editValue, "ap_input_splice_delay", tostring(CFG.splice_delay))
+                    isSyncingDelay = false
+                end
+            end
+        end
+    elseif name == "ap_input_splice_delay" then
+        if not isSyncingDelay then
+            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
+            if d ~= CFG.splice_delay then
+                CFG.splice_delay = d
+                savePrefs(CFG)
+                if editValue then
+                    isSyncingDelay = true
+                    pcall(editValue, "ap_slider_splice_delay", CFG.splice_delay)
+                    isSyncingDelay = false
+                end
+                if sendNotification then pcall(sendNotification, "Jeda splice: " .. CFG.splice_delay .. " ms") end
+            end
+        end
     elseif name == "ap_slider_step_delay" then
         CFG.step_delay = tonumber(val) or CFG.step_delay
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_slider_warp_delay" then
         CFG.warp_delay = tonumber(val) or CFG.warp_delay
-        persistConfig()
+        savePrefs(CFG)
     elseif name == "ap_toggle_ignore_gems" then
         CFG.ignore_gems = (val == true or val == 1)
         persistConfig()
@@ -3469,7 +3521,7 @@ onValue = OnValue
 local ALL_UI_ALIASES = {
     "ap_run_power", "ap_btn_stop", "ap_pause_toggle", "ap_toggle_mode_3zigzag",
     "ap_toggle_splice", "ap_input_seed_1", "ap_input_seed_2", "ap_btn_save_seeds",
-    "ap_seed_status_display", "ap_manual_world_input", "ap_manual_door_input", "ap_btn_add_world",
+    "ap_manual_world_input", "ap_manual_door_input", "ap_btn_add_world",
     "ap_btn_add_cur_world", "ap_btn_view_worlds", "ap_btn_reset_status", "ap_btn_clear_worlds", "ap_btn_save_worlds",
     "ap_btn_load_worlds", "ap_slider_min_bp", "ap_slider_target_bp", "ap_slider_collect_range",
     "ap_manual_stor_input", "ap_manual_stor_door_input", "ap_btn_add_storage", "ap_btn_view_storages",

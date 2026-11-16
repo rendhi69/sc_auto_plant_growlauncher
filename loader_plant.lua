@@ -67,12 +67,13 @@ if not content or content == "" then
 end
 
 if content and content ~= "" then
-    local chunk, loadErr = load(content)
+    local loaderFn = loadstring or load
+    local chunk, loadErr = loaderFn(content)
     if chunk then
         local okExec, runErr = pcall(chunk)
         if okExec then
             if LogToConsole then
-                LogToConsole("`2[Boren Plant Loader] `0Auto Plant berhasil dijalankan & menu siap di kategori 'Boren Plant' & 'Boren Store'!")
+                LogToConsole("`2[Boren Plant Loader] `0Auto Plant berhasil dijalankan & menu siap di kategori 'Boren Plant'!")
             end
             notifyUser("Auto Plant Siap Digunakan!")
         else
