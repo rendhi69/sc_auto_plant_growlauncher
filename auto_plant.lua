@@ -106,11 +106,11 @@ local function writeTextFileIfExists(fileName, content)
 end
 
 local function loadPref(key, default)
-    if saved and saved.get then
+    if saved then
         local ok, val = pcall(function() return saved:get(key, default) end)
         if ok and val ~= nil then return val end
     end
-    if pref and pref.get then
+    if pref then
         local ok, val = pcall(function() return pref:get(key, default) end)
         if ok and val ~= nil then return val end
     end
@@ -119,41 +119,43 @@ end
 
 local function savePrefs(cfg_table)
     local function doSave(storageObj)
-        if not storageObj or not storageObj.set then return end
-        for k, v in pairs(cfg_table) do
-            local vt = type(v)
-            if vt == "string" or vt == "number" or vt == "boolean" then
-                storageObj:set(k, v)
-            end
-        end
-        -- Simpan daftar world farm sebagai string sederhana flat (NAME|DOOR|STATUS)
-        local wParts = {}
-        if type(cfg_table.world_list) == "table" then
-            for _, entry in ipairs(cfg_table.world_list) do
-                if type(entry) == "table" and entry.name and entry.name ~= "" then
-                    local flag = entry.done and "1" or "0"
-                    table.insert(wParts, tostring(entry.name) .. "|" .. tostring(entry.door or "") .. "|" .. flag)
+        if not storageObj then return end
+        pcall(function()
+            for k, v in pairs(cfg_table) do
+                local vt = type(v)
+                if vt == "string" or vt == "number" or vt == "boolean" then
+                    pcall(function() storageObj:set(k, v) end)
                 end
             end
-        end
-        storageObj:set("world_list_str", table.concat(wParts, ";"))
-
-        -- Simpan daftar world storage sebagai string sederhana flat (NAME|DOOR)
-        local sParts = {}
-        if type(cfg_table.storage_world_list) == "table" then
-            for _, entry in ipairs(cfg_table.storage_world_list) do
-                if type(entry) == "table" and entry.name and entry.name ~= "" then
-                    table.insert(sParts, tostring(entry.name) .. "|" .. tostring(entry.door or ""))
+            -- Simpan daftar world farm sebagai string sederhana flat (NAME|DOOR|STATUS)
+            local wParts = {}
+            if type(cfg_table.world_list) == "table" then
+                for _, entry in ipairs(cfg_table.world_list) do
+                    if type(entry) == "table" and entry.name and entry.name ~= "" then
+                        local flag = entry.done and "1" or "0"
+                        table.insert(wParts, tostring(entry.name) .. "|" .. tostring(entry.door or "") .. "|" .. flag)
+                    end
                 end
             end
-        end
-        storageObj:set("storage_world_list_str", table.concat(sParts, ";"))
+            pcall(function() storageObj:set("world_list_str", table.concat(wParts, ";")) end)
 
-        if storageObj.save then storageObj:save() end
+            -- Simpan daftar world storage sebagai string sederhana flat (NAME|DOOR)
+            local sParts = {}
+            if type(cfg_table.storage_world_list) == "table" then
+                for _, entry in ipairs(cfg_table.storage_world_list) do
+                    if type(entry) == "table" and entry.name and entry.name ~= "" then
+                        table.insert(sParts, tostring(entry.name) .. "|" .. tostring(entry.door or ""))
+                    end
+                end
+            end
+            pcall(function() storageObj:set("storage_world_list_str", table.concat(sParts, ";")) end)
+
+            pcall(function() storageObj:save() end)
+        end)
     end
 
-    pcall(doSave, saved)
-    pcall(doSave, pref)
+    if saved then pcall(doSave, saved) end
+    if pref then pcall(doSave, pref) end
 end
 
 local function isWorldInList(wList, worldName)
@@ -3000,7 +3002,7 @@ local function registerNativePlantUI()
 
     -- Tab 1: Start & World Farm
     local uiFarm = createNativeUI("1. Start & World Farm", "PlayArrow")
-    uiFarm:addLabelApp("Boren Store - Auto Plant & Splice", "Spa")
+    uiFarm:addLabelApp("Boren Store - Auto Plant & Splice", "Storefront")
     uiFarm:addToggleButton("▶ START BOT (Mulai Tanam)", false, "ap_run_power")
     uiFarm:addButton("■ STOP BOT (Matikan)", "ap_btn_stop")
     uiFarm:addToggle("Jeda Bot Sementara (Pause)", false, "ap_pause_toggle", false)
@@ -3084,11 +3086,25 @@ local function registerNativePlantUI()
     uiConsole:addButton("🔄 Perbarui Tampilan Tas", "ap_btn_refresh_bag")
     uiConsole:addDisplayList("Daftar Barang di Tas", "Default", "ap_bag_display_list")
 
-    addCategory("Boren Plant", "Spa")
-    addIntoModule(uiFarm:generateJSON(), "Boren Plant")
-    addIntoModule(uiStorage:generateJSON(), "Boren Plant")
-    addIntoModule(uiSetting:generateJSON(), "Boren Plant")
-    addIntoModule(uiConsole:generateJSON(), "Boren Plant")
+    pcall(addCategory, "Boren Plant", "Storefront")
+    pcall(addCategory, "Boren Store", "Storefront")
+
+    local jsonFarm = uiFarm:generateJSON()
+    local jsonStorage = uiStorage:generateJSON()
+    local jsonSetting = uiSetting:generateJSON()
+    local jsonConsole = uiConsole:generateJSON()
+
+    -- Registrasi kategori Boren Plant
+    pcall(addIntoModule, jsonFarm, "Boren Plant")
+    pcall(addIntoModule, jsonStorage, "Boren Plant")
+    pcall(addIntoModule, jsonSetting, "Boren Plant")
+    pcall(addIntoModule, jsonConsole, "Boren Plant")
+
+    -- Registrasi juga ke Boren Store agar selalu muncul di drawer
+    pcall(addIntoModule, jsonFarm, "Boren Store")
+    pcall(addIntoModule, jsonStorage, "Boren Store")
+    pcall(addIntoModule, jsonSetting, "Boren Store")
+    pcall(addIntoModule, jsonConsole, "Boren Store")
 end
 
 -- ============================================================================
@@ -3463,6 +3479,34 @@ local ALL_UI_ALIASES = {
     "ap_toggle_reconnect", "ap_toggle_fix_splice", "ap_btn_clear_logs", "ap_toggle_err_only", "ap_btn_refresh_bag"
 }
 
+-- ============================================================================
+-- 19. INITIALIZATION & HOOK BINDINGS (SESUAI STANDAR AUTO SOIL BUILDER)
+-- ============================================================================
+ensureHooksInstalled()
+onSendPacket = onSendPacketDialogHook
+OnSendPacket = onSendPacketDialogHook
+if addHook then
+    pcall(addHook, OnValue, "onvalue")
+    pcall(addHook, onSendPacketDialogHook, "onsendpacket")
+    if applyHook then pcall(applyHook) end
+end
+
+-- 1. REGISTRASI UI TERLEBIH DAHULU KE GROWLAUNCHER
+local okReg, errReg = pcall(registerNativePlantUI)
+if not okReg then
+    if LogToConsole then LogToConsole("`4[Plant UI Err] `0Gagal registrasi UI: " .. tostring(errReg)) end
+end
+
+-- 2. REFRESH SEMUA DISPLAY LIST
+pcall(updatePowerStatusList)
+pcall(updateSeedStatusDisplay)
+pcall(updateWorldDisplayList)
+pcall(updateStorageDisplayList)
+pcall(updateFileInfoDisplayList)
+pcall(updateLogDisplayList)
+pcall(syncInventoryCache)
+
+-- 3. DAFTARKAN SETONVALUE SETELAH MODUL TERBENTUK
 if setOnValue then
     for _, aliasName in ipairs(ALL_UI_ALIASES) do
         pcall(setOnValue, aliasName, function(a1, a2, a3)
@@ -3477,32 +3521,9 @@ if setOnValue then
     end
 end
 
--- ============================================================================
--- 19. INITIALIZATION & HOOK BINDINGS
--- ============================================================================
-ensureHooksInstalled()
-onSendPacket = onSendPacketDialogHook
-OnSendPacket = onSendPacketDialogHook
-if addHook then
-    pcall(addHook, OnValue, "onvalue")
-    pcall(addHook, onSendPacketDialogHook, "onsendpacket")
-end
 if applyHook then
     pcall(applyHook)
 end
-
--- Registrasi Menu & Inisialisasi Tampilan
-local okReg, errReg = pcall(registerNativePlantUI)
-if not okReg then
-    LogToConsole("`4[Plant UI Err] `0Gagal registrasi UI: " .. tostring(errReg))
-end
-pcall(updatePowerStatusList)
-pcall(updateSeedStatusDisplay)
-pcall(updateWorldDisplayList)
-pcall(updateStorageDisplayList)
-pcall(updateFileInfoDisplayList)
-pcall(updateLogDisplayList)
-pcall(syncInventoryCache)
 
 addLog("Auto Plant & Splice by Boren Store berhasil dimuat!")
 if sendNotification then

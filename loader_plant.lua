@@ -29,10 +29,10 @@ notifyUser("Menghubungkan ke GitHub...")
 local content, err = nil, nil
 if fetch then
     local okFetch, res, fetchErr = pcall(fetch, fetchUrl)
-    if okFetch and res and res ~= "" then
+    if okFetch and res and type(res) == "string" and res ~= "" and not res:match("^404") and res:find("Auto Plant") then
         content = res
     else
-        err = fetchErr or "Respons kosong"
+        err = fetchErr or "Respons invalid atau kosong"
     end
 end
 
@@ -72,7 +72,7 @@ if content and content ~= "" then
         local okExec, runErr = pcall(chunk)
         if okExec then
             if LogToConsole then
-                LogToConsole("`2[Boren Plant Loader] `0Auto Plant berhasil dijalankan & menu siap di kategori 'Boren Plant'!")
+                LogToConsole("`2[Boren Plant Loader] `0Auto Plant berhasil dijalankan & menu siap di kategori 'Boren Plant' & 'Boren Store'!")
             end
             notifyUser("Auto Plant Siap Digunakan!")
         else
