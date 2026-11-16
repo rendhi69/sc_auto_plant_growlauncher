@@ -11,7 +11,8 @@
 local RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/auto_plant.lua"
 
 -- Parameter unik (?v=timestamp) untuk bypass CDN cache Fastly GitHub (selalu fresh)
-local fetchUrl = RAW_URL .. "?v=" .. tostring(os.time())
+local cacheBuster = tostring(math.floor((os and os.time and os.time()) or (os and os.clock and os.clock() * 1000) or math.random(100000, 999999)))
+local fetchUrl = RAW_URL .. "?v=" .. cacheBuster
 
 local function notifyUser(msg)
     if sendNotification then

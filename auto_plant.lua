@@ -23,8 +23,46 @@ pcall(function()
 end)
 
 local function isSystemWindows()
-    local osEnv = os.getenv("OS") or ""
-    return osEnv:lower():find("windows") ~= nil
+    if package and package.config and package.config:sub(1, 1) == "\\" then
+        return true
+    end
+    if os and type(os.getenv) == "function" then
+        local ok, osEnv = pcall(os.getenv, "OS")
+        if ok and osEnv and tostring(osEnv):lower():find("windows", 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function getUserProfilePath()
+    if not isSystemWindows() then return "" end
+    local up = ""
+    if os and type(os.getenv) == "function" then
+        local ok, res = pcall(os.getenv, "USERPROFILE")
+        if ok and res then up = tostring(res) end
+    end
+    return up
+end
+
+local function getTimeSafe()
+    if os and type(os.time) == "function" then
+        local ok, t = pcall(os.time)
+        if ok and type(t) == "number" then return t end
+    end
+    if os and type(os.clock) == "function" then
+        local ok, c = pcall(os.clock)
+        if ok and type(c) == "number" then return math.floor(c) end
+    end
+    return 0
+end
+
+local function getClockSafe()
+    if os and type(os.clock) == "function" then
+        local ok, c = pcall(os.clock)
+        if ok and type(c) == "number" then return c end
+    end
+    return 0
 end
 
 local function resolveFilePath(rawFileName, defaultName)
@@ -40,14 +78,17 @@ local function resolveFilePath(rawFileName, defaultName)
 
     local dir = ""
     if isSystemWindows() then
-        local userProfile = os.getenv("USERPROFILE")
-        if userProfile and userProfile ~= "" then
+        local userProfile = getUserProfilePath()
+        if userProfile ~= "" then
             dir = userProfile:gsub("\\", "/") .. "/Downloads/"
         else
             dir = ""
         end
     else
         dir = "/storage/emulated/0/Download/"
+    end
+    if dir ~= "" and not (dir:sub(-1) == "/" or dir:sub(-1) == "\\") then
+        dir = dir .. "/"
     end
     return dir .. fn, dir, fn
 end
@@ -61,6 +102,16 @@ local function readTextFileIfExists(fileName)
         "/sdcard/Download/" .. fName,
         "/storage/emulated/0/Download/" .. fName
     }
+    -- 1. Metode native Growlauncher
+    if readFile then
+        for _, path in ipairs(candidates) do
+            local ok, content = pcall(readFile, path)
+            if ok and content and type(content) == "string" and content ~= "" then
+                return content
+            end
+        end
+    end
+    -- 2. Fallback io.open
     if io and io.open then
         for _, path in ipairs(candidates) do
             local ok, fh = pcall(io.open, path, "r")
@@ -90,6 +141,13 @@ local function writeTextFileIfExists(fileName, content)
         "/storage/emulated/0/Download/" .. fName
     }
     local wroteAny = false
+    -- 1. Metode native Growlauncher
+    if writeFile then
+        local ok1 = pcall(writeFile, fullPath, content)
+        local ok2 = pcall(writeFile, fName, content)
+        if ok1 or ok2 then wroteAny = true end
+    end
+    -- 2. Fallback io.open
     if io and io.open then
         for _, path in ipairs(targets) do
             local ok, fh = pcall(io.open, path, "w")
@@ -410,7 +468,11 @@ local function jsonEncode(val)
 end
 
 local function addLog(msg)
-    local timestamp = os.date("%H:%M:%S")
+    local timestamp = "00:00:00"
+    if os and type(os.date) == "function" then
+        local okD, dRes = pcall(os.date, "%H:%M:%S")
+        if okD and dRes then timestamp = tostring(dRes) end
+    end
     local textStr = tostring(msg)
     local entry = string.format("[%s] %s", timestamp, textStr)
     table.insert(STATE.logs, 1, entry)
@@ -910,39 +972,6 @@ end
 -- ============================================================================
 -- 6. FILE BACKUP PATEN (FOLDER DOWNLOAD HP / PC)
 -- ============================================================================
-local function isSystemWindows()
-    return (package.config and package.config:sub(1, 1) == "\\")
-end
-
-local function resolveFilePath(rawFileName, defaultName)
-    local fn = tostring(rawFileName or defaultName):gsub("^%s+", ""):gsub("%s+$", "")
-    if fn == "" then fn = defaultName end
-    if not fn:lower():match("%.txt$") then fn = fn .. ".txt" end
-
-    if fn:sub(1, 1) == "/" or fn:match("^%a:[/\\]") then
-        local dir = fn:match("^(.*[/\\])") or ""
-        local nameOnly = fn:sub(#dir + 1)
-        return fn, dir, nameOnly
-    end
-
-    local dir = ""
-    if isSystemWindows() then
-        local userProfile = os.getenv("USERPROFILE")
-        if userProfile and userProfile ~= "" then
-            dir = userProfile:gsub("\\", "/") .. "/Downloads/"
-        else
-            dir = ""
-        end
-    else
-        dir = "/storage/emulated/0/Download/"
-    end
-
-    if dir ~= "" and not (dir:sub(-1) == "/" or dir:sub(-1) == "\\") then
-        dir = dir .. "/"
-    end
-    return dir .. fn, dir, fn
-end
-
 local function checkFileStatus(fullPath)
     if not io or not io.open then return false, "I/O module tidak aktif", 0 end
     local okF, fh = pcall(io.open, fullPath, "r")
@@ -1198,7 +1227,7 @@ local function isFreshlyPlantedSeed(tx, ty)
     if not STATE.fresh_seeds then return false end
     local key = tx .. "_" .. ty
     local plantTime = STATE.fresh_seeds[key]
-    if plantTime and (os.time() - plantTime) <= 60 then
+    if plantTime and (getTimeSafe() - plantTime) <= 60 then
         return true
     end
     return false
@@ -3214,7 +3243,7 @@ local function handlePlantUIValue(typeVal, name, val)
     if name == "" then return end
 
     -- Debounce anti spam event (terutama saat addHook & setOnValue aktif bersamaan)
-    local now = os.clock()
+    local now = getClockSafe()
     local isButton = (name:sub(1, 7) == "ap_btn_")
     if isButton then
         if lastAliasEventTime[name] and (now - lastAliasEventTime[name]) < 0.25 then
