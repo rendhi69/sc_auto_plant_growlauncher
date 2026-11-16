@@ -72,8 +72,13 @@ if not chunk then
     return
 end
 
-LogToConsole("`2[Boren Store Loader] `0Skrip Auto Plant & Splice berhasil dimuat!")
-notifyUser("Auto Plant berhasil dimuat!")
-
--- Eksekusi skrip utama
-chunk()
+-- Eksekusi skrip utama secara aman
+local okRun, runErr = pcall(chunk)
+if okRun then
+    LogToConsole("`2[Boren Store Loader] `0Skrip Auto Plant & Splice berhasil dijalankan & menu siap di kategori 'Boren Plant'!")
+    notifyUser("Auto Plant Siap Digunakan!")
+else
+    local errText = "Error runtime: " .. tostring(runErr)
+    LogToConsole("`4[Boren Store Loader] `0" .. errText)
+    notifyUser(errText)
+end

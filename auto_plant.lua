@@ -2972,35 +2972,61 @@ updateLogDisplayList = function()
 end
 
 local function createNativeUI(subName, iconName)
+    local ui = nil
     if UserInterface and UserInterface.new then
-        return UserInterface.new(subName, iconName)
+        local ok, res = pcall(UserInterface.new, subName, iconName or "Storefront")
+        if ok and res then
+            ui = res
+        end
     end
-    local ui = { sub_name = subName, icon = iconName, menu = {} }
-    function ui:addLabelApp(text, icon) table.insert(self.menu, { type = "labelapp", text = text, icon = icon or "" }) return self end
-    function ui:addLabel(text) table.insert(self.menu, { type = "label", text = text }) return self end
-    function ui:addDivider() table.insert(self.menu, { type = "divider" }) return self end
-    function ui:addToggle(text, default, alias, autosave) table.insert(self.menu, { type = "toggle", text = text, default = default == true, alias = alias, autosave = autosave == true }) return self end
-    function ui:addToggleButton(text, default, alias) table.insert(self.menu, { type = "toggle_button", text = text, default = default == true, alias = alias }) return self end
-    function ui:addButton(text, alias) table.insert(self.menu, { type = "button", text = text, alias = alias }) return self end
-    function ui:addInputString(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_string", text = text, default = default or "", label = label or "Text", placeholder = placeholder or "", icon = icon or "", alias = alias }) return self end
-    function ui:addInputInt(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_int", text = text, default = tostring(default or "0"), label = label or "Value", placeholder = placeholder or "0", icon = icon or "", alias = alias }) return self end
-    function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias) table.insert(self.menu, { type = "slider", text = text, min = minVal, max = maxVal, default = defaultVal, step = stepVal, use_dot = useDot == true, alias = alias }) return self end
-    function ui:addTooltip(text, supportText, icon, background) table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = background == true }) return self end
-    function ui:addItemPicker(text, item, default, alias) table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias }) return self end
-    function ui:addDisplayList(text, displayType, alias) table.insert(self.menu, { type = "display_list", text = text, display_type = displayType or "Default", alias = alias }) return self end
-    function ui:addExpandableToggle(text, default, alias, autoExpand, background) return { list_child = alias .. "_child" } end
-    function ui:addChildButton(childRef, text, alias) table.insert(self.menu, { type = "child_button", child = childRef, text = text, alias = alias }) return self end
-    function ui:addChildToggle(childRef, text, default, alias) table.insert(self.menu, { type = "child_toggle", child = childRef, text = text, default = default == true, alias = alias }) return self end
-    function ui:generateJSON() return jsonEncode(self) end
+    if not ui then
+        ui = { sub_name = subName, icon = iconName or "Storefront", menu = {} }
+        function ui:addLabelApp(text, icon) table.insert(self.menu, { type = "labelapp", text = text, icon = icon or "" }) return self end
+        function ui:addLabel(text) table.insert(self.menu, { type = "label", text = text }) return self end
+        function ui:addDivider() table.insert(self.menu, { type = "divider" }) return self end
+        function ui:addToggle(text, default, alias, autosave) table.insert(self.menu, { type = "toggle", text = text, default = default == true, alias = alias, autosave = autosave == true }) return self end
+        function ui:addToggleButton(text, default, alias) table.insert(self.menu, { type = "toggle_button", text = text, default = default == true, alias = alias }) return self end
+        function ui:addButton(text, alias) table.insert(self.menu, { type = "button", text = text, alias = alias }) return self end
+        function ui:addInputString(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_string", text = text, default = default or "", label = label or "Text", placeholder = placeholder or "", icon = icon or "", alias = alias }) return self end
+        function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias) table.insert(self.menu, { type = "slider", text = text, min = minVal, max = maxVal, default = defaultVal, step = stepVal, use_dot = useDot == true, alias = alias }) return self end
+        function ui:addTooltip(text, supportText, icon, background) table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = background == true }) return self end
+        function ui:addItemPicker(text, item, default, alias) table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias }) return self end
+        function ui:addDisplayList(text, displayType, alias) table.insert(self.menu, { type = "display_list", text = text, display_type = displayType or "Default", alias = alias }) return self end
+        function ui:addExpandableToggle(text, default, alias, autoExpand, background) return { list_child = alias .. "_child" } end
+        function ui:addChildButton(childRef, text, alias) table.insert(self.menu, { type = "child_button", child = childRef, text = text, alias = alias }) return self end
+        function ui:addChildToggle(childRef, text, default, alias) table.insert(self.menu, { type = "child_toggle", child = childRef, text = text, default = default == true, alias = alias }) return self end
+        function ui:generateJSON() return jsonEncode(self) end
+    end
+
+    -- Polyfill & Defensive check for missing methods on real UserInterface object:
+    if not ui.addInputInt then
+        ui.addInputInt = function(self, text, default, label, placeholder, icon, alias)
+            if self.addInputString then
+                return self:addInputString(text, tostring(default or "0"), label or "Value", placeholder or "0", icon or "", alias)
+            end
+            return self
+        end
+    end
+    if not ui.addToggleButton then
+        ui.addToggleButton = function(self, text, default, alias)
+            if self.addToggle then
+                return self:addToggle(text, default, alias, false)
+            elseif self.addButton then
+                return self:addButton(text, alias)
+            end
+            return self
+        end
+    end
+
     return ui
 end
 
 local function registerNativePlantUI()
-    if not addCategory or not addIntoModule then return end
+    if not addCategory or not addIntoModule then return false end
 
     -- Tab 1: Start & World Farm
     local uiFarm = createNativeUI("1. Start & World Farm", "PlayArrow")
-    uiFarm:addLabelApp("Boren Store - Auto Plant & Splice", "Spa")
+    uiFarm:addLabelApp("Boren Store - Auto Plant & Splice", "Storefront")
     uiFarm:addToggleButton("▶ START BOT (Mulai Tanam)", false, "ap_run_power")
     uiFarm:addButton("■ STOP BOT (Matikan)", "ap_btn_stop")
     uiFarm:addToggle("Jeda Bot Sementara (Pause)", false, "ap_pause_toggle", false)
@@ -3013,8 +3039,13 @@ local function registerNativePlantUI()
     uiFarm:addDivider()
 
     uiFarm:addLabel("Pengaturan Bibit (Input ID Manual):")
-    uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
-    uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
+    if uiFarm.addInputInt then
+        uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
+        uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
+    else
+        uiFarm:addInputString("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
+        uiFarm:addInputString("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
+    end
     uiFarm:addButton("💾 Simpan Pilihan ID Seed", "ap_btn_save_seeds")
     uiFarm:addDisplayList("Keterangan & Status ID Seed", "Default", "ap_seed_status_display")
     uiFarm:addDivider()
@@ -3059,9 +3090,17 @@ local function registerNativePlantUI()
     local uiSetting = createNativeUI("3. Pengaturan & Delay", "Build")
     uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
     uiSetting:addSlider("Kecepatan Tanam (ms)", 30, 500, CFG.plant_delay, 10, false, "ap_slider_plant_delay")
-    uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
+    if uiSetting.addInputInt then
+        uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
+    else
+        uiSetting:addInputString("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
+    end
     uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 30, 500, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
-    uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
+    if uiSetting.addInputInt then
+        uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
+    else
+        uiSetting:addInputString("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
+    end
     uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 500, CFG.step_delay, 10, false, "ap_slider_step_delay")
     uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
     uiSetting:addDivider()
@@ -3084,11 +3123,15 @@ local function registerNativePlantUI()
     uiConsole:addButton("🔄 Perbarui Tampilan Tas", "ap_btn_refresh_bag")
     uiConsole:addDisplayList("Daftar Barang di Tas", "Default", "ap_bag_display_list")
 
-    addCategory("Boren Plant", "Spa")
-    addIntoModule(uiFarm:generateJSON(), "Boren Plant")
-    addIntoModule(uiStorage:generateJSON(), "Boren Plant")
-    addIntoModule(uiSetting:generateJSON(), "Boren Plant")
-    addIntoModule(uiConsole:generateJSON(), "Boren Plant")
+    -- Daftarkan Kategori "Boren Plant" ke GrowLauncher dengan icon Storefront resmi
+    pcall(addCategory, "Boren Plant", "Storefront")
+    pcall(addIntoModule, uiFarm:generateJSON(), "Boren Plant")
+    pcall(addIntoModule, uiStorage:generateJSON(), "Boren Plant")
+    pcall(addIntoModule, uiSetting:generateJSON(), "Boren Plant")
+    pcall(addIntoModule, uiConsole:generateJSON(), "Boren Plant")
+
+    addLog("[Boren Plant] Menu berhasil didaftarkan ke GrowLauncher (Kategori: Boren Plant)!")
+    return true
 end
 
 -- ============================================================================
@@ -3491,14 +3534,35 @@ if applyHook then
     pcall(applyHook)
 end
 
-registerNativePlantUI()
-updatePowerStatusList()
-updateSeedStatusDisplay()
-updateWorldDisplayList()
-updateStorageDisplayList()
-updateFileInfoDisplayList()
-updateLogDisplayList()
-syncInventoryCache()
+pcall(registerNativePlantUI)
+pcall(updatePowerStatusList)
+pcall(updateSeedStatusDisplay)
+pcall(updateWorldDisplayList)
+pcall(updateStorageDisplayList)
+pcall(updateFileInfoDisplayList)
+pcall(updateLogDisplayList)
+pcall(syncInventoryCache)
+
+-- Double registration via delayed coroutine for Android APK UI thread readiness
+if runCoroutine then
+    pcall(runCoroutine, function()
+        if sleep then pcall(sleep, 300) end
+        pcall(registerNativePlantUI)
+        pcall(updatePowerStatusList)
+        pcall(updateSeedStatusDisplay)
+        pcall(updateWorldDisplayList)
+        pcall(updateStorageDisplayList)
+    end)
+elseif runThread then
+    pcall(runThread, function()
+        if sleep then pcall(sleep, 300) end
+        pcall(registerNativePlantUI)
+        pcall(updatePowerStatusList)
+        pcall(updateSeedStatusDisplay)
+        pcall(updateWorldDisplayList)
+        pcall(updateStorageDisplayList)
+    end)
+end
 
 addLog("Auto Plant & Splice by Boren Store berhasil dimuat!")
 if sendNotification then
