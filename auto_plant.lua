@@ -2973,9 +2973,9 @@ end
 
 local function createNativeUI(subName, iconName)
     if UserInterface and UserInterface.new then
-        return UserInterface.new(subName, iconName or "Storefront")
+        return UserInterface.new(subName, iconName)
     end
-    local ui = { sub_name = subName, icon = iconName or "Storefront", menu = {} }
+    local ui = { sub_name = subName, icon = iconName, menu = {} }
     function ui:addLabelApp(text, icon) table.insert(self.menu, { type = "labelapp", text = text, icon = icon or "" }) return self end
     function ui:addLabel(text) table.insert(self.menu, { type = "label", text = text }) return self end
     function ui:addDivider() table.insert(self.menu, { type = "divider" }) return self end
@@ -2987,25 +2987,21 @@ local function createNativeUI(subName, iconName)
     function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias) table.insert(self.menu, { type = "slider", text = text, min = minVal, max = maxVal, default = defaultVal, step = stepVal, use_dot = useDot == true, alias = alias }) return self end
     function ui:addTooltip(text, supportText, icon, background) table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = background == true }) return self end
     function ui:addItemPicker(text, item, default, alias) table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias }) return self end
-    function ui:addDisplayList(text, default, alias) table.insert(self.menu, { type = "display_list", text = text, default = default or "Default", alias = alias }) return self end
+    function ui:addDisplayList(text, displayType, alias) table.insert(self.menu, { type = "display_list", text = text, display_type = displayType or "Default", alias = alias }) return self end
+    function ui:addExpandableToggle(text, default, alias, autoExpand, background) return { list_child = alias .. "_child" } end
+    function ui:addChildButton(childRef, text, alias) table.insert(self.menu, { type = "child_button", child = childRef, text = text, alias = alias }) return self end
+    function ui:addChildToggle(childRef, text, default, alias) table.insert(self.menu, { type = "child_toggle", child = childRef, text = text, default = default == true, alias = alias }) return self end
     function ui:generateJSON() return jsonEncode({ sub_name = self.sub_name, icon = self.icon, menu = self.menu }) end
     return ui
 end
 
 local function registerNativePlantUI()
-    if not addIntoModule then
-        addLog("[Plant UI] addIntoModule tidak tersedia di environment ini.")
-        return false
-    end
+    if not addCategory or not addIntoModule then return end
 
     -- Tab 1: Start & World Farm
     local uiFarm = createNativeUI("1. Start & World Farm", "PlayArrow")
-    uiFarm:addLabelApp("Boren Store - Auto Plant & Splice", "Storefront")
-    if uiFarm.addToggleButton then
-        uiFarm:addToggleButton("▶ START BOT (Mulai Tanam)", false, "ap_run_power")
-    else
-        uiFarm:addToggle("▶ START BOT (Mulai Tanam)", false, "ap_run_power", false)
-    end
+    uiFarm:addLabelApp("Boren Store - Auto Plant & Splice", "Spa")
+    uiFarm:addToggleButton("▶ START BOT (Mulai Tanam)", false, "ap_run_power")
     uiFarm:addButton("■ STOP BOT (Matikan)", "ap_btn_stop")
     uiFarm:addToggle("Jeda Bot Sementara (Pause)", false, "ap_pause_toggle", false)
     uiFarm:addDisplayList("Status & Info Bot", "Default", "ap_power_status_list")
@@ -3017,13 +3013,8 @@ local function registerNativePlantUI()
     uiFarm:addDivider()
 
     uiFarm:addLabel("Pengaturan Bibit (Input ID Manual):")
-    if uiFarm.addInputInt then
-        uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
-        uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
-    else
-        uiFarm:addInputString("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
-        uiFarm:addInputString("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
-    end
+    uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Tag", "ap_input_seed_1")
+    uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Tag", "ap_input_seed_2")
     uiFarm:addButton("💾 Simpan Pilihan ID Seed", "ap_btn_save_seeds")
     uiFarm:addDisplayList("Keterangan & Status ID Seed", "Default", "ap_seed_status_display")
     uiFarm:addDivider()
@@ -3068,17 +3059,9 @@ local function registerNativePlantUI()
     local uiSetting = createNativeUI("3. Pengaturan & Delay", "Build")
     uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
     uiSetting:addSlider("Kecepatan Tanam (ms)", 30, 500, CFG.plant_delay, 10, false, "ap_slider_plant_delay")
-    if uiSetting.addInputInt then
-        uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
-    else
-        uiSetting:addInputString("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
-    end
+    uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Timer", "ap_input_plant_delay")
     uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 30, 500, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
-    if uiSetting.addInputInt then
-        uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
-    else
-        uiSetting:addInputString("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
-    end
+    uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Timer", "ap_input_splice_delay")
     uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 500, CFG.step_delay, 10, false, "ap_slider_step_delay")
     uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
     uiSetting:addDivider()
@@ -3101,32 +3084,11 @@ local function registerNativePlantUI()
     uiConsole:addButton("🔄 Perbarui Tampilan Tas", "ap_btn_refresh_bag")
     uiConsole:addDisplayList("Daftar Barang di Tas", "Default", "ap_bag_display_list")
 
-    -- Daftarkan Kategori resmi ke GrowLauncher
-    if addCategory then
-        pcall(addCategory, "Boren Store", "Storefront")
-        pcall(addCategory, "Boren Plant", "Storefront")
-    end
-
-    local fJson = uiFarm:generateJSON()
-    local sJson = uiStorage:generateJSON()
-    local setJson = uiSetting:generateJSON()
-    local cJson = uiConsole:generateJSON()
-
-    -- Registrasi modul ke "Boren Store" (kategori utama Boren bersama DF)
-    pcall(addIntoModule, fJson, "Boren Store")
-    pcall(addIntoModule, sJson, "Boren Store")
-    pcall(addIntoModule, setJson, "Boren Store")
-    pcall(addIntoModule, cJson, "Boren Store")
-
-    -- Registrasi modul juga ke "Boren Plant"
-    pcall(addIntoModule, fJson, "Boren Plant")
-    pcall(addIntoModule, sJson, "Boren Plant")
-    pcall(addIntoModule, setJson, "Boren Plant")
-    pcall(addIntoModule, cJson, "Boren Plant")
-
-    LogToConsole("`2[Plant UI] `0Menu Auto Plant berhasil didaftarkan ke GrowLauncher (Boren Store & Boren Plant)!")
-    addLog("[Plant UI] Menu berhasil didaftarkan ke GrowLauncher (Boren Store & Boren Plant)!")
-    return true
+    addCategory("Boren Plant", "Spa")
+    addIntoModule(uiFarm:generateJSON(), "Boren Plant")
+    addIntoModule(uiStorage:generateJSON(), "Boren Plant")
+    addIntoModule(uiSetting:generateJSON(), "Boren Plant")
+    addIntoModule(uiConsole:generateJSON(), "Boren Plant")
 end
 
 -- ============================================================================
@@ -3566,22 +3528,4 @@ _G.savePlantStoragesToFile = savePlantStoragesToFile
 _G.loadPlantStoragesFromFile = loadPlantStoragesFromFile
 _G.handlePlantUIValue = handlePlantUIValue
 _G.onSendPacketDialogHook = onSendPacketDialogHook
-
-return {
-    CFG = CFG,
-    STATE = STATE,
-    persistConfig = persistConfig,
-    executePlantRow = executePlantRow,
-    plantEntireWorld = plantEntireWorld,
-    parseSavedWorldList = parseSavedWorldList,
-    parseSavedStorageList = parseSavedStorageList,
-    parseAndValidateWorldBatch = parseAndValidateWorldBatch,
-    parseAndValidateStorageBatch = parseAndValidateStorageBatch,
-    savePlantWorldsToFile = savePlantWorldsToFile,
-    loadPlantWorldsFromFile = loadPlantWorldsFromFile,
-    savePlantStoragesToFile = savePlantStoragesToFile,
-    loadPlantStoragesFromFile = loadPlantStoragesFromFile,
-    handlePlantUIValue = handlePlantUIValue,
-    onSendPacketDialogHook = onSendPacketDialogHook,
-}
 
