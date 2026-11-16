@@ -20,9 +20,14 @@ Script otomatisasi tanam (Plant) dan kawin bibit (Splice) untuk Growlauncher And
    - Fitur pemulihan cerdas: jika terdeteksi bibit yang gagal splice dan telanjur bertunas, bot otomatis memukul (punch) untuk mereset petak dan menanam bibit baru.
 5. **Anti False Completion saat Disconnect**:
    - Jika koneksi terputus saat proses tanam berlangsung, status world TIDAK ditandai selesai (DONE). World tetap berstatus ANTRI untuk dilanjutkan saat reconnect.
-6. **Penyimpanan Daftar World & Storage Anti-Crash**:
-   - Form dan list terpadu dengan sinkronisasi instan ke file teks penyimpanan (`boren_plant_worlds.txt` & `boren_plant_storage.txt`), mencegah daftar hilang saat force close, restart, atau crash.
-7. **Kompatibilitas Penuh Android & PC**:
+6. **Penyimpanan Daftar World & Storage Otomatis & Anti-Hilang**:
+   - ID Door kini tersimpan sempurna saat menambahkan World Farm maupun Storage World (baik lewat input manual maupun tombol + World Saat Ini).
+   - Sinkronisasi instan dua arah ke file penyimpanan fisik di memori HP (`boren_plant_worlds.txt` & `boren_plant_storage.txt`), mencegah daftar world hilang meskipun Growlauncher di-force close, crash, atau ditutup.
+7. **Pendeteksian & Pengabaian Otomatis Area Lock Orang Lain (Anti-Paksa di SL Orang)**:
+   - Bot otomatis memindai area perlindungan kunci milik pemain lain (Small Lock, Big Lock, Huge Lock, Builder's Lock, dan World Lock) saat masuk ke world.
+   - Area yang dilindungi lock orang lain secara cerdas dilewati dan tidak akan dipaksa tanam maupun dipukul (punch).
+   - Dilengkapi sistem *reactive failure blacklist*: jika sebuah petak gagal ditanam sebanyak 2x akibat proteksi lock server, petak otomatis di-blacklist sehingga bot langsung melanjutkan ke petak berikutnya tanpa looping/stuck.
+8. **Kompatibilitas Penuh Android & PC**:
    - Bebas error `os.getenv` di Android Growlauncher dengan safe environment guards dan native file fallback.
 
 ## Cara Menggunakan

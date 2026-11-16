@@ -278,24 +278,27 @@ end
 
 local function parseSavedWorldList()
     local list = {}
-    local rawStr = loadPref("world_list_str", "")
-    if type(rawStr) == "string" and rawStr ~= "" then
-        for token in rawStr:gmatch("[^;\r\n]+") do
+    local seen = {}
+    -- 1. Baca dari file fisik boren_plant_worlds.txt di Download HP / PC (awet dan tidak pernah hilang saat GL ditutup)
+    local rawFile = readTextFileIfExists("boren_plant_worlds.txt")
+    if rawFile and rawFile ~= "" then
+        local cleaned = rawFile:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
+        for token in cleaned:gmatch("[^\r\n;,]+") do
             local entry = parseWorldEntryToken(token, "")
-            if entry and not isWorldInList(list, entry.name) then
+            if entry and not seen[entry.name] then
+                seen[entry.name] = true
                 table.insert(list, entry)
             end
         end
     end
-    if #list == 0 then
-        local rawFile = readTextFileIfExists("boren_plant_worlds.txt")
-        if rawFile and rawFile ~= "" then
-            local cleaned = rawFile:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
-            for token in cleaned:gmatch("[^\r\n;,]+") do
-                local entry = parseWorldEntryToken(token, "")
-                if entry and not isWorldInList(list, entry.name) then
-                    table.insert(list, entry)
-                end
+    -- 2. Sinkronkan dengan Preferences GL (world_list_str)
+    local rawStr = loadPref("world_list_str", "")
+    if type(rawStr) == "string" and rawStr ~= "" then
+        for token in rawStr:gmatch("[^;\r\n]+") do
+            local entry = parseWorldEntryToken(token, "")
+            if entry and not seen[entry.name] then
+                seen[entry.name] = true
+                table.insert(list, entry)
             end
         end
     end
@@ -304,27 +307,30 @@ end
 
 local function parseSavedStorageList()
     local list = {}
-    local rawStr = loadPref("storage_world_list_str", "")
-    if type(rawStr) == "string" and rawStr ~= "" then
-        for token in rawStr:gmatch("[^;\r\n]+") do
+    local seen = {}
+    -- 1. Baca dari file fisik boren_plant_storage.txt di Download HP / PC
+    local rawFile = readTextFileIfExists("boren_plant_storage.txt")
+    if not rawFile or rawFile == "" then
+        rawFile = readTextFileIfExists("boren_plant_storages.txt")
+    end
+    if rawFile and rawFile ~= "" then
+        local cleaned = rawFile:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
+        for token in cleaned:gmatch("[^\r\n;,]+") do
             local entry = parseWorldEntryToken(token, "")
-            if entry and not isWorldInList(list, entry.name) then
+            if entry and not seen[entry.name] then
+                seen[entry.name] = true
                 table.insert(list, { name = entry.name, door = entry.door })
             end
         end
     end
-    if #list == 0 then
-        local rawFile = readTextFileIfExists("boren_plant_storage.txt")
-        if not rawFile or rawFile == "" then
-            rawFile = readTextFileIfExists("boren_plant_storages.txt")
-        end
-        if rawFile and rawFile ~= "" then
-            local cleaned = rawFile:gsub("[\"\'%[%]%(%)]", " "):gsub("\t", " ")
-            for token in cleaned:gmatch("[^\r\n;,]+") do
-                local entry = parseWorldEntryToken(token, "")
-                if entry and not isWorldInList(list, entry.name) then
-                    table.insert(list, { name = entry.name, door = entry.door })
-                end
+    -- 2. Sinkronkan dengan Preferences GL (storage_world_list_str)
+    local rawStr = loadPref("storage_world_list_str", "")
+    if type(rawStr) == "string" and rawStr ~= "" then
+        for token in rawStr:gmatch("[^;\r\n]+") do
+            local entry = parseWorldEntryToken(token, "")
+            if entry and not seen[entry.name] then
+                seen[entry.name] = true
+                table.insert(list, { name = entry.name, door = entry.door })
             end
         end
     end
@@ -404,6 +410,9 @@ local STATE = {
     buf_storage_door    = "",
     buf_seed_1_id       = CFG.seed_1_id,
     buf_seed_2_id       = CFG.seed_2_id,
+    foreign_locked_tiles= {},
+    blocked_tiles       = {},
+    plant_fail_count    = {},
     fresh_seeds         = {},
     console_errors_only = false,
     suppress_dialog     = false,
@@ -1079,7 +1088,7 @@ end
 -- 9. WORLD WARPING & SAFE RECONNECT
 -- ============================================================================
 local function getCurrentWorldSafe()
-    local fn = getCurrentWorldName or getWorld
+    local fn = getCurrentWorldName or getWorld or getCurrentWorld
     if not fn then return "" end
     local ok, res = pcall(fn)
     if ok and res then
@@ -1233,8 +1242,106 @@ local function isFreshlyPlantedSeed(tx, ty)
     return false
 end
 
+local function getLocalSafe()
+    local fn = getLocal
+    if not fn then return nil end
+    local ok, p = pcall(fn)
+    if ok and p then return p end
+    return nil
+end
+
+local function isLockOwnedByLocal(tLock)
+    if not tLock then return false end
+    local me = getLocalSafe()
+    local myUserId = tonumber(me and me.userID) or 0
+    if myUserId <= 0 then return false end
+
+    if tLock.extra and type(tLock.extra) == "table" then
+        local ownerId = tonumber(tLock.extra.owner or tLock.extra.owner_signed) or 0
+        if ownerId > 0 and ownerId == myUserId then
+            return true
+        end
+        if tLock.extra.admin and type(tLock.extra.admin) == "table" then
+            for _, admId in ipairs(tLock.extra.admin) do
+                if tonumber(admId) == myUserId then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function scanForeignLocksInWorld()
+    STATE.foreign_locked_tiles = {}
+    STATE.blocked_tiles = STATE.blocked_tiles or {}
+    local me = getLocalSafe()
+    local myUserId = tonumber(me and me.userID) or 0
+
+    local foreignLockCount = 0
+    local lockedTileCount = 0
+
+    for y = 0, 59 do
+        for x = 0, 99 do
+            local t = getTileSafe(x, y)
+            local fg = tonumber(t and t.fg) or 0
+            if fg == 202 or fg == 204 or fg == 206 or fg == 4994 or fg == 242 then
+                local owned = isLockOwnedByLocal(t)
+                if not owned then
+                    foreignLockCount = foreignLockCount + 1
+                    local radius = 4 -- Small Lock (fg == 202)
+                    if fg == 204 then
+                        radius = 7 -- Big Lock
+                    elseif fg == 206 or fg == 4994 then
+                        radius = 15 -- Huge / Builder's Lock
+                    elseif fg == 242 then
+                        radius = 100 -- World Lock
+                    end
+
+                    if radius >= 100 then
+                        for ay = 0, 53 do
+                            for ax = 0, 99 do
+                                STATE.foreign_locked_tiles[ax .. "_" .. ay] = true
+                                lockedTileCount = lockedTileCount + 1
+                            end
+                        end
+                        addLog("`4[World Terkunci] `wWorld ini dilindungi World Lock orang lain! Seluruh petak di-lock.")
+                        return foreignLockCount, lockedTileCount
+                    else
+                        local minX = math.max(0, x - radius)
+                        local maxX = math.min(99, x + radius)
+                        local minY = math.max(0, y - radius)
+                        local maxY = math.min(53, y + radius)
+                        for cy = minY, maxY do
+                            for cx = minX, maxX do
+                                local dist = math.abs(cx - x) + math.abs(cy - y)
+                                if dist <= (radius + 1) then
+                                    local k = cx .. "_" .. cy
+                                    if not STATE.foreign_locked_tiles[k] then
+                                        STATE.foreign_locked_tiles[k] = true
+                                        lockedTileCount = lockedTileCount + 1
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if foreignLockCount > 0 then
+        addLog(string.format("`e[Lock Orang Lain] `wTerdeteksi %d lock milik orang lain (%d petak diamankan). Bot tidak akan memaksa plant di sana!", foreignLockCount, lockedTileCount))
+    end
+    return foreignLockCount, lockedTileCount
+end
+
 local function getTilePlantStatus(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return "INVALID" end
+    local k = tx .. "_" .. ty
+    if STATE.blocked_tiles and STATE.blocked_tiles[k] then return "INVALID" end
+    if STATE.foreign_locked_tiles and STATE.foreign_locked_tiles[k] then return "INVALID" end
+
     local tBelow = getTileSafe(tx, ty + 1)
     if not isSupportTile(tBelow) then return "INVALID" end
 
@@ -1286,6 +1393,9 @@ local function getTilePlantStatus(tx, ty)
 end
 
 local function isTilePlantable(tx, ty)
+    local k = tx .. "_" .. ty
+    if STATE.blocked_tiles and STATE.blocked_tiles[k] then return false end
+    if STATE.foreign_locked_tiles and STATE.foreign_locked_tiles[k] then return false end
     local st = getTilePlantStatus(tx, ty)
     return (st == "EMPTY" or st == "NEEDS_SPLICE_2" or st == "NEEDS_SPLICE_1")
 end
@@ -1662,6 +1772,9 @@ end
 
 local function clearFailedSpliceTile(tx, ty)
     if not STATE.running then return false end
+    local k = tx .. "_" .. ty
+    if STATE.blocked_tiles and STATE.blocked_tiles[k] then return false end
+    if STATE.foreign_locked_tiles and STATE.foreign_locked_tiles[k] then return false end
     local s1 = CFG.seed_1_id
     local s2 = CFG.seed_2_id
 
@@ -1683,6 +1796,9 @@ end
 
 local function plantAndSpliceTile(tx, ty)
     if not STATE.running then return false end
+    local k = tx .. "_" .. ty
+    if STATE.blocked_tiles and STATE.blocked_tiles[k] then return true end
+    if STATE.foreign_locked_tiles and STATE.foreign_locked_tiles[k] then return true end
     local st = getTilePlantStatus(tx, ty)
     if st == "DONE" or st == "INVALID" then return true end
 
@@ -1785,6 +1901,11 @@ local function plantTileSection(spotList, plantY)
     local delayPlant = tonumber(CFG.plant_delay) or 180
     local delaySplice = tonumber(CFG.splice_delay) or 180
 
+    local failCounts = STATE.plant_fail_count or {}
+    STATE.plant_fail_count = failCounts
+    local blocked = STATE.blocked_tiles or {}
+    STATE.blocked_tiles = blocked
+
     -- -------------------------------------------------------------------------
     -- A. SINGLE SEED MODE
     -- -------------------------------------------------------------------------
@@ -1792,9 +1913,20 @@ local function plantTileSection(spotList, plantY)
         for _, sx in ipairs(spotList) do
             if not STATE.running then break end
             while STATE.paused do safeSleep(500) if not STATE.running then break end end
-            if getTilePlantStatus(sx, plantY) == "EMPTY" then
+            local k = sx .. "_" .. plantY
+            if not blocked[k] and getTilePlantStatus(sx, plantY) == "EMPTY" then
                 sendPlantPacket(sx, plantY, s1)
                 safeSleep(delayPlant)
+                local tNow = getTileSafe(sx, plantY)
+                if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
+                    failCounts[k] = (failCounts[k] or 0) + 1
+                    if failCounts[k] >= 2 then
+                        blocked[k] = true
+                        addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
+                    end
+                else
+                    failCounts[k] = 0
+                end
             end
         end
 
@@ -1802,10 +1934,21 @@ local function plantTileSection(spotList, plantY)
         for _ = 1, 2 do
             local needRetry = false
             for _, sx in ipairs(spotList) do
-                if getTilePlantStatus(sx, plantY) == "EMPTY" then
+                local k = sx .. "_" .. plantY
+                if not blocked[k] and getTilePlantStatus(sx, plantY) == "EMPTY" then
                     needRetry = true
                     sendPlantPacket(sx, plantY, s1)
                     safeSleep(delayPlant)
+                    local tNow = getTileSafe(sx, plantY)
+                    if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
+                        failCounts[k] = (failCounts[k] or 0) + 1
+                        if failCounts[k] >= 2 then
+                            blocked[k] = true
+                            addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
+                        end
+                    else
+                        failCounts[k] = 0
+                    end
                 end
             end
             if not needRetry then break end
@@ -1821,11 +1964,24 @@ local function plantTileSection(spotList, plantY)
     for _, sx in ipairs(spotList) do
         if not STATE.running then break end
         while STATE.paused do safeSleep(500) if not STATE.running then break end end
-        local st = getTilePlantStatus(sx, plantY)
-        if st == "EMPTY" then
-            sendPlantPacket(sx, plantY, s1)
-            plantedS1[sx] = true
-            safeSleep(delayPlant)
+        local k = sx .. "_" .. plantY
+        if not blocked[k] then
+            local st = getTilePlantStatus(sx, plantY)
+            if st == "EMPTY" then
+                sendPlantPacket(sx, plantY, s1)
+                plantedS1[sx] = true
+                safeSleep(delayPlant)
+                local tNow = getTileSafe(sx, plantY)
+                if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
+                    failCounts[k] = (failCounts[k] or 0) + 1
+                    if failCounts[k] >= 2 then
+                        blocked[k] = true
+                        addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
+                    end
+                else
+                    failCounts[k] = 0
+                end
+            end
         end
     end
 
@@ -1836,13 +1992,16 @@ local function plantTileSection(spotList, plantY)
     for _, sx in ipairs(spotList) do
         if not STATE.running then break end
         while STATE.paused do safeSleep(500) if not STATE.running then break end end
-        local st = getTilePlantStatus(sx, plantY)
-        if plantedS1[sx] or st == "NEEDS_SPLICE_2" or st == "EMPTY" then
-            sendPlantPacket(sx, plantY, s2)
-            safeSleep(delayPlant)
-        elseif st == "NEEDS_SPLICE_1" then
-            sendPlantPacket(sx, plantY, s1)
-            safeSleep(delayPlant)
+        local k = sx .. "_" .. plantY
+        if not blocked[k] then
+            local st = getTilePlantStatus(sx, plantY)
+            if plantedS1[sx] or st == "NEEDS_SPLICE_2" or st == "EMPTY" then
+                sendPlantPacket(sx, plantY, s2)
+                safeSleep(delayPlant)
+            elseif st == "NEEDS_SPLICE_1" then
+                sendPlantPacket(sx, plantY, s1)
+                safeSleep(delayPlant)
+            end
         end
     end
 
@@ -1852,21 +2011,32 @@ local function plantTileSection(spotList, plantY)
         if not STATE.running then break end
         local allDone = true
         for _, sx in ipairs(spotList) do
-            local st = getTilePlantStatus(sx, plantY)
-            if st == "NEEDS_SPLICE_2" then
-                allDone = false
-                sendPlantPacket(sx, plantY, s2)
-                safeSleep(delayPlant)
-            elseif st == "NEEDS_SPLICE_1" then
-                allDone = false
-                sendPlantPacket(sx, plantY, s1)
-                safeSleep(delayPlant)
-            elseif st == "EMPTY" then
-                allDone = false
-                sendPlantPacket(sx, plantY, s1)
-                safeSleep(delaySplice)
-                sendPlantPacket(sx, plantY, s2)
-                safeSleep(delayPlant)
+            local k = sx .. "_" .. plantY
+            if not blocked[k] then
+                local st = getTilePlantStatus(sx, plantY)
+                if st == "NEEDS_SPLICE_2" then
+                    allDone = false
+                    sendPlantPacket(sx, plantY, s2)
+                    safeSleep(delayPlant)
+                elseif st == "NEEDS_SPLICE_1" then
+                    allDone = false
+                    sendPlantPacket(sx, plantY, s1)
+                    safeSleep(delayPlant)
+                elseif st == "EMPTY" then
+                    allDone = false
+                    sendPlantPacket(sx, plantY, s1)
+                    safeSleep(delaySplice)
+                    sendPlantPacket(sx, plantY, s2)
+                    safeSleep(delayPlant)
+                    local tNow = getTileSafe(sx, plantY)
+                    if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
+                        failCounts[k] = (failCounts[k] or 0) + 1
+                        if failCounts[k] >= 2 then
+                            blocked[k] = true
+                            addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
+                        end
+                    end
+                end
             end
         end
         if allDone then break end
@@ -1877,16 +2047,19 @@ local function plantTileSection(spotList, plantY)
     if CFG.auto_clear_failed_splice ~= false then
         for _, sx in ipairs(spotList) do
             if not STATE.running then break end
-            local st = getTilePlantStatus(sx, plantY)
-            if st == "NEEDS_SPLICE_2" or st == "NEEDS_SPLICE_1" then
-                addLog(string.format("[Splice Recovery] Mendeteksi semak bertunas gagal splice di (%d, %d). Mereset...", sx, plantY))
-                local cleared = clearFailedSpliceTile(sx, plantY)
-                if cleared then
-                    safeSleep(100)
-                    sendPlantPacket(sx, plantY, s1)
-                    safeSleep(delaySplice)
-                    sendPlantPacket(sx, plantY, s2)
-                    safeSleep(delayPlant)
+            local k = sx .. "_" .. plantY
+            if not blocked[k] then
+                local st = getTilePlantStatus(sx, plantY)
+                if st == "NEEDS_SPLICE_2" or st == "NEEDS_SPLICE_1" then
+                    addLog(string.format("[Splice Recovery] Mendeteksi semak bertunas gagal splice di (%d, %d). Mereset...", sx, plantY))
+                    local cleared = clearFailedSpliceTile(sx, plantY)
+                    if cleared then
+                        safeSleep(100)
+                        sendPlantPacket(sx, plantY, s1)
+                        safeSleep(delaySplice)
+                        sendPlantPacket(sx, plantY, s2)
+                        safeSleep(delayPlant)
+                    end
                 end
             end
         end
@@ -2401,6 +2574,9 @@ end
 
 local function plantEntireWorld()
     STATE.fresh_seeds = {}
+    STATE.blocked_tiles = {}
+    STATE.plant_fail_count = {}
+    scanForeignLocksInWorld()
     local curW = getCurrentWorldSafe()
     if not isWorldProperlyLoaded(curW) then
         addLog("[Peringatan] World belum termuat atau bot terputus (disconnect). Tanam ditunda.")
@@ -2707,6 +2883,9 @@ end
 
 local function startBot()
     if STATE.running then return end
+    STATE.blocked_tiles = {}
+    STATE.plant_fail_count = {}
+    pcall(scanForeignLocksInWorld)
     if runCoroutine then
         pcall(runCoroutine, autoPlantMainLoop)
     else
@@ -3501,10 +3680,14 @@ local function handlePlantUIValue(typeVal, name, val)
         CFG.manual_stor_door = tostring(val or "")
         savePrefs(CFG)
     elseif name == "ap_btn_add_world" then
-        local rawW = tostring(CFG.manual_world_text or "")
-        local rawD = tostring(CFG.manual_door_text or "")
-        if rawW:gsub("%s+", "") ~= "" then
-            local added, dups, ignored, summary = parseAndValidateWorldBatch(rawW, false)
+        local rawW = tostring(CFG.manual_world_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local rawD = tostring(CFG.manual_door_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if rawW ~= "" then
+            local tokenToAdd = rawW
+            if rawD ~= "" and not rawW:find("[:|]") then
+                tokenToAdd = rawW .. ":" .. rawD
+            end
+            local added, dups, ignored, summary = parseAndValidateWorldBatch(tokenToAdd, false)
             if added == 0 and not rawW:find("[:|,;%s]") then
                 local parsed = parseWorldEntryToken(rawW, rawD)
                 if parsed and parsed.name ~= "" then
@@ -3531,11 +3714,15 @@ local function handlePlantUIValue(typeVal, name, val)
     elseif name == "ap_btn_add_cur_world" then
         local curW = getCurrentWorldSafe()
         if curW ~= "" and curW ~= "EXIT" then
+            local rawD = tostring(CFG.manual_door_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
             if not isWorldInList(CFG.world_list, curW) then
-                table.insert(CFG.world_list, { name = curW, door = "", done = false, status = "ANTRI" })
+                table.insert(CFG.world_list, { name = curW, door = rawD, done = false, status = "ANTRI" })
+                CFG.manual_door_text = ""
+                if editValue then pcall(editValue, "ap_manual_door_input", "") end
                 persistConfig()
                 updateWorldDisplayList()
-                if sendNotification then pcall(sendNotification, "World Farm ditambahkan: " .. curW) end
+                local dTag = (rawD ~= "") and (":" .. rawD) or ""
+                if sendNotification then pcall(sendNotification, "World Farm ditambahkan: " .. curW .. dTag) end
             else
                 if sendNotification then pcall(sendNotification, "World saat ini sudah ada di antrean!") end
             end
@@ -3565,10 +3752,14 @@ local function handlePlantUIValue(typeVal, name, val)
     elseif name == "ap_btn_load_worlds" then
         loadPlantWorldsFromFile()
     elseif name == "ap_btn_add_storage" then
-        local rawW = tostring(CFG.manual_storage_text or "")
-        local rawD = tostring(CFG.manual_stor_door or "")
-        if rawW:gsub("%s+", "") ~= "" then
-            local added, dups, ignored, summary = parseAndValidateStorageBatch(rawW, false)
+        local rawW = tostring(CFG.manual_storage_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local rawD = tostring(CFG.manual_stor_door or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if rawW ~= "" then
+            local tokenToAdd = rawW
+            if rawD ~= "" and not rawW:find("[:|]") then
+                tokenToAdd = rawW .. ":" .. rawD
+            end
+            local added, dups, ignored, summary = parseAndValidateStorageBatch(tokenToAdd, false)
             if added == 0 and not rawW:find("[:|,;%s]") then
                 local parsed = parseWorldEntryToken(rawW, rawD)
                 if parsed and parsed.name ~= "" then
@@ -3786,6 +3977,7 @@ _G.getPlayerTilePos = getPlayerTilePos
 _G.getTilePlantStatus = getTilePlantStatus
 _G.plantAndSpliceTile = plantAndSpliceTile
 _G.isTilePlantable = isTilePlantable
+_G.scanForeignLocksInWorld = scanForeignLocksInWorld
 _G.isTilePlanted = isTilePlanted
 _G.findRowPlantPlan = findRowPlantPlan
 _G.executePlantRow = executePlantRow
