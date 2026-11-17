@@ -91,7 +91,7 @@ local HUB = {
     tabs            = {},
     logs            = {},
     LINKS = {
-        discord       = "https://discord.gg/borenstore",
+        discord       = "https://discord.gg/2pGMQgeNue",
         github_repo   = "https://github.com/rendhi69/sc_auto_plant_growlauncher",
         raw_loader    = BASE_RAW_URL .. "loader_hub_imgui.lua",
         raw_debugpack = "https://raw.githubusercontent.com/rendhi69/data-_id_item/main/debugpack.txt",
@@ -120,7 +120,7 @@ local function requireHubMod(stepLabel, relPath, optional)
         if not optional then notifyMsg(tostring(err)) end
         return nil, err
     end
-    return mod, nilb
+    return mod, nil
 end
 
 local function loadAllModulesSync(isReload)

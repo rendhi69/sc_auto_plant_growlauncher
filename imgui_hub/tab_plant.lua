@@ -631,8 +631,52 @@ local function triggerReloadPackDb()
     else coroutine.resume(coroutine.create(runner)) end
 end
 
+local animTick = 0
+local dcCopiedUntil = 0
+local ghCopiedUntil = 0
+
+local SPIN_FRAMES = { "|", "/", "-", "\\" }
+local CHEV_L = { "  >", " >>", ">>>", ">> " }
+local CHEV_R = { "<  ", "<< ", "<<<", " <<" }
+local MARQUEE_TXT = "   BOREN STORE HUB  *  AUTO PLANT  *  DIRT FARM  *  BUILD SOIL  *  BUY PACK  *  /reload UPDATE  *  /hub HIDE   "
+
+local function getMarqueeSlice(step, width)
+    local full = MARQUEE_TXT .. MARQUEE_TXT
+    local len = #MARQUEE_TXT
+    local startIdx = (step % len) + 1
+    return full:sub(startIdx, startIdx + width - 1)
+end
+
+local function getSlidingBar(step, slots)
+    local pos = (step % slots) + 1
+    local chars = {}
+    for i = 1, slots do
+        if i == pos or i == ((pos % slots) + 1) then
+            chars[i] = "="
+        elseif i == (((pos + 1) % slots) + 1) then
+            chars[i] = ">"
+        else
+            chars[i] = "."
+        end
+    end
+    return "[" .. table.concat(chars) .. "]"
+end
+
+local function isAnyBotActive()
+    if not HUB then return false end
+    for _, k in ipairs({ "plant", "dirt_farm", "build_soil", "buy_pack" }) do
+        local m = HUB[k]
+        if m and m.STATE and (m.STATE.enabled or m.STATE.running) then return true end
+    end
+    return false
+end
+
 local function renderDashboardPanel()
-    local availW = safeAvailX()
+    animTick = animTick + 1
+    local slowStep = math.floor(animTick / 12)
+    local medStep  = math.floor(animTick / 6)
+    local availW   = safeAvailX()
+
     local curWorld = "-"
     if getCurrentWorldName then
         local okW, wn = pcall(getCurrentWorldName)
@@ -645,42 +689,70 @@ local function renderDashboardPanel()
     end
 
     local isReloading = (HUB and HUB.reloading == true) or fallbackReloading
-    local updStatus = tostring((HUB and HUB.reload_status) or "Siap")
+    local updStatus   = tostring((HUB and HUB.reload_status) or "Siap")
+    local anyRun      = isAnyBotActive()
 
-    ImGui.Text("BOREN HUB")
-    ImGui.Text(string.format("World: %s | Gems: %d | %s", curWorld, curGems, updStatus))
+    -- 1. HEADER & LIVE ANIMATED BANNER
+    local chevIdx = (slowStep % #CHEV_L) + 1
+    local pulseDot = ((slowStep % 2) == 0) and "[*]" or "[o]"
+    local runBadge = anyRun and (pulseDot .. " BOT AKTIF") or (pulseDot .. " STANDBY")
+    ImGui.Text(string.format("%s  BOREN HUB  %s   |   %s", CHEV_L[chevIdx], CHEV_R[chevIdx], runBadge))
+    ImGui.Text(getMarqueeSlice(medStep, 46))
+    ImGui.Text(string.format("World: %s  |  Gems: %d  |  %s", curWorld, curGems, updStatus))
     if uiNotice ~= "" then
         ImGui.Text("Info: " .. uiNotice)
     end
     ImGui.Separator()
 
-    -- KARTU LOGO KLIK-UNTUK-COPY (Tanpa menampilkan link raw)
+    -- 2. KARTU LOGO ANIMASI KLIK-UNTUK-COPY (Tanpa menampilkan link raw)
     local cardW = math.max(150, math.floor(availW * 0.47))
+
+    -- Animasi mata berkedip Discord Clyde & efek senang saat baru diklik
+    local dcCopied = (animTick < dcCopiedUntil)
+    local dcBlink  = ((slowStep % 14) == 13)
+    local dcFace   = dcCopied and "  ( ^ _ ^ )  " or (dcBlink and "  ( - _ - )  " or "  ( o _ o )  ")
+    local dcTop    = dcCopied and "  * COPIED * " or "   .-----.   "
+    local dcLabel  = dcCopied and " Link Tersalin! " or " Discord Boren "
+
+    -- Animasi Octocat / Code GitHub berkedip & efek senang saat baru diklik
+    local ghCopied = (animTick < ghCopiedUntil)
+    local ghBlink  = ((slowStep % 16) == 7)
+    local ghTop    = ghCopied and "  * COPIED * " or "   /\\___/\\   "
+    local ghFace   = ghCopied and "  ( ^ . ^ )  " or (ghBlink and "  ( - . - )  " or "  ( o . o )  ")
+    local ghLabel  = ghCopied and " Link Tersalin! " or "  GitHub Boren  "
+
     if ImGui.BeginTable("BorenDashCards", 2) then
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
-        if fullBtn("\n    ( o_o )    \n\n  Discord Boren  \n##card_dc", cardW) then
+        if fullBtn("\n" .. dcTop .. "\n" .. dcFace .. "\n\n" .. dcLabel .. "\n##card_dc", cardW) then
             copyLinkToClipboard("Link Discord Boren", getHubLink("discord"))
+            dcCopiedUntil = animTick + 90
         end
 
         ImGui.TableSetColumnIndex(1)
-        if fullBtn("\n     < / >     \n\n  GitHub Boren  \n##card_gh", cardW) then
+        if fullBtn("\n" .. ghTop .. "\n" .. ghFace .. "\n\n" .. ghLabel .. "\n##card_gh", cardW) then
             copyLinkToClipboard("Link GitHub Boren", getHubLink("github_repo"))
+            ghCopiedUntil = animTick + 90
         end
         ImGui.EndTable()
     end
 
-    ImGui.Text("Klik logo di atas untuk salin link ke clipboard.")
+    ImGui.Text("Klik kartu logo di atas untuk salin link ke clipboard.")
     ImGui.Separator()
 
-    -- TOMBOL REFRESH / HOT-RELOAD UPDATE SCRIPT TANPA TUTUP GL
-    if autoBtn(isReloading and "  Sedang Update...  ##dash_rl" or "  Refresh / Update Script  ##dash_rl") then
+    -- 3. TOMBOL REFRESH / HOT-RELOAD + ANIMASI LOADING SPINNER & PROGRESS BAR
+    local spinChar = SPIN_FRAMES[(medStep % #SPIN_FRAMES) + 1]
+    if isReloading or packDbReloading then
+        ImGui.Text(string.format("[%s] Memuat update %s", spinChar, getSlidingBar(medStep, 14)))
+    end
+
+    if autoBtn(isReloading and ("  [" .. spinChar .. "] Updating...  ##dash_rl") or "  Refresh / Update Script  ##dash_rl") then
         if not isReloading then
             triggerHotReloadAll()
         end
     end
     ImGui.SameLine()
-    if autoBtn(packDbReloading and " Memuat DB... ##dash_db" or " Reload DB Pack ##dash_db") then
+    if autoBtn(packDbReloading and (" [" .. spinChar .. "] Loading DB... ##dash_db") or " Reload DB Pack ##dash_db") then
         if not packDbReloading then
             triggerReloadPackDb()
         end
