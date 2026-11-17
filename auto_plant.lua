@@ -1253,21 +1253,29 @@ end
 local function isLockOwnedByLocal(tLock)
     if not tLock then return false end
     local me = getLocalSafe()
-    local myUserId = tonumber(me and me.userID) or 0
-    if myUserId <= 0 then return false end
+    local myUserId = tonumber(me and (me.userID or me.userId)) or 0
 
-    if tLock.extra and type(tLock.extra) == "table" then
-        local ownerId = tonumber(tLock.extra.owner or tLock.extra.owner_signed) or 0
-        if ownerId > 0 and ownerId == myUserId then
+    local okExtra, extra = pcall(function() return tLock.extra end)
+    if okExtra and extra then
+        local ownerId = 0
+        pcall(function()
+            ownerId = tonumber(extra.owner or extra.owner_signed) or 0
+        end)
+        if myUserId > 0 and ownerId > 0 and ownerId == myUserId then
             return true
         end
-        if tLock.extra.admin and type(tLock.extra.admin) == "table" then
-            for _, admId in ipairs(tLock.extra.admin) do
-                if tonumber(admId) == myUserId then
-                    return true
+        local isAdmin = false
+        pcall(function()
+            if extra.admin then
+                for _, admId in ipairs(extra.admin) do
+                    if myUserId > 0 and tonumber(admId) == myUserId then
+                        isAdmin = true
+                        break
+                    end
                 end
             end
-        end
+        end)
+        if isAdmin then return true end
     end
     return false
 end
@@ -1275,8 +1283,6 @@ end
 local function scanForeignLocksInWorld()
     STATE.foreign_locked_tiles = {}
     STATE.blocked_tiles = STATE.blocked_tiles or {}
-    local me = getLocalSafe()
-    local myUserId = tonumber(me and me.userID) or 0
 
     local foreignLockCount = 0
     local lockedTileCount = 0
@@ -1285,7 +1291,9 @@ local function scanForeignLocksInWorld()
         for x = 0, 99 do
             local t = getTileSafe(x, y)
             local fg = tonumber(t and t.fg) or 0
-            if fg == 202 or fg == 204 or fg == 206 or fg == 4994 or fg == 242 then
+            -- Hanya periksa Small Lock (202), Big Lock (204), Huge Lock (206), dan Builder's Lock (4994)
+            -- JANGAN PERNAH me-lock seluruh world berdasarkan World Lock (242) agar world farm milik sendiri tidak terkunci!
+            if fg == 202 or fg == 204 or fg == 206 or fg == 4994 then
                 local owned = isLockOwnedByLocal(t)
                 if not owned then
                     foreignLockCount = foreignLockCount + 1
@@ -1294,33 +1302,20 @@ local function scanForeignLocksInWorld()
                         radius = 7 -- Big Lock
                     elseif fg == 206 or fg == 4994 then
                         radius = 15 -- Huge / Builder's Lock
-                    elseif fg == 242 then
-                        radius = 100 -- World Lock
                     end
 
-                    if radius >= 100 then
-                        for ay = 0, 53 do
-                            for ax = 0, 99 do
-                                STATE.foreign_locked_tiles[ax .. "_" .. ay] = true
-                                lockedTileCount = lockedTileCount + 1
-                            end
-                        end
-                        addLog("`4[World Terkunci] `wWorld ini dilindungi World Lock orang lain! Seluruh petak di-lock.")
-                        return foreignLockCount, lockedTileCount
-                    else
-                        local minX = math.max(0, x - radius)
-                        local maxX = math.min(99, x + radius)
-                        local minY = math.max(0, y - radius)
-                        local maxY = math.min(53, y + radius)
-                        for cy = minY, maxY do
-                            for cx = minX, maxX do
-                                local dist = math.abs(cx - x) + math.abs(cy - y)
-                                if dist <= (radius + 1) then
-                                    local k = cx .. "_" .. cy
-                                    if not STATE.foreign_locked_tiles[k] then
-                                        STATE.foreign_locked_tiles[k] = true
-                                        lockedTileCount = lockedTileCount + 1
-                                    end
+                    local minX = math.max(0, x - radius)
+                    local maxX = math.min(99, x + radius)
+                    local minY = math.max(0, y - radius)
+                    local maxY = math.min(53, y + radius)
+                    for cy = minY, maxY do
+                        for cx = minX, maxX do
+                            local dist = math.abs(cx - x) + math.abs(cy - y)
+                            if dist <= (radius + 1) then
+                                local k = cx .. "_" .. cy
+                                if not STATE.foreign_locked_tiles[k] then
+                                    STATE.foreign_locked_tiles[k] = true
+                                    lockedTileCount = lockedTileCount + 1
                                 end
                             end
                         end
@@ -1472,40 +1467,35 @@ local function findRowPlantPlan(plantY, curPx)
         end
     end
 
-    local minPlanted   = planted[1]
-    local maxPlanted   = planted[#planted]
-    local minPlantable = plantable[1]
-    local maxPlantable = plantable[#plantable]
+    local minPlanted = planted[1]
+    local maxPlanted = planted[#planted]
 
-    -- 2. KASUS A: Pola Tanam Kiri ke Kanan
-    -- Seed sudah terpasang di sisi kiri dan sisa petak kosong di sisi kanan
-    if minPlanted <= minPlantable and maxPlantable > maxPlanted then
-        local startX = nil
-        for _, px in ipairs(plantable) do
-            if px > maxPlanted then
-                startX = px
-                break
-            end
-        end
-        if startX then
-            return true, startX, maxPlanted, #plantable
+    -- Kumpulkan petak kosong di sisi kanan seed terakhir (x > maxPlanted)
+    local rightPlantable = {}
+    for _, px in ipairs(plantable) do
+        if px > maxPlanted then
+            table.insert(rightPlantable, px)
         end
     end
 
-    -- 3. KASUS B: Pola Tanam Kanan ke Kiri
-    -- Seed sudah terpasang di sisi kanan dan sisa petak kosong di sisi kiri
-    if maxPlanted >= maxPlantable and minPlantable < minPlanted then
-        local startX = nil
-        for i = #plantable, 1, -1 do
-            local px = plantable[i]
-            if px < minPlanted then
-                startX = px
-                break
-            end
+    -- Kumpulkan petak kosong di sisi kiri seed pertama (x < minPlanted)
+    local leftPlantable = {}
+    for _, px in ipairs(plantable) do
+        if px < minPlanted then
+            table.insert(leftPlantable, px)
         end
-        if startX then
-            return false, startX, minPlanted, #plantable
-        end
+    end
+
+    -- 2. KASUS A: Mayoritas sisa petak kosong ada di sisi kanan seed terakhir
+    -- (Pola penanaman alami Kiri -> Kanan)
+    if #rightPlantable > 0 and #rightPlantable >= #leftPlantable then
+        return true, rightPlantable[1], maxPlanted, #plantable
+    end
+
+    -- 3. KASUS B: Mayoritas sisa petak kosong ada di sisi kiri seed pertama
+    -- (Pola penanaman alami Kanan -> Kiri)
+    if #leftPlantable > 0 and #leftPlantable > #rightPlantable then
+        return false, leftPlantable[#leftPlantable], minPlanted, #plantable
     end
 
     -- 4. KASUS C: Titik batas transisi (boundary) terdekat dengan posisi bot
@@ -1543,9 +1533,9 @@ local function findRowPlantPlan(plantY, curPx)
 
     -- Fallback: pilih sisi yang lebih dekat dengan posisi bot saat ini
     if curPx >= 50 then
-        return false, maxPlantable, maxPlanted, #plantable
+        return false, plantable[#plantable], maxPlanted, #plantable
     else
-        return true, minPlantable, minPlanted, #plantable
+        return true, plantable[1], minPlanted, #plantable
     end
 end
 
@@ -1563,13 +1553,17 @@ local function moveSafeTo(tx, ty)
     local sx, sy = tx, ty
     local t = getTileSafe(tx, ty)
     if t and t.collidable then
-        if not getTileSafe(tx, ty - 1).collidable then
+        local tUp = getTileSafe(tx, ty - 1)
+        local tLeft = getTileSafe(tx - 1, ty)
+        local tRight = getTileSafe(tx + 1, ty)
+        local tDown = getTileSafe(tx, ty + 1)
+        if tUp and not tUp.collidable then
             sx, sy = tx, ty - 1
-        elseif not getTileSafe(tx - 1, ty).collidable then
+        elseif tLeft and not tLeft.collidable then
             sx, sy = tx - 1, ty
-        elseif not getTileSafe(tx + 1, ty).collidable then
+        elseif tRight and not tRight.collidable then
             sx, sy = tx + 1, ty
-        elseif not getTileSafe(tx, ty + 1).collidable then
+        elseif tDown and not tDown.collidable then
             sx, sy = tx, ty + 1
         end
     end
@@ -1917,21 +1911,12 @@ local function plantTileSection(spotList, plantY)
             if not blocked[k] and getTilePlantStatus(sx, plantY) == "EMPTY" then
                 sendPlantPacket(sx, plantY, s1)
                 safeSleep(delayPlant)
-                local tNow = getTileSafe(sx, plantY)
-                if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
-                    failCounts[k] = (failCounts[k] or 0) + 1
-                    if failCounts[k] >= 2 then
-                        blocked[k] = true
-                        addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
-                    end
-                else
-                    failCounts[k] = 0
-                end
             end
         end
 
-        -- Verifikasi konfirmasi
-        for _ = 1, 2 do
+        -- Verifikasi konfirmasi: Beri toleransi latency server sebelum menganggap SL terkunci
+        safeSleep(60)
+        for retry = 1, 3 do
             local needRetry = false
             for _, sx in ipairs(spotList) do
                 local k = sx .. "_" .. plantY
@@ -1942,7 +1927,8 @@ local function plantTileSection(spotList, plantY)
                     local tNow = getTileSafe(sx, plantY)
                     if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
                         failCounts[k] = (failCounts[k] or 0) + 1
-                        if failCounts[k] >= 2 then
+                        -- Wajib gagal berturut-turut minimal 4 kali (konfirmasi network nyata) sebelum mem-blacklist tile
+                        if failCounts[k] >= 4 then
                             blocked[k] = true
                             addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
                         end
@@ -1952,6 +1938,7 @@ local function plantTileSection(spotList, plantY)
                 end
             end
             if not needRetry then break end
+            safeSleep(80)
         end
         return true
     end
@@ -1971,16 +1958,6 @@ local function plantTileSection(spotList, plantY)
                 sendPlantPacket(sx, plantY, s1)
                 plantedS1[sx] = true
                 safeSleep(delayPlant)
-                local tNow = getTileSafe(sx, plantY)
-                if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
-                    failCounts[k] = (failCounts[k] or 0) + 1
-                    if failCounts[k] >= 2 then
-                        blocked[k] = true
-                        addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
-                    end
-                else
-                    failCounts[k] = 0
-                end
             end
         end
     end
@@ -2031,10 +2008,12 @@ local function plantTileSection(spotList, plantY)
                     local tNow = getTileSafe(sx, plantY)
                     if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
                         failCounts[k] = (failCounts[k] or 0) + 1
-                        if failCounts[k] >= 2 then
+                        if failCounts[k] >= 4 then
                             blocked[k] = true
                             addLog(string.format("`4[Area Lock Terdeteksi] `wPetak (%d, %d) tidak bisa ditanam (SL orang lain/terkunci). Dilewati!", sx, plantY))
                         end
+                    else
+                        failCounts[k] = 0
                     end
                 end
             end
