@@ -514,6 +514,11 @@ local function renderLeftFeatureSidebar(colW)
     if fullBtn(activeFeature == "build_soil" and "[ Build Soil ]" or "Build Soil", btnW) then
         activeFeature = "build_soil"
     end
+
+    ImGui.Text("")
+    if fullBtn("Hide UI", btnW) then
+        windowOpen = false
+    end
 end
 
 -- ============================================================================
@@ -537,10 +542,6 @@ local function renderRightPanel()
         if autoBtn(activePlantSub == "logs" and "[ Logs ]" or "Logs") then
             activePlantSub = "logs"
         end
-        ImGui.SameLine()
-        if autoBtn("Hide") then
-            windowOpen = false
-        end
 
         ImGui.Separator()
 
@@ -556,15 +557,11 @@ local function renderRightPanel()
 
     elseif activeFeature == "dirt_farm" then
         ImGui.Text("Kategori: Dirt Farm")
-        ImGui.SameLine()
-        if autoBtn("Hide") then windowOpen = false end
         ImGui.Separator()
         ImGui.TextWrapped("Slot kategori Dirt Farm sudah siap dihubungkan ke modul Dirt Farm via load (terpisah).")
 
     elseif activeFeature == "build_soil" then
         ImGui.Text("Kategori: Build Soil")
-        ImGui.SameLine()
-        if autoBtn("Hide") then windowOpen = false end
         ImGui.Separator()
         ImGui.TextWrapped("Slot kategori Build Soil sudah siap dihubungkan ke modul Build Soil via load (terpisah).")
     end
