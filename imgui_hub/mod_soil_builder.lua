@@ -243,20 +243,113 @@ local function getTileSafe(tx, ty)
     return (ok and t) and t or nil
 end
 
+local function readInvItemFields(it)
+    local t = type(it)
+    if t ~= "table" and t ~= "userdata" then return nil, nil end
+    local id, amt = nil, nil
+    pcall(function() id = tonumber(it.id or it.itemid or it.itemID or it.item_id) end)
+    pcall(function() amt = tonumber(it.amount or it.count or it.cnt) end)
+    return id, amt
+end
+
 local function getInvCount(id)
-    id = tonumber(id) or 0
-    if id <= 0 then return 0 end
+    local targetID = tonumber(id) or 0
+    if targetID <= 0 then return 0 end
+    if growtopia and growtopia.checkInventoryCount then
+        local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
+        if ok and tonumber(cnt) and tonumber(cnt) > 0 then return tonumber(cnt) end
+    end
     if getInventory then
         local ok, inv = pcall(getInventory)
-        if ok and type(inv) == "table" then
-            for _, it in pairs(inv) do
-                local iid = tonumber(it.id or it.itemid or it.itemId or 0) or 0
-                if iid == id then return tonumber(it.count or it.amount or 0) or 0 end
+        if ok and (type(inv) == "table" or type(inv) == "userdata") then
+            local container = inv
+            pcall(function()
+                if inv.items ~= nil and (type(inv.items) == "table" or type(inv.items) == "userdata") then
+                    container = inv.items
+                end
+            end)
+            local total, seen = 0, 0
+            pcall(function()
+                for _, it in pairs(container) do
+                    local iid, amt = readInvItemFields(it)
+                    if iid and iid > 0 then
+                        seen = seen + 1
+                        if iid == targetID and (amt or 0) > 0 then total = total + amt end
+                    end
+                end
+            end)
+            if seen == 0 then
+                local okLen, n = pcall(function() return #container end)
+                if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
+                local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 400
+                local misses = 0
+                for i = 0, maxI do
+                    local okI, it = pcall(function() return container[i] end)
+                    local iid, amt = nil, nil
+                    if okI then iid, amt = readInvItemFields(it) end
+                    if iid and iid > 0 then
+                        misses = 0
+                        if iid == targetID and (amt or 0) > 0 then total = total + amt end
+                    else
+                        misses = misses + 1
+                        if misses >= 50 and i > 5 then break end
+                    end
+                end
             end
-            return 0
+            if total > 0 then return total end
         end
     end
+    if growtopia and growtopia.checkInventory then
+        local ok, has = pcall(growtopia.checkInventory, targetID)
+        if ok and has == true then return 1 end
+    end
     return 0
+end
+
+local function forEachWorldObject(fn)
+    local getFn = getObjectList or getObjects or getWorldObjects
+    if not getFn then return 0 end
+    local ok, objs = pcall(getFn)
+    if not ok or not objs then return 0 end
+    local container = objs
+    pcall(function()
+        if type(objs) == "table" and objs.objects then container = objs.objects end
+    end)
+    local seen = 0
+    local function processObj(obj)
+        if not obj then return end
+        local oid, uid, px, py = nil, nil, nil, nil
+        pcall(function() oid = tonumber(obj.itemid or obj.itemId or obj.item_id) end)
+        pcall(function() uid = tonumber(obj.id or obj.oid or obj.netid) end)
+        pcall(function()
+            if obj.pos then px = tonumber(obj.pos.x or obj.pos[1]); py = tonumber(obj.pos.y or obj.pos[2]) end
+        end)
+        if not px then pcall(function() px = tonumber(obj.x or obj.posX) end) end
+        if not py then pcall(function() py = tonumber(obj.y or obj.posY) end) end
+        if oid and oid > 0 and uid and px and py then
+            seen = seen + 1
+            fn(oid, uid, px, py)
+        end
+    end
+    pcall(function() for _, o in pairs(container) do processObj(o) end end)
+    if seen == 0 then
+        local okLen, n = pcall(function() return #container end)
+        if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
+        local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 1000
+        local misses = 0
+        for i = 0, maxI do
+            local okI, o = pcall(function() return container[i] end)
+            if okI and o then
+                local prev = seen; processObj(o)
+                if seen > prev then misses = 0 else misses = misses + 1 end
+                if misses >= 50 and i > 10 then break end
+            else
+                misses = misses + 1
+                if misses >= 50 and i > 10 then break end
+            end
+        end
+    end
+    return seen
 end
 
 local function applyCheats()
@@ -343,22 +436,18 @@ local function restockItem(farmRow, itemID)
         if not SB.STATE.running then return false end
         if warpToWorld(st.name, st.door) then
             safeSleep(600)
-            if editToggle then pcall(editToggle, "Auto Collect", true) end
-            local getObjs = getObjects or getObjectList
-            local okO, objs = getObjs and pcall(getObjs) or false, nil
-            if okO and type(objs) == "table" then
-                for _, o in pairs(objs) do
-                    if not SB.STATE.running or getInvCount(itemID) >= 180 then break end
-                    local oid = tonumber(o and (o.itemid or o.itemId or o.item_id or 0)) or 0
-                    if o and o.id and oid == itemID then
-                        local rx = (o.pos and o.pos.x) or o.posX or o.x or 0
-                        local ry = (o.pos and o.pos.y) or o.posY or o.y or 0
-                        moveSafeTo(math.floor((rx + 10) / 32), math.floor((ry + 10) / 32))
-                        if sendPacketRaw then pcall(sendPacketRaw, false, { type = 11, value = o.id, x = rx, y = ry }) end
-                        safeSleep(160)
-                    end
-                end
+            if editToggle then
+                pcall(editToggle, "Anti Collect", false)
+                pcall(editToggle, "Auto Collect", true)
             end
+            forEachWorldObject(function(oid, uid, rx, ry)
+                if not SB.STATE.running or getInvCount(itemID) >= 180 then return end
+                if oid == itemID then
+                    moveSafeTo(math.floor((rx + 10) / 32), math.floor((ry + 10) / 32))
+                    if sendPacketRaw then pcall(sendPacketRaw, false, { type = 11, value = uid, x = rx, y = ry }) end
+                    safeSleep(160)
+                end
+            end)
             if getInvCount(itemID) > 0 then
                 return warpToWorld(farmRow.name, farmRow.door)
             end

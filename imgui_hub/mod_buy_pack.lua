@@ -224,18 +224,65 @@ local function getCurrentWorldSafe()
     return ""
 end
 
+local function readInvItemFields(it)
+    local t = type(it)
+    if t ~= "table" and t ~= "userdata" then return nil, nil end
+    local id, amt = nil, nil
+    pcall(function() id = tonumber(it.id or it.itemid or it.itemID or it.item_id) end)
+    pcall(function() amt = tonumber(it.amount or it.count or it.cnt) end)
+    return id, amt
+end
+
 local function getInvCount(id)
-    id = tonumber(id) or 0
-    if id <= 0 then return 0 end
+    local targetID = tonumber(id) or 0
+    if targetID <= 0 then return 0 end
+    if growtopia and growtopia.checkInventoryCount then
+        local ok, cnt = pcall(growtopia.checkInventoryCount, targetID)
+        if ok and tonumber(cnt) and tonumber(cnt) > 0 then return tonumber(cnt) end
+    end
     if getInventory then
         local ok, inv = pcall(getInventory)
-        if ok and type(inv) == "table" then
-            for _, it in pairs(inv) do
-                local iid = tonumber(it.id or it.itemid or it.itemId or 0) or 0
-                if iid == id then return tonumber(it.count or it.amount or 0) or 0 end
+        if ok and (type(inv) == "table" or type(inv) == "userdata") then
+            local container = inv
+            pcall(function()
+                if inv.items ~= nil and (type(inv.items) == "table" or type(inv.items) == "userdata") then
+                    container = inv.items
+                end
+            end)
+            local total, seen = 0, 0
+            pcall(function()
+                for _, it in pairs(container) do
+                    local iid, amt = readInvItemFields(it)
+                    if iid and iid > 0 then
+                        seen = seen + 1
+                        if iid == targetID and (amt or 0) > 0 then total = total + amt end
+                    end
+                end
+            end)
+            if seen == 0 then
+                local okLen, n = pcall(function() return #container end)
+                if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
+                local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 400
+                local misses = 0
+                for i = 0, maxI do
+                    local okI, it = pcall(function() return container[i] end)
+                    local iid, amt = nil, nil
+                    if okI then iid, amt = readInvItemFields(it) end
+                    if iid and iid > 0 then
+                        misses = 0
+                        if iid == targetID and (amt or 0) > 0 then total = total + amt end
+                    else
+                        misses = misses + 1
+                        if misses >= 50 and i > 5 then break end
+                    end
+                end
             end
-            return 0
+            if total > 0 then return total end
         end
+    end
+    if growtopia and growtopia.checkInventory then
+        local ok, has = pcall(growtopia.checkInventory, targetID)
+        if ok and has == true then return 1 end
     end
     return 0
 end
