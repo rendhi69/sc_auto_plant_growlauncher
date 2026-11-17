@@ -1,9 +1,9 @@
 -- ============================================================================
--- LOADER BOREN HUB IMGUI (MODULAR AUTO-FETCH & LOAD DARI GITHUB)
+-- LOADER BOREN HUB IMGUI - ALL-IN-ONE MODULAR (AUTO-FETCH & LOAD DARI GITHUB)
 -- File: loader_hub_imgui.lua
 -- ============================================================================
--- Ringan & modular: hanya melakukan fetch + load modul Engine dan modul UI
--- secara terpisah dari GitHub (tanpa full code di satu file).
+-- Ringan & 100% modular: hanya memuat (load) tiap fitur dari file terpisah di
+-- GitHub (Plant, Dirt Farm, Build Soil, Buy Pack + DebugPack DB).
 -- ============================================================================
 
 local BASE_RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/"
@@ -18,16 +18,18 @@ local function notifyMsg(msg)
     elseif growtopia and growtopia.notify then pcall(growtopia.notify, tostring(msg)) end
 end
 
-local function loadRemoteModule(relPath)
-    local url = BASE_RAW_URL .. relPath .. "?v=" .. CACHE_TAG
-    local code = nil
-
-    if fetch then
-        local okF, res = pcall(fetch, url)
-        if okF and type(res) == "string" and res ~= "" and not res:match("^404") and not res:match("^<!DOCTYPE") then
-            code = res
-        end
+local function fetchRawUrl(fullUrl)
+    if not fetch then return nil end
+    local sep = fullUrl:find("?", 1, true) and "&" or "?"
+    local okF, res = pcall(fetch, fullUrl .. sep .. "v=" .. CACHE_TAG)
+    if okF and type(res) == "string" and res ~= "" and not res:match("^404") and not res:match("^<!DOCTYPE") then
+        return res
     end
+    return nil
+end
+
+local function loadRemoteModule(relPath)
+    local code = fetchRawUrl(BASE_RAW_URL .. relPath)
 
     if not code or code == "" then
         local localRoots = {
@@ -70,36 +72,49 @@ local function loadRemoteModule(relPath)
 end
 
 local HUB = {
-    loadModule = loadRemoteModule,
-    tabs       = {},
-    logs       = {},
+    loadModule  = loadRemoteModule,
+    fetchRawUrl = fetchRawUrl,
+    tabs        = {},
+    logs        = {},
 }
 
 function HUB.addLog(line)
     table.insert(HUB.logs, 1, tostring(line or ""))
-    if #HUB.logs > 60 then table.remove(HUB.logs) end
+    if #HUB.logs > 80 then table.remove(HUB.logs) end
 end
 
-local function requireHubMod(stepLabel, relPath)
+local function requireHubMod(stepLabel, relPath, optional)
     logMsg(stepLabel .. " memuat " .. relPath .. "...")
     local mod, err = loadRemoteModule(relPath)
     if not mod then
         logMsg("`4" .. tostring(err))
-        notifyMsg(tostring(err))
+        if not optional then notifyMsg(tostring(err)) end
         return nil
     end
     return mod
 end
 
--- [1/2] Muat Modul Engine Auto Plant
-HUB.plant = requireHubMod("[1/2]", "imgui_hub/plant_engine.lua")
+-- [1/5] Modul Engine Auto Plant
+HUB.plant = requireHubMod("[1/5]", "imgui_hub/plant_engine.lua", false)
 if not HUB.plant then return end
 HUB.plant.init(HUB)
 
--- [2/2] Muat Modul UI ImGui (Plant / Settings / Logs)
-HUB.ui = requireHubMod("[2/2]", "imgui_hub/tab_plant.lua")
+-- [2/5] Modul Auto Dirt Farm (Engine + UI)
+HUB.dirt_farm = requireHubMod("[2/5]", "imgui_hub/mod_dirt_farm.lua", true)
+if HUB.dirt_farm and HUB.dirt_farm.init then HUB.dirt_farm.init(HUB) end
+
+-- [3/5] Modul Auto Build Soil (Engine + UI)
+HUB.build_soil = requireHubMod("[3/5]", "imgui_hub/mod_soil_builder.lua", true)
+if HUB.build_soil and HUB.build_soil.init then HUB.build_soil.init(HUB) end
+
+-- [4/5] Modul Auto Buy Pack (Engine + UI + DebugPack GitHub DB)
+HUB.buy_pack = requireHubMod("[4/5]", "imgui_hub/mod_buy_pack.lua", true)
+if HUB.buy_pack and HUB.buy_pack.init then HUB.buy_pack.init(HUB) end
+
+-- [5/5] Modul Shell Hub + Sidebar + UI Plant + Hooks
+HUB.ui = requireHubMod("[5/5]", "imgui_hub/tab_plant.lua", false)
 if not HUB.ui then return end
 HUB.ui.init(HUB)
 
-logMsg("`2Boren Hub ImGui siap! (Ketik /hub di chat untuk buka/tutup)")
-notifyMsg("Boren Hub ImGui Siap! (/hub)")
+logMsg("`2Boren Hub (Plant, Dirt Farm, Build Soil, Buy Pack) siap! (/hub)")
+notifyMsg("Boren Hub All-in-One Siap! (/hub)")

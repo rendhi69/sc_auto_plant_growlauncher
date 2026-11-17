@@ -502,6 +502,23 @@ end
 -- ============================================================================
 -- SIDEBAR KIRI: KHUSUS NAMA KATEGORI FITUR SAJA (TANPA SEPARATOR!)
 -- ============================================================================
+local loadingModFlag = {}
+
+local function triggerLazyLoad(modKey, relPath)
+    if loadingModFlag[modKey] or not HUB or not HUB.loadModule then return end
+    loadingModFlag[modKey] = true
+    local function doLoad()
+        local mod = HUB.loadModule(relPath)
+        if mod then
+            if type(mod.init) == "function" then pcall(mod.init, HUB) end
+            HUB[modKey] = mod
+        end
+        loadingModFlag[modKey] = false
+    end
+    if runCoroutine then pcall(runCoroutine, doLoad)
+    else doLoad() end
+end
+
 local function renderLeftFeatureSidebar(colW)
     local btnW = math.max(90, colW - 18)
     ImGui.Text("FITUR")
@@ -513,6 +530,9 @@ local function renderLeftFeatureSidebar(colW)
     end
     if fullBtn(activeFeature == "build_soil" and "[ Build Soil ]" or "Build Soil", btnW) then
         activeFeature = "build_soil"
+    end
+    if fullBtn(activeFeature == "buy_pack" and "[ Buy Pack ]" or "Buy Pack", btnW) then
+        activeFeature = "buy_pack"
     end
 
     ImGui.Text("")
@@ -556,14 +576,34 @@ local function renderRightPanel()
         end
 
     elseif activeFeature == "dirt_farm" then
-        ImGui.Text("Kategori: Dirt Farm")
-        ImGui.Separator()
-        ImGui.TextWrapped("Slot kategori Dirt Farm sudah siap dihubungkan ke modul Dirt Farm via load (terpisah).")
+        if HUB.dirt_farm and type(HUB.dirt_farm.render) == "function" then
+            HUB.dirt_farm.render(HUB)
+        else
+            ImGui.Text("Modul Dirt Farm belum dimuat.")
+            if autoBtn(loadingModFlag.dirt_farm and "Memuat..." or " Muat Modul Dirt Farm ") then
+                triggerLazyLoad("dirt_farm", "imgui_hub/mod_dirt_farm.lua")
+            end
+        end
 
     elseif activeFeature == "build_soil" then
-        ImGui.Text("Kategori: Build Soil")
-        ImGui.Separator()
-        ImGui.TextWrapped("Slot kategori Build Soil sudah siap dihubungkan ke modul Build Soil via load (terpisah).")
+        if HUB.build_soil and type(HUB.build_soil.render) == "function" then
+            HUB.build_soil.render(HUB)
+        else
+            ImGui.Text("Modul Build Soil belum dimuat.")
+            if autoBtn(loadingModFlag.build_soil and "Memuat..." or " Muat Modul Build Soil ") then
+                triggerLazyLoad("build_soil", "imgui_hub/mod_soil_builder.lua")
+            end
+        end
+
+    elseif activeFeature == "buy_pack" then
+        if HUB.buy_pack and type(HUB.buy_pack.render) == "function" then
+            HUB.buy_pack.render(HUB)
+        else
+            ImGui.Text("Modul Buy Pack belum dimuat.")
+            if autoBtn(loadingModFlag.buy_pack and "Memuat..." or " Muat Modul Buy Pack ") then
+                triggerLazyLoad("buy_pack", "imgui_hub/mod_buy_pack.lua")
+            end
+        end
     end
 end
 
@@ -655,22 +695,37 @@ local function handleSendPacket(pktType, pktStr)
 end
 
 local function handleSendPacketRaw(pkt)
-    if type(pkt) ~= "table" or not HUB or not HUB.plant then return false end
-    if tonumber(pkt.type) == 11 and HUB.plant.CFG.ignore_gems then
-        local objUID = tonumber(pkt.value) or 0
-        local getObjsFn = getObjects or getObjectList
-        if getObjsFn then
-            local ok, objs = pcall(getObjsFn)
-            if ok and type(objs) == "table" then
-                for _, o in pairs(objs) do
-                    if o and tonumber(o.id) == objUID then
-                        local oid = tonumber(o.itemid or o.itemId or o.item_id or 0) or 0
-                        if oid == 112 then return true end
-                        break
+    if type(pkt) ~= "table" or not HUB then return false end
+    if tonumber(pkt.type) == 11 then
+        -- Anti-Take untuk Auto Buy Pack saat sedang drop item
+        if HUB.buy_pack and HUB.buy_pack.STATE and HUB.buy_pack.STATE.anti_take_active then
+            return true
+        end
+        -- Ignore Gems untuk Auto Plant
+        if HUB.plant and HUB.plant.CFG and HUB.plant.CFG.ignore_gems then
+            local objUID = tonumber(pkt.value) or 0
+            local getObjsFn = getObjects or getObjectList
+            if getObjsFn then
+                local ok, objs = pcall(getObjsFn)
+                if ok and type(objs) == "table" then
+                    for _, o in pairs(objs) do
+                        if o and tonumber(o.id) == objUID then
+                            local oid = tonumber(o.itemid or o.itemId or o.item_id or 0) or 0
+                            if oid == 112 then return true end
+                            break
+                        end
                     end
                 end
             end
         end
+    end
+    return false
+end
+
+local function handleVariant(var)
+    if HUB and HUB.buy_pack and type(HUB.buy_pack.handleVariant) == "function" then
+        local ok, blocked = pcall(HUB.buy_pack.handleVariant, var)
+        if ok and blocked == true then return true end
     end
     return false
 end
@@ -683,6 +738,7 @@ function UI.init(hubCtx)
     if addHook then
         pcall(addHook, handleSendPacket, "onsendpacket")
         pcall(addHook, handleSendPacketRaw, "onsendpacketraw")
+        pcall(addHook, handleVariant, "onvariant")
     end
     if applyHook then
         pcall(applyHook)
