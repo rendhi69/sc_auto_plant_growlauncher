@@ -582,8 +582,14 @@ local function renderFrame()
     end
 
     if not windowOpen then
-        if ImGui.Begin("Boren Hub") then
-            if autoBtn(" Buka Boren Hub ") then
+        if ImGui.SetNextWindowPos and ImVec2 then
+            pcall(ImGui.SetNextWindowPos, ImVec2(24, 150), (ImGui.Cond and ImGui.Cond.Once) or 2)
+        end
+        if ImGui.SetNextWindowSize and ImVec2 then
+            pcall(ImGui.SetNextWindowSize, ImVec2(195, 110), (ImGui.Cond and ImGui.Cond.Always) or 1)
+        end
+        if ImGui.Begin("Hub##boren_mini") then
+            if fullBtn("Buka Hub", 175) then
                 windowOpen = true
             end
         end
@@ -595,7 +601,7 @@ local function renderFrame()
         pcall(ImGui.SetNextWindowSize, ImVec2(780, 470), (ImGui.Cond and ImGui.Cond.Once) or 2)
     end
 
-    if ImGui.Begin("Boren Hub") then
+    if ImGui.Begin("Boren Hub##boren_main") then
         local winW = safeWinW()
         local sideW = math.max(130, math.floor(winW * 0.20))
 
