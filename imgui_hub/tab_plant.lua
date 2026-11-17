@@ -13,7 +13,7 @@
 local UI = {}
 
 local HUB = nil
-local activeFeature = "plant"      -- "plant" | "dirt_farm" | "build_soil"
+local activeFeature = "dashboard"  -- "dashboard" | "plant" | "dirt_farm" | "build_soil" | "buy_pack"
 local activePlantSub = "worlds"    -- "worlds" | "storage" | "settings" | "logs"
 local windowOpen = true
 
@@ -523,6 +523,216 @@ local function renderPlantLogsSub()
 end
 
 -- ============================================================================
+-- DASHBOARD UTAMA (INFO MODUL + HOT-RELOAD UPDATE + LINK DISCORD & GITHUB RAW)
+-- ============================================================================
+local DEFAULT_LINKS = {
+    discord       = "https://discord.gg/borenstore",
+    github_repo   = "https://github.com/rendhi69/sc_auto_plant_growlauncher",
+    raw_loader    = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/loader_hub_imgui.lua",
+    raw_debugpack = "https://raw.githubusercontent.com/rendhi69/data-_id_item/main/debugpack.txt",
+}
+
+local fallbackReloading = false
+local packDbReloading = false
+
+local function getHubLink(key)
+    if HUB and HUB.LINKS and HUB.LINKS[key] and HUB.LINKS[key] ~= "" then
+        return tostring(HUB.LINKS[key])
+    end
+    return tostring(DEFAULT_LINKS[key] or "")
+end
+
+local function copyLinkToClipboard(label, url)
+    if ImGui and ImGui.SetClipboardText then
+        pcall(ImGui.SetClipboardText, tostring(url or ""))
+        setNotice(label .. " disalin ke clipboard!")
+    else
+        setNotice("Clipboard tidak tersedia; salin manual dari kotak.")
+    end
+end
+
+-- Fallback Hot-Reload bila user masih memakai loader lama sebelum loader_hub_imgui.lua di-update
+local function triggerHotReloadAll()
+    if HUB and type(HUB.reloadAll) == "function" then
+        setNotice("Mengambil update terbaru dari GitHub...")
+        HUB.reloadAll(function(st)
+            setNotice(tostring(st or "Update selesai!"))
+        end)
+        return
+    end
+    if fallbackReloading or not HUB then return end
+    fallbackReloading = true
+    HUB.reload_status = "Mengambil update dari GitHub..."
+    setNotice("Mengambil update terbaru dari GitHub...")
+
+    local function runner()
+        local ok, err = xpcall(function()
+            local base = (HUB.BASE_RAW_URL and HUB.BASE_RAW_URL ~= "")
+                and HUB.BASE_RAW_URL
+                or "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/"
+            local freshTag = tostring(math.floor((os and os.time and os.time()) or math.random(100000, 999999))) .. "_" .. tostring(math.random(100, 999))
+            for _, k in ipairs({ "plant", "dirt_farm", "build_soil", "buy_pack" }) do
+                if HUB[k] and type(HUB[k].stop) == "function" then pcall(HUB[k].stop) end
+            end
+            local mods = {
+                { key = "plant",      path = "imgui_hub/plant_engine.lua" },
+                { key = "dirt_farm",  path = "imgui_hub/mod_dirt_farm.lua" },
+                { key = "build_soil", path = "imgui_hub/mod_soil_builder.lua" },
+                { key = "buy_pack",   path = "imgui_hub/mod_buy_pack.lua" },
+                { key = "ui",         path = "imgui_hub/tab_plant.lua" },
+            }
+            local okCnt = 0
+            local loaderFn = loadstring or load
+            for _, m in ipairs(mods) do
+                if fetch then
+                    local okF, code = pcall(fetch, base .. m.path .. "?v=" .. freshTag)
+                    if okF and type(code) == "string" and code ~= "" and not code:match("^404") then
+                        local chunk = loaderFn(code)
+                        if chunk then
+                            local okR, modObj = pcall(chunk)
+                            if okR and modObj then
+                                HUB[m.key] = modObj
+                                if type(modObj.init) == "function" then pcall(modObj.init, HUB) end
+                                okCnt = okCnt + 1
+                            end
+                        end
+                    end
+                end
+            end
+            HUB.reload_status = string.format("Update OK (%d/5 modul)", okCnt)
+            setNotice(HUB.reload_status)
+        end, function(e) return tostring(e) end)
+        if not ok then
+            HUB.reload_status = "Update gagal: " .. tostring(err)
+            setNotice(HUB.reload_status)
+        end
+        fallbackReloading = false
+    end
+
+    if runCoroutine then pcall(runCoroutine, runner)
+    else coroutine.resume(coroutine.create(runner)) end
+end
+
+local function triggerReloadPackDb()
+    if packDbReloading or not HUB or not HUB.buy_pack or type(HUB.buy_pack.loadPackDatabase) ~= "function" then
+        setNotice("Modul Buy Pack belum aktif.")
+        return
+    end
+    packDbReloading = true
+    setNotice("Memuat ulang database DebugPack...")
+    local function runner()
+        if HUB.refreshCacheTag then pcall(HUB.refreshCacheTag) end
+        pcall(HUB.buy_pack.loadPackDatabase)
+        local cnt = (HUB.buy_pack.STATE and HUB.buy_pack.STATE.pack_db) and #HUB.buy_pack.STATE.pack_db or 0
+        setNotice("Database DebugPack diperbarui (" .. tostring(cnt) .. " pack)!")
+        packDbReloading = false
+    end
+    if runCoroutine then pcall(runCoroutine, runner)
+    else coroutine.resume(coroutine.create(runner)) end
+end
+
+local function getModSummaryText(mod, extraUnit)
+    if not mod then return "Belum dimuat" end
+    local st = mod.STATE or {}
+    local runTag = st.enabled and "ON" or "Ready"
+    local cnt = (type(st.rows) == "table") and #st.rows or 0
+    return string.format("%s | %s (%d %s)", runTag, tostring(st.status_text or "Idle"), cnt, extraUnit or "world")
+end
+
+local function renderDashboardPanel()
+    local availW = safeAvailX()
+    local curWorld = "-"
+    if getCurrentWorldName then
+        local okW, wn = pcall(getCurrentWorldName)
+        if okW and type(wn) == "string" and wn ~= "" then curWorld = wn:upper() end
+    end
+    local curGems = 0
+    if getGems then
+        local okG, g = pcall(getGems)
+        if okG and tonumber(g) then curGems = math.floor(tonumber(g)) end
+    end
+
+    ImGui.Text("BOREN STORE - ALL-IN-ONE HUB (MODULAR)")
+    if uiNotice ~= "" then
+        ImGui.Text("Info: " .. uiNotice)
+    end
+    ImGui.Separator()
+
+    -- 1. RINGKASAN STATUS & HOT-RELOAD UPDATE
+    local isReloading = (HUB and HUB.reloading == true) or fallbackReloading
+    if ImGui.BeginTable("BorenDashStatus", 2) then
+        renderOptRow("World / Gems", function()
+            ImGui.Text(string.format("%s | %d Gems", curWorld, curGems))
+        end)
+        renderOptRow("Status Update", function()
+            ImGui.Text(tostring((HUB and HUB.reload_status) or "Siap"))
+        end)
+        renderOptRow("Auto Plant", function()
+            ImGui.Text(getModSummaryText(HUB and HUB.plant, "world"))
+        end)
+        renderOptRow("Dirt Farm", function()
+            ImGui.Text(getModSummaryText(HUB and HUB.dirt_farm, "world"))
+        end)
+        renderOptRow("Build Soil", function()
+            ImGui.Text(getModSummaryText(HUB and HUB.build_soil, "world"))
+        end)
+        renderOptRow("Buy Pack", function()
+            local bp = HUB and HUB.buy_pack
+            if not bp then
+                ImGui.Text("Belum dimuat")
+            else
+                local st = bp.STATE or {}
+                local dbN = (type(st.pack_db) == "table") and #st.pack_db or 0
+                ImGui.Text(string.format("%s | %s (%d pack)", st.enabled and "ON" or "Ready", tostring(st.status_text or "Idle"), dbN))
+            end
+        end)
+        ImGui.EndTable()
+    end
+
+    if autoBtn(isReloading and "  Sedang Update...  ##dash_rl" or "  Refresh / Update Semua Script  ##dash_rl") then
+        if not isReloading then
+            triggerHotReloadAll()
+        end
+    end
+    ImGui.SameLine()
+    if autoBtn(packDbReloading and " Memuat DB... ##dash_db" or " Reload DB Pack ##dash_db") then
+        if not packDbReloading then
+            triggerReloadPackDb()
+        end
+    end
+
+    ImGui.Separator()
+
+    -- 2. LINK DISCORD & GITHUB RAW SCRIPT
+    ImGui.Text("Link Komunitas & GitHub Raw Script:")
+    local linkBoxW = math.max(130, math.floor(availW * 0.50) - 92)
+
+    local function renderLinkRow(label, key, idSuffix)
+        local url = getHubLink(key)
+        renderOptRow(label, function()
+            ImGui.PushItemWidth(linkBoxW)
+            ImGui.InputText("##dash_lnk_" .. idSuffix, url, 256)
+            ImGui.PopItemWidth()
+            ImGui.SameLine()
+            if autoBtn(" Copy ##cp_" .. idSuffix) then
+                copyLinkToClipboard(label, url)
+            end
+        end)
+    end
+
+    if ImGui.BeginTable("BorenDashLinks", 2) then
+        renderLinkRow("Discord Server", "discord", "dc")
+        renderLinkRow("GitHub Repo", "github_repo", "gh")
+        renderLinkRow("Raw Loader Hub", "raw_loader", "raw")
+        renderLinkRow("Raw DebugPack", "raw_debugpack", "dbp")
+        ImGui.EndTable()
+    end
+
+    ImGui.Separator()
+    ImGui.TextWrapped("Tip: Tekan 'Refresh / Update Semua Script' (atau chat /reload) untuk mengambil update terbaru dari GitHub tanpa tutup Growlauncher. Chat /hub untuk sembunyikan/buka UI.")
+end
+
+-- ============================================================================
 -- SIDEBAR KIRI: KHUSUS NAMA KATEGORI FITUR SAJA (TANPA SEPARATOR!)
 -- ============================================================================
 local loadingModFlag = {}
@@ -544,7 +754,10 @@ end
 
 local function renderLeftFeatureSidebar(colW)
     local btnW = math.max(90, colW - 18)
-    ImGui.Text("FITUR")
+    ImGui.Text("MENU")
+    if fullBtn(activeFeature == "dashboard" and "[ Dashboard ]" or "Dashboard", btnW) then
+        activeFeature = "dashboard"
+    end
     if fullBtn(activeFeature == "plant" and "[ Plant ]" or "Plant", btnW) then
         activeFeature = "plant"
     end
@@ -568,7 +781,10 @@ end
 -- PANEL KANAN: SUB-MENU ATAS + KONTEN KATEGORI AKTIF
 -- ============================================================================
 local function renderRightPanel()
-    if activeFeature == "plant" then
+    if activeFeature == "dashboard" then
+        renderDashboardPanel()
+
+    elseif activeFeature == "plant" then
         -- BARIS ATAS (mengisi bagian atas kanan): sub-menu khusus kategori Plant
         if autoBtn(activePlantSub == "worlds" and "[ List World ]" or "List World") then
             activePlantSub = "worlds"
@@ -711,6 +927,9 @@ local function handleSendPacket(pktType, pktStr)
                     pcall(LogToConsole, "`e[Boren Hub] `wUI " .. (windowOpen and "`2DITAMPILKAN" or "`4DISEMBUNYIKAN"))
                 end
                 return true
+            elseif cmd == "/reload" then
+                triggerHotReloadAll()
+                return true
             end
         end
     end
@@ -753,18 +972,36 @@ local function handleVariant(var)
     return false
 end
 
+UI.onSendPacket    = handleSendPacket
+UI.onSendPacketRaw = handleSendPacketRaw
+UI.onVariant       = handleVariant
+
 function UI.init(hubCtx)
     HUB = hubCtx
+    _G.__BOREN_HUB_UI = UI
     OnDrawImGui = renderFrame
     onDrawImGui = renderFrame
 
-    if addHook then
-        pcall(addHook, handleSendPacket, "onsendpacket")
-        pcall(addHook, handleSendPacketRaw, "onsendpacketraw")
-        pcall(addHook, handleVariant, "onvariant")
-    end
-    if applyHook then
-        pcall(applyHook)
+    -- Pasang proxy hook 1x saja agar Hot-Reload tidak pernah menduplikasi hook!
+    if not _G.__BOREN_HUB_HOOKS_INSTALLED then
+        _G.__BOREN_HUB_HOOKS_INSTALLED = true
+        if addHook then
+            pcall(addHook, function(t, s)
+                local u = _G.__BOREN_HUB_UI
+                return (u and u.onSendPacket) and u.onSendPacket(t, s) or false
+            end, "onsendpacket")
+            pcall(addHook, function(pkt)
+                local u = _G.__BOREN_HUB_UI
+                return (u and u.onSendPacketRaw) and u.onSendPacketRaw(pkt) or false
+            end, "onsendpacketraw")
+            pcall(addHook, function(var)
+                local u = _G.__BOREN_HUB_UI
+                return (u and u.onVariant) and u.onVariant(var) or false
+            end, "onvariant")
+        end
+        if applyHook then
+            pcall(applyHook)
+        end
     end
 end
 
