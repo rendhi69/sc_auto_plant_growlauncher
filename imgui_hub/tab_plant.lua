@@ -719,33 +719,76 @@ local function triggerReloadPackDb()
     else coroutine.resume(coroutine.create(runner)) end
 end
 
-local animTick = 0
 local dcCopiedUntil = 0
 local ghCopiedUntil = 0
 local vectorLogoOn = true
 
--- Pixel-accurate 28x28 scanline spans diekstrak langsung dari logo Discord & GitHub asli
-local DC_SPANS = {
-    {4,8,10},{4,18,20},{5,6,9},{5,12,16},{5,19,22},{6,4,7},{6,8,20},{6,21,24},
-    {7,4,24},{8,3,25},{9,3,25},{10,2,26},{11,2,26},{12,2,26},
-    {13,1,9},{13,11,17},{13,19,27},{14,1,8},{14,12,16},{14,20,27},
-    {15,1,8},{15,12,16},{15,20,27},{16,1,8},{16,12,16},{16,20,27},
-    {17,1,9},{17,11,17},{17,19,27},{18,1,27},{19,1,27},{20,1,27},
-    {21,2,7},{21,9,19},{21,21,26},{22,3,9},{22,19,25},{23,6,9},{23,19,22},
-}
-
-local GH_SPANS = {
-    {1,10,18},{2,8,20},{3,6,22},{4,5,23},{5,4,24},{6,3,6},{6,9,18},{6,22,25},
-    {7,3,6},{7,22,25},{8,2,6},{8,22,26},{9,2,6},{9,22,26},{10,1,5},{10,22,26},
-    {11,1,5},{11,23,27},{12,1,5},{12,23,27},{13,1,5},{13,23,27},{14,1,5},{14,23,27},
-    {15,1,5},{15,23,27},{16,1,5},{16,22,27},{17,1,5},{17,22,27},{18,2,6},{18,21,26},
-    {19,2,4},{19,6,8},{19,20,26},{20,2,4},{20,7,10},{20,17,25},{21,3,5},{21,8,10},{21,17,25},
-    {22,4,5},{22,18,24},{23,5,6},{23,18,23},{24,6,10},{24,18,22},{25,7,10},{25,18,21},{26,9,10},{26,18,19},
-}
+local function nowSec()
+    if getTime then
+        local ok, ms = pcall(getTime)
+        if ok and tonumber(ms) then return tonumber(ms) / 1000 end
+    end
+    if os and os.clock then return os.clock() end
+    return 0
+end
 
 local function colU32(r, g, b, a)
     return math.floor(r) + math.floor(g) * 256 + math.floor(b) * 65536 + math.floor(a or 255) * 16777216
 end
+
+-- 64x64 Full-Color Anti-Aliased Raster Image (diekstrak langsung pixel-per-pixel dari gambar referensi)
+local RASTER_ALPHA = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$"
+local RASTER_MAP = {}
+for i = 1, #RASTER_ALPHA do
+    RASTER_MAP[RASTER_ALPHA:sub(i, i)] = i - 1
+end
+
+local function decodeRaster(encoded, pal)
+    local runs = {}
+    local n = #encoded
+    local i = 1
+    while i + 3 <= n do
+        local y  = RASTER_MAP[encoded:sub(i, i)] or 0
+        local sx = RASTER_MAP[encoded:sub(i + 1, i + 1)] or 0
+        local ex = RASTER_MAP[encoded:sub(i + 2, i + 2)] or 0
+        local ci = tonumber(encoded:sub(i + 3, i + 3)) or 1
+        local col = pal[ci + 1] or pal[#pal]
+        runs[#runs + 1] = { y, sx, ex, col }
+        i = i + 4
+    end
+    return runs
+end
+
+local DC_BG_COL = colU32(3, 24, 41, 255)
+local DC_PAL = {
+    colU32(3, 24, 41, 255),
+    colU32(31, 51, 84, 255),
+    colU32(58, 78, 126, 255),
+    colU32(86, 105, 169, 255),
+    colU32(113, 132, 211, 255),
+    colU32(141, 159, 254, 255),
+}
+local DC_RASTER = decodeRaster(
+    "DKM1DMO2DOP1Dcd1Ddg2Dgi1EIJ1EJK2EKN5ENO4EOP2Ecd2Ede3Eef4Efh5Ehi3Eij2Ejk1FFG1FGH2FHI3FIK5FKL4FLM3FMN2FRa2Fab1Fef1Ffg2Fgh3Fhj5Fjk4Fkl3Flm1GEF1GFG4GGI5GIJ4GJK2GKL1GMN1GNO2GOR3GRS4GSa5Gab4Gbe3Gef2Ghi2Gij3Gjl5Glm4Gmn3HCD1HDE3HEF4HFH5HHI3HJK1HKM3HMN4HNf5Hfg4Hgh3Hhi2Hjk1Hkl4Hln5Hno4Hop3IBC1ICD3IDF5IFG3IGH2IHJ3IJK4IKi5Iik3Ikl2Ilm3Imn4Inp5Ipq3JBC2JCE5JEF4JFG3JGH4JHk5Jkm4Jmn3Jno4Jop5Jpq4Jqr1KBC4KCE5KEG4KGq5Kqr3LAB1LBq5Lqr4Lrs1M9A1MAB4MBr5Mrs3N9A1NAr5Nrs4O9A3OAs5Ost2P891P9A4PAs5Pst3Q892Q9s5Qst4Qtu1R893R9t5Rtu3S781S894S9t5Stu3T782T8t5Ttu4Tuv1U783U8L5ULM4UMN3UNP1UPQ3UQb5Ubc4Ucd2Udf1Ufg4Ugu5Uuv2V783V8K5VKL4VLM1VQR3VRa5Vab4Vbc2Vfg1Vgh2Vhu5Vuv2W671W784W8K5WKL1WRS3WSa5Wab2Wgh1Whi4Wiu5Wuv2X672X7K5XKL1XRS1XST4XTZ5XZa3Xhi2Xiu5Xuv4Xvw1Y673Y7J5YJK4YKL1YST4YTZ5YZa3Yhi1Yiv5Yvw2Z673Z7J5ZJK4ZKL1ZST4ZTZ5ZZa3Zhi1Ziv5Zvw2a673a7J5aJK4aKL1aST4aTZ5aZa3ahi1aiv5avw2b562b6K5bKL1bRS2bSZ5bZa4bab1bhi3biv5bvw2c562c6K5cKL3cQR2cRS4cSa5cab3cgh1chv5cvw3cwx1d562d6L5dLM4dMN2dPQ2dQb5dbc4dcd1dfg3dgh4dhw5dwx1e562e6M5eMP4ePc5ecf4efw5ewx2f562f6w5fwx2g562g6D5gDE4gEw5gwx2h562h6C5hCD4hDE3hEF4hFm5hmo4how5hwx2i562i6D5iDE4iEG3iGH4iHl5ilm4imn3ino4iow5iwx2j561j674j7F5jFG3jGI2jIJ4jJj5jjk3jkm2jmn4jnv5jvw4jwx1k671k784k8G5kGH4kIJ1kJK2kKL3kLg5kgh4khj2kkl2klm4kmu5kuv4kvw1l781l894l9H5lHI4lIJ2lJK1lLO2lOP3lPc5lcd4ldg2lgh1lij1ljk4lkt5ltu3luv1m891m9A3mAB4mBJ5mJK4mKL3mOP1mPc2mcd1mgh1mhi3mij4mjr5mrs4mst2mtu1nAB1nBC3nCL5nLM4nMN3nfg3ngh4nhp5npq4nqr2nrs1oCD1oDE2oEL5oLM4oMN1ofg2ogn5ono4oop2opq1pEG1pGH3pHL4pLM1pfg1pgl4plm2pmn1qHK1qhi1",
+    DC_PAL
+)
+
+local GH_BG_COL = colU32(4, 24, 40, 255)
+local GH_PAL = {
+    colU32(4, 24, 40, 255),
+    colU32(11, 27, 41, 255),
+    colU32(17, 31, 42, 255),
+    colU32(24, 34, 44, 255),
+    colU32(30, 38, 45, 255),
+    colU32(37, 41, 46, 255),
+}
+local GH_RASTER = decodeRaster(
+    "5RS15Sc26NO16OR36RS46Sb56bc46cf36fg27LM17MN37NO47Of57fg47gh37hi28JK28KL38LM48Mh58hi48ij38jk29GI19IJ29JK39Kj59jl49lm1AFG1AGI4AIm5Amn4Ano1BFG3BGn5Bno4Bop1CDE1CEF3CFH4CHo5Cop4Cpq1DDE3DEp5Dpq4Dqr1ECD2EDE4EEq5Eqr4Ers1FAB1FBC2FCD4FDr5Frs4Fst1G9A1GAB3GBC4GCs5Gst4Gtu1H9A2HAB4HBH5HHI3HIJ2HJK1HKM2HMN4HNh5Hhi3Hik2Hkl1Hlm2Hmn4Hnt5Htu4Huv1I891I9A3IAG5IGH4IHI2IMN1INO3IOf5Ifg4Igh2Imn4Inu5Iuv2J781J893J9A4JAG5JGH4JNP1JPQ3JQR5JRS2JSc1Jcd3Jde4Jef2Jfg1Jmn4Jnu5Juv4Jvw1K782K894K9G5KGH4KHI1KPR1Kde1Kmn4Knv5Kvw2L783L8H5LHI1Lmn4Lnv5Lvw4Lwx1M671M784M8H5MHI1Mmn4Mnw5Mwx2N561N672N7H5NHI1Nmn4Nnx5Nxy1O561O672O7G5OGH4OHI1Omn4Onx5Oxy1P561P673P784P8F5PFG4PGH3PHI1Pmn3Pnx5Pxy2Q563Q6F5QFG4QGH2Qmn1Qno4Qox5Qxy4Qyz1R563R6F5RFG3RGH1Rno2Rox5Rxy4Ryz1S563S6F5SFG3Sno1Sox5Sxy4Syz1T563T6F5TFG3Tno1Tox5Txy4Tyz1U451U563U6F5UFG3Uno1Uop4Upy5Uyz2V452V564V6F5VFG3Vop3Vpy5Vyz3W453W564W6F5WFG3Wop3Wpy5Wyz4X452X564X6F5XFG3Xop3Xpy5Xyz4Y452Y564Y6F5YFG3Yno1Yop4Ypy5Yyz4Z452Z564Z6F5ZFG3Zno1Zoy5Zyz3a451a563a6F5aFG3ano1aoy5ayz2b563b6F5bFG3bGH1bno1box5bxy4byz1c562c6F5cFG4cGH1cno3cox5cxy4cyz1d562d6F5dFG4dGH2dmn1dnx5dxy4dyz1e562e684e8G5eGH3eHI1emn3enx5exy4eyz1f562f684f8H5fHI3fIJ2fkl1flm2fmn4fnx5fxy2g561g673g7I5gIJ3gJK1gjk1gkl3glx5gxy1h672h7J5hJK4hKL2hij1hjk4hkw5hwx4hxy1i671i784i8A5iAE4iEH3iHI4iIL5iLM3iMN2iNO1ifg1igi2iij4ijw5iwx2j782j894j9A5jAC4jCD3jDE2jGH1jHI4jIN5jNO4jOP3jPR2jRS1jcf2jfg3jgv5jvw4jwx1k893k9C5kCE4kEF1kHI4kIQ5kQR4kRS1kcd2kdv5kvw2l892l9E5lEF3lFH1lHI2lIJ3lJQ5lQR2lde4leu5luv3lvw1m891m9A3mAB4mBF5mFG3mGH1mIJ1mJK4mKQ5mQR2mcd1mde4meu5muv2n9A1nAB3nBF5nFG4nGH1nJK1nKL3nLP5nPQ3nde3net5ntu3oAB2oBC4oCF5oFG4oGH2oKP1ode1oes5ost3pAB1pBC2pCD4pDF5pFG4pGH3pHI1pde1per5prs3qBC1qCD3qDG5qGI4qIJ3qJK1qde1qeq5qqr4qrs1rCD1rDF4rFI5rIJ4rJK3rKL2rLQ1rde1rep5rpq4rqr2sDE2sEF3sFH4sHP5sPQ4sQR1sde1seo5sop4spq1tFG1tGH3tHP5tPQ4tQR1tde1ten5tno3top1uFG1uGH2uHI4uIP5uPQ4uQR1ude1uem5umn3vGI1vIJ2vJK4vKP5vPQ4vQR1vde2vek5vkl3vlm1wJK1wKL3wLN4wNP5wPQ4wde1wef4wfi5wij3wjk1xLM1xMN2xNO3xOP4xPQ2xde1xef3xfg4xgh3xhi2xij1yNQ1yeh1",
+    GH_PAL
+)
+
+local TILE_BORDER_COL    = colU32(18, 42, 66, 255)
+local TILE_COPIED_BORDER = colU32(87, 242, 135, 255)
 
 local function getFGDrawList()
     if not ImGui then return nil end
@@ -769,7 +812,7 @@ local function getLastItemRect()
     return x1, y1, x2, y2
 end
 
-local function drawSpanLogoOnLastItem(spans, col, floatY)
+local function drawRasterTileOnLastItem(rasterRuns, bgCol, borderCol)
     local dl = getFGDrawList()
     if not dl or not ImVec2 then return false, "DrawList FG tidak tersedia" end
     local x1, y1, x2, y2 = getLastItemRect()
@@ -777,55 +820,39 @@ local function drawSpanLogoOnLastItem(spans, col, floatY)
 
     local cardW = x2 - x1
     local cardH = y2 - y1
-    local iconSize = math.max(44, math.min(cardW * 0.42, cardH * 0.62))
-    local px = iconSize / 28.0
-    local ox = (x1 + x2 - iconSize) * 0.5
-    local oy = y1 + (cardH * 0.72 - iconSize) * 0.5 + (floatY or 0)
+    local topH  = cardH * 0.74
+    local boxSz = math.max(52, math.min(cardW * 0.56, topH * 0.88))
+    local px    = boxSz / 64.0
+    local ox    = (x1 + x2 - boxSz) * 0.5
+    local oy    = y1 + (topH - boxSz) * 0.5
 
-    local ok, err = pcall(function()
-        for _, sp in ipairs(spans) do
-            local ay = oy + sp[1] * px
-            local by = oy + (sp[1] + 1) * px + 0.6
-            dl:AddRectFilled(ImVec2(ox + sp[2] * px, ay), ImVec2(ox + sp[3] * px, by), col)
-        end
-    end)
-    if not ok then
-        ok, err = pcall(function()
-            for _, sp in ipairs(spans) do
-                local ay = oy + sp[1] * px
-                local by = oy + (sp[1] + 1) * px + 0.6
-                dl:AddRectFilled(ImVec2(ox + sp[2] * px, ay), ImVec2(ox + sp[3] * px, by), col, 0)
+    local function drawAll(withRound)
+        if withRound then
+            dl:AddRectFilled(ImVec2(ox - 1, oy - 1), ImVec2(ox + boxSz + 1, oy + boxSz + 1), borderCol, 0)
+            dl:AddRectFilled(ImVec2(ox, oy), ImVec2(ox + boxSz, oy + boxSz), bgCol, 0)
+            for i = 1, #rasterRuns do
+                local r = rasterRuns[i]
+                local ay = oy + r[1] * px
+                local by = oy + (r[1] + 1) * px + 0.55
+                dl:AddRectFilled(ImVec2(ox + r[2] * px, ay), ImVec2(ox + r[3] * px, by), r[4], 0)
             end
-        end)
+        else
+            dl:AddRectFilled(ImVec2(ox - 1, oy - 1), ImVec2(ox + boxSz + 1, oy + boxSz + 1), borderCol)
+            dl:AddRectFilled(ImVec2(ox, oy), ImVec2(ox + boxSz, oy + boxSz), bgCol)
+            for i = 1, #rasterRuns do
+                local r = rasterRuns[i]
+                local ay = oy + r[1] * px
+                local by = oy + (r[1] + 1) * px + 0.55
+                dl:AddRectFilled(ImVec2(ox + r[2] * px, ay), ImVec2(ox + r[3] * px, by), r[4])
+            end
+        end
+    end
+
+    local ok, err = pcall(drawAll, false)
+    if not ok then
+        ok, err = pcall(drawAll, true)
     end
     return ok, err
-end
-
-local SPIN_FRAMES = { "|", "/", "-", "\\" }
-local CHEV_L = { "  >", " >>", ">>>", ">> " }
-local CHEV_R = { "<  ", "<< ", "<<<", " <<" }
-local MARQUEE_TXT = "   BOREN STORE HUB  *  AUTO PLANT  *  DIRT FARM  *  BUILD SOIL  *  BUY PACK  *  /reload UPDATE  *  /hub HIDE   "
-
-local function getMarqueeSlice(step, width)
-    local full = MARQUEE_TXT .. MARQUEE_TXT
-    local len = #MARQUEE_TXT
-    local startIdx = (step % len) + 1
-    return full:sub(startIdx, startIdx + width - 1)
-end
-
-local function getSlidingBar(step, slots)
-    local pos = (step % slots) + 1
-    local chars = {}
-    for i = 1, slots do
-        if i == pos or i == ((pos % slots) + 1) then
-            chars[i] = "="
-        elseif i == (((pos + 1) % slots) + 1) then
-            chars[i] = ">"
-        else
-            chars[i] = "."
-        end
-    end
-    return "[" .. table.concat(chars) .. "]"
 end
 
 local function isAnyBotActive()
@@ -838,10 +865,8 @@ local function isAnyBotActive()
 end
 
 local function renderDashboardPanel()
-    animTick = animTick + 1
-    local slowStep = math.floor(animTick / 12)
-    local medStep  = math.floor(animTick / 6)
-    local availW   = safeAvailX()
+    local availW = safeAvailX()
+    local tNow   = nowSec()
 
     local curWorld = "-"
     if getCurrentWorldName then
@@ -858,42 +883,33 @@ local function renderDashboardPanel()
     local updStatus   = tostring((HUB and HUB.reload_status) or "Siap")
     local anyRun      = isAnyBotActive()
 
-    -- 1. HEADER & LIVE ANIMATED BANNER
-    local chevIdx = (slowStep % #CHEV_L) + 1
-    local pulseDot = ((slowStep % 2) == 0) and "[*]" or "[o]"
-    local runBadge = anyRun and (pulseDot .. " BOT AKTIF") or (pulseDot .. " STANDBY")
-    ImGui.Text(string.format("%s  BOREN HUB  %s   |   %s", CHEV_L[chevIdx], CHEV_R[chevIdx], runBadge))
-    ImGui.Text(getMarqueeSlice(medStep, 46))
+    -- 1. HEADER STATIS (Tanpa Animasi Bergerak)
+    ImGui.Text(string.format("BOREN HUB  |  Status: %s", anyRun and "BOT AKTIF" or "STANDBY"))
     ImGui.Text(string.format("World: %s  |  Gems: %d  |  %s", curWorld, curGems, updStatus))
     if uiNotice ~= "" then
         ImGui.Text("Info: " .. uiNotice)
     end
     ImGui.Separator()
 
-    -- 2. KARTU LOGO DISCORD & GITHUB ASLI (Scanline HD, klik untuk copy)
+    -- 2. KARTU GAMBAR LOGO DISCORD & GITHUB (64x64 Full-Color Anti-Aliased, Statis)
     local cardW = math.max(150, math.floor(availW * 0.47))
-    local dcCopied = (animTick < dcCopiedUntil)
-    local ghCopied = (animTick < ghCopiedUntil)
+    local dcCopied = (tNow < dcCopiedUntil)
+    local ghCopied = (tNow < ghCopiedUntil)
     local dcLabel  = dcCopied and "Link Tersalin!" or "Discord Boren"
     local ghLabel  = ghCopied and "Link Tersalin!" or "GitHub Boren"
-    local floatDc  = math.sin(animTick * 0.08) * 2.5
-    local floatGh  = math.sin(animTick * 0.08 + 1.6) * 2.5
-
-    local colDc = dcCopied and colU32(87, 242, 135, 255) or colU32(130, 144, 255, 255) -- Discord Blurple #8290FF
-    local colGh = ghCopied and colU32(87, 242, 135, 255) or colU32(208, 215, 222, 255) -- GitHub Silver #D0D7DE
 
     if ImGui.BeginTable("BorenDashCards", 2) then
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
         local dcBtnText = vectorLogoOn
-            and ("\n\n\n\n\n" .. dcLabel .. "\n##card_dc")
+            and ("\n\n\n\n\n\n" .. dcLabel .. "\n##card_dc")
             or  ("\n\n  " .. dcLabel .. "  \n\n##card_dc")
         if fullBtn(dcBtnText, cardW) then
             copyLinkToClipboard("Link Discord Boren", getHubLink("discord"))
-            dcCopiedUntil = animTick + 90
+            dcCopiedUntil = tNow + 2.0
         end
         if vectorLogoOn then
-            local okV, errV = drawSpanLogoOnLastItem(DC_SPANS, colDc, floatDc)
+            local okV, errV = drawRasterTileOnLastItem(DC_RASTER, DC_BG_COL, dcCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
             if not okV then
                 vectorLogoOn = false
                 setNotice("Mode Logo Gambar tidak didukung GL: " .. tostring(errV))
@@ -902,14 +918,14 @@ local function renderDashboardPanel()
 
         ImGui.TableSetColumnIndex(1)
         local ghBtnText = vectorLogoOn
-            and ("\n\n\n\n\n" .. ghLabel .. "\n##card_gh")
+            and ("\n\n\n\n\n\n" .. ghLabel .. "\n##card_gh")
             or  ("\n\n  " .. ghLabel .. "  \n\n##card_gh")
         if fullBtn(ghBtnText, cardW) then
             copyLinkToClipboard("Link GitHub Boren", getHubLink("github_repo"))
-            ghCopiedUntil = animTick + 90
+            ghCopiedUntil = tNow + 2.0
         end
         if vectorLogoOn then
-            local okV, errV = drawSpanLogoOnLastItem(GH_SPANS, colGh, floatGh)
+            local okV, errV = drawRasterTileOnLastItem(GH_RASTER, GH_BG_COL, ghCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
             if not okV then
                 vectorLogoOn = false
                 setNotice("Mode Logo Gambar tidak didukung GL: " .. tostring(errV))
@@ -918,22 +934,17 @@ local function renderDashboardPanel()
         ImGui.EndTable()
     end
 
-    ImGui.Text("Klik logo di atas untuk salin link ke clipboard.")
+    ImGui.Text("Klik gambar logo di atas untuk salin link ke clipboard.")
     ImGui.Separator()
 
-    -- 3. TOMBOL REFRESH / HOT-RELOAD + ANIMASI LOADING SPINNER & PROGRESS BAR
-    local spinChar = SPIN_FRAMES[(medStep % #SPIN_FRAMES) + 1]
-    if isReloading or packDbReloading then
-        ImGui.Text(string.format("[%s] Memuat update %s", spinChar, getSlidingBar(medStep, 14)))
-    end
-
-    if autoBtn(isReloading and ("  [" .. spinChar .. "] Updating...  ##dash_rl") or "  Refresh / Update Script  ##dash_rl") then
+    -- 3. TOMBOL REFRESH / HOT-RELOAD (Statis)
+    if autoBtn(isReloading and "  Updating...  ##dash_rl" or "  Refresh / Update Script  ##dash_rl") then
         if not isReloading then
             triggerHotReloadAll()
         end
     end
     ImGui.SameLine()
-    if autoBtn(packDbReloading and (" [" .. spinChar .. "] Loading DB... ##dash_db") or " Reload DB Pack ##dash_db") then
+    if autoBtn(packDbReloading and " Loading DB... ##dash_db" or " Reload DB Pack ##dash_db") then
         if not packDbReloading then
             triggerReloadPackDb()
         end
