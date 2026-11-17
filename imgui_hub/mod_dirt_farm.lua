@@ -29,12 +29,43 @@ local ITEM = {
     CAVE_BG       = 14,
     CAVE_BG_SEED  = 15,
     PUNCH         = 18,
+    WRENCH        = 32,
     WOOD_PLATFORM = 102,
     SMALL_LOCK    = 202,
     BIG_LOCK      = 204,
     HUGE_LOCK     = 206,
     JAMMER        = 226,
     WORLD_LOCK    = 242,
+    AIR_VENT      = 2810,
+}
+
+local DOOR_ID_PRESETS = {
+    { id = 12,   name = "Door" },
+    { id = 30,   name = "Dungeon Door" },
+    { id = 544,  name = "Orange Portal" },
+    { id = 224,  name = "House Entrance" },
+    { id = 2810, name = "Air Vent" },
+}
+
+local BLOCKER_PRESETS = {
+    { id = 2810, name = "Air Vent" },
+    { id = 12,   name = "Door" },
+    { id = 30,   name = "Dungeon Door" },
+    { id = 60,   name = "Portcullis" },
+    { id = 224,  name = "House Entrance" },
+    { id = 858,  name = "Screen Door" },
+    { id = 544,  name = "Orange Portal" },
+}
+
+local DOOR_NAME_MAP = {
+    [12]   = "Door",
+    [30]   = "Dungeon Door",
+    [60]   = "Portcullis",
+    [224]  = "House Entrance",
+    [544]  = "Orange Portal",
+    [546]  = "Blue Portal",
+    [858]  = "Screen Door",
+    [2810] = "Air Vent",
 }
 
 local LOCK_IDS = {
@@ -51,15 +82,24 @@ local KNOWN_BREAK_HITS = {
 }
 
 DF.CFG = {
-    storage_raw       = "",
-    loop_enabled      = false,
+    storage_raw         = "",
+    loop_enabled        = false,
     -- Find World
-    find_world_mode   = false,
-    find_name_len     = 7,
-    find_use_num      = false,
-    find_target_cnt   = 1,
-    auto_lock_wl      = true,
-    auto_place_jammer = false,
+    find_world_mode     = false,
+    find_name_len       = 7,
+    find_use_num        = false,
+    find_target_cnt     = 1,
+    -- Security: Lock, Jammer, Door ID & Penghalang (Blocker)
+    auto_lock_wl        = true,
+    wl_public           = true,
+    auto_place_sl       = false,
+    auto_place_jammer   = false,
+    use_id_door         = false,
+    id_door_itemid      = 12,     -- Default Door (12)
+    door_id             = "DF123",
+    door_label          = "BOREN STORE",
+    use_blocker_door    = false,
+    blocker_door_itemid = 2810,   -- Default Air Vent (2810)
     -- Break & Build Options
     break_3_mode      = true,   -- Mode Break 3 Tile (y-2, y, y+2 sekaligus)
     break_cave_bg     = true,   -- WAJIB hancurkan Cave Background (t.bg ~= 0)
@@ -217,7 +257,15 @@ function DF.saveData()
         "FINDNUM=" .. (DF.CFG.find_use_num and "1" or "0"),
         "FINDTGT=" .. tostring(tonumber(DF.CFG.find_target_cnt) or 1),
         "AUTOWL=" .. (DF.CFG.auto_lock_wl and "1" or "0"),
+        "WLPUB=" .. (DF.CFG.wl_public and "1" or "0"),
+        "AUTOSL=" .. (DF.CFG.auto_place_sl and "1" or "0"),
         "AUTOJAM=" .. (DF.CFG.auto_place_jammer and "1" or "0"),
+        "USEIDDOOR=" .. (DF.CFG.use_id_door and "1" or "0"),
+        "IDDOORITEM=" .. tostring(tonumber(DF.CFG.id_door_itemid) or 12),
+        "DOORID=" .. tostring(DF.CFG.door_id or "DF123"),
+        "DOORLBL=" .. tostring(DF.CFG.door_label or "BOREN STORE"),
+        "USEBLK=" .. (DF.CFG.use_blocker_door and "1" or "0"),
+        "BLKITEM=" .. tostring(tonumber(DF.CFG.blocker_door_itemid) or 2810),
         "BRK3=" .. (DF.CFG.break_3_mode and "1" or "0"),
         "BRKBG=" .. (DF.CFG.break_cave_bg and "1" or "0"),
         "BRKLAVA=" .. (DF.CFG.break_lava and "1" or "0"),
@@ -259,7 +307,15 @@ function DF.loadData()
         elseif k == "FINDNUM" then DF.CFG.find_use_num = (v == "1")
         elseif k == "FINDTGT" then DF.CFG.find_target_cnt = math.max(1, tonumber(v) or 1)
         elseif k == "AUTOWL" then DF.CFG.auto_lock_wl = (v ~= "0")
+        elseif k == "WLPUB" then DF.CFG.wl_public = (v ~= "0")
+        elseif k == "AUTOSL" then DF.CFG.auto_place_sl = (v == "1")
         elseif k == "AUTOJAM" then DF.CFG.auto_place_jammer = (v == "1")
+        elseif k == "USEIDDOOR" then DF.CFG.use_id_door = (v == "1")
+        elseif k == "IDDOORITEM" then DF.CFG.id_door_itemid = math.max(1, tonumber(v) or 12)
+        elseif k == "DOORID" then DF.CFG.door_id = trimStr(v)
+        elseif k == "DOORLBL" then DF.CFG.door_label = trimStr(v)
+        elseif k == "USEBLK" then DF.CFG.use_blocker_door = (v == "1")
+        elseif k == "BLKITEM" then DF.CFG.blocker_door_itemid = math.max(1, tonumber(v) or 2810)
         elseif k == "BRK3" then DF.CFG.break_3_mode = (v ~= "0")
         elseif k == "BRKBG" then DF.CFG.break_cave_bg = (v ~= "0")
         elseif k == "BRKLAVA" then DF.CFG.break_lava = (v ~= "0")
@@ -718,6 +774,7 @@ end
 -- 3. BREAK ENGINE (FG + CAVE BACKGROUND LAG-GUARD + MODE 3 TILE BREAK)
 -- ============================================================================
 local function isProtectedDoorArea(tx, ty, doorX, doorY)
+    if DF.CFG.use_id_door and tx == 0 and ty == 0 then return true end
     if not doorX or not doorY then return false end
     if (tx == doorX and (ty == doorY or ty == doorY + 1 or ty == doorY - 1))
        or (tx == doorX + 1 and ty == doorY)
@@ -725,6 +782,9 @@ local function isProtectedDoorArea(tx, ty, doorX, doorY)
         local t = getTileSafe(tx, ty)
         local fg = tonumber(t and t.fg) or 0
         if (tx == doorX and (ty == doorY or ty == doorY + 1)) or LOCK_IDS[fg] or fg == ITEM.JAMMER then
+            return true
+        end
+        if DF.CFG.use_blocker_door and tx == doorX - 1 and ty == doorY and (fg == tonumber(DF.CFG.blocker_door_itemid) or DOOR_NAME_MAP[fg]) then
             return true
         end
         if tx == doorX and ty == doorY - 1 then return true end
@@ -1275,6 +1335,115 @@ local function farmDirtOnce(doorX, doorY, minX, maxX)
     return getInvCount(ITEM.DIRT) > 0
 end
 
+local function resolveDoorItemName(id)
+    id = tonumber(id) or 0
+    if id <= 0 then return "None" end
+    if DOOR_NAME_MAP[id] then return DOOR_NAME_MAP[id] end
+    if getItemInfoByID then
+        local ok, info = pcall(getItemInfoByID, id)
+        if ok and info and type(info.name) == "string" and info.name ~= "" then return info.name end
+    end
+    return "Item #" .. tostring(id)
+end
+
+-- Stage 0: Setup Security Lengkap (Penghalang Kiri, Jammer, WL Public, SL Private, & Door ID di (0,0))
+local function setupWorldSecurity(row, doorX, doorY)
+    if not doorX or not doorY then return true end
+    local needAny = DF.CFG.use_blocker_door or DF.CFG.auto_place_jammer or DF.CFG.auto_lock_wl or DF.CFG.auto_place_sl or DF.CFG.use_id_door
+    if not needAny then return true end
+
+    row.status = "Setup Lock/Door"
+    DF.STATE.status_text = row.name .. " Lock/Door"
+
+    local function ensureAndPlace(tx, ty, itemID, prefDir, label)
+        if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+        local t = getTileSafe(tx, ty)
+        if t and tonumber(t.fg) == itemID then return true end
+        if getInvCount(itemID) <= 0 then
+            if not restockItem(row, itemID, 5) then
+                addLog("[Lock/Door] Stok " .. label .. " (ID " .. tostring(itemID) .. ") habis!")
+                return false
+            end
+            t = getTileSafe(tx, ty)
+            if t and tonumber(t.fg) == itemID then return true end
+        end
+        if t and (tonumber(t.fg) or 0) ~= 0 and isTileClearableByBot(t) then
+            breakTileCompletely(tx, ty, true, true, prefDir, true)
+        end
+        local okP = placeTileAt(tx, ty, itemID, prefDir)
+        if okP then addLog(string.format("[Lock/Door] %s (ID %d) terpasang di (%d,%d)", label, itemID, tx, ty)) end
+        return okP
+    end
+
+    -- 1. Penghalang Kiri (Blocker) di (doorX - 1, doorY)
+    if DF.CFG.use_blocker_door and doorX - 1 >= 0 then
+        local blkID = math.max(1, tonumber(DF.CFG.blocker_door_itemid) or 2810)
+        ensureAndPlace(doorX - 1, doorY, blkID, -1, "Penghalang " .. resolveDoorItemName(blkID))
+    end
+
+    -- 2. Signal Jammer (226) di (doorX - 1, doorY - 1) + punch 1x aktif
+    if DF.CFG.auto_place_jammer and doorX - 1 >= 0 and doorY - 1 >= 0 then
+        local hadJam = (tonumber((getTileSafe(doorX - 1, doorY - 1) or {}).fg) == ITEM.JAMMER)
+        if ensureAndPlace(doorX - 1, doorY - 1, ITEM.JAMMER, -1, "Signal Jammer") and (not hadJam) then
+            safeSleep(250)
+            rawAction(doorX - 1, doorY - 1, ITEM.PUNCH)
+            safeSleep(250)
+        end
+    end
+
+    -- 3. World Lock (242) di (doorX + 1, doorY) + Set Public bila wl_public ON
+    if DF.CFG.auto_lock_wl and doorX + 1 <= 99 then
+        local hadWL = (tonumber((getTileSafe(doorX + 1, doorY) or {}).fg) == ITEM.WORLD_LOCK)
+        if ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock") and (not hadWL) and DF.CFG.wl_public and sendPacket then
+            safeSleep(250)
+            rawAction(doorX + 1, doorY, ITEM.WRENCH)
+            safeSleep(350)
+            pcall(sendPacket, 2, string.format(
+                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
+                doorX + 1, doorY
+            ))
+            safeSleep(450)
+        end
+    end
+
+    -- 4. Small Lock (202) di atas White Door (doorX, doorY - 1) + Private & Ignore Air
+    if DF.CFG.auto_place_sl and doorY - 1 >= 0 then
+        local hadSL = (tonumber((getTileSafe(doorX, doorY - 1) or {}).fg) == ITEM.SMALL_LOCK)
+        if ensureAndPlace(doorX, doorY - 1, ITEM.SMALL_LOCK, 1, "Small Lock") and (not hadSL) and sendPacket then
+            safeSleep(250)
+            rawAction(doorX, doorY - 1, ITEM.WRENCH)
+            safeSleep(350)
+            pcall(sendPacket, 2, string.format(
+                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\ncheckbox_public|0\ncheckbox_ignore|1\n",
+                doorX, doorY - 1
+            ))
+            safeSleep(450)
+        end
+    end
+
+    -- 5. Door ID di (0, 0) + Set Door ID & Label + simpan ke row.door
+    if DF.CFG.use_id_door then
+        local dItem = math.max(1, tonumber(DF.CFG.id_door_itemid) or 12)
+        local targetID = trimStr(DF.CFG.door_id or "DF123"):upper()
+        local targetLbl = trimStr(DF.CFG.door_label or "BOREN STORE")
+        if ensureAndPlace(0, 0, dItem, 1, "Door ID " .. resolveDoorItemName(dItem)) and targetID ~= "" and sendPacket then
+            safeSleep(250)
+            moveSafeTo(1, 0)
+            rawAction(0, 0, ITEM.WRENCH)
+            safeSleep(380)
+            pcall(sendPacket, 2, string.format(
+                "action|dialog_return\ndialog_name|door_edit\ntilex|0|\ntiley|0|\ndoor_name|%s\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1\n",
+                targetLbl, targetID
+            ))
+            safeSleep(450)
+            row.door = targetID
+            DF.saveData()
+            addLog("[Lock/Door] Door ID (0,0) diset -> ID=" .. targetID .. " | Label=" .. targetLbl)
+        end
+    end
+    return true
+end
+
 local function processDirtFarmWorld(row)
     row.status = "Warping..."
     DF.STATE.status_text = "Warp: " .. row.name
@@ -1288,6 +1457,9 @@ local function processDirtFarmWorld(row)
     local doorX, doorY = findMainDoor()
     local minX, maxX = getDFRowBounds()
     local sideCols = getSideColumns()
+
+    -- 0. SETUP SECURITY (Penghalang, Jammer, WL, SL, Door ID) bila diaktifkan
+    setupWorldSecurity(row, doorX, doorY)
 
     -- 1. CLEAR SISI PINGGIR (0,99 atau 1,0,98,99 jika Platform ON | Y=24..53, FG + Cave BG!)
     if DF.CFG.clear_side and #sideCols > 0 then
@@ -1945,6 +2117,107 @@ local function renderSettingsSub()
     end
 end
 
+local function cyclePreset(presets, curId, delta)
+    local curIdx = 1
+    for i, p in ipairs(presets) do
+        if p.id == tonumber(curId) then curIdx = i; break end
+    end
+    local nextIdx = curIdx + delta
+    if nextIdx < 1 then nextIdx = #presets
+    elseif nextIdx > #presets then nextIdx = 1 end
+    return presets[nextIdx].id
+end
+
+local function renderLockDoorSub()
+    ImGui.Text("Pengaturan Lock, Door ID (0,0) & Penghalang Kiri")
+    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
+    ImGui.Separator()
+
+    if ImGui.BeginTable("BorenDFLockOpts", 2) then
+        renderOptRow("World Lock (242)", function()
+            if autoBtn(DF.CFG.auto_lock_wl and "  ON  ##dfl_wl" or "  OFF  ##dfl_wl") then
+                DF.CFG.auto_lock_wl = not DF.CFG.auto_lock_wl; DF.saveData()
+            end
+            ImGui.SameLine(); ImGui.Text("Public:"); ImGui.SameLine()
+            if autoBtn(DF.CFG.wl_public and " ON ##dfl_wp" or " OFF ##dfl_wp") then
+                DF.CFG.wl_public = not DF.CFG.wl_public; DF.saveData()
+            end
+        end)
+        renderOptRow("Small Lock (202)", function()
+            if autoBtn(DF.CFG.auto_place_sl and "  ON  ##dfl_sl" or "  OFF  ##dfl_sl") then
+                DF.CFG.auto_place_sl = not DF.CFG.auto_place_sl; DF.saveData()
+            end
+        end)
+        renderOptRow("Signal Jammer (226)", function()
+            if autoBtn(DF.CFG.auto_place_jammer and "  ON  ##dfl_jm" or "  OFF  ##dfl_jm") then
+                DF.CFG.auto_place_jammer = not DF.CFG.auto_place_jammer; DF.saveData()
+            end
+        end)
+
+        renderOptRow("Pasang Door ID (0,0)", function()
+            if autoBtn(DF.CFG.use_id_door and "  ON  ##dfl_ud" or "  OFF  ##dfl_ud") then
+                DF.CFG.use_id_door = not DF.CFG.use_id_door; DF.saveData()
+            end
+        end)
+        renderOptRow("Jenis / ID Door", function()
+            renderNumInput("df_id_door", DF.CFG.id_door_itemid, 1, 20000, 0, "", function(v)
+                DF.CFG.id_door_itemid = v; DF.saveData()
+            end)
+            ImGui.SameLine()
+            if autoBtn(" < ##dfl_dp1") then
+                local nid = cyclePreset(DOOR_ID_PRESETS, DF.CFG.id_door_itemid, -1)
+                DF.CFG.id_door_itemid = nid; numBufs["df_id_door"] = tostring(nid); DF.saveData()
+            end
+            ImGui.SameLine()
+            if autoBtn(" > ##dfl_dp2") then
+                local nid = cyclePreset(DOOR_ID_PRESETS, DF.CFG.id_door_itemid, 1)
+                DF.CFG.id_door_itemid = nid; numBufs["df_id_door"] = tostring(nid); DF.saveData()
+            end
+            ImGui.SameLine()
+            ImGui.Text(resolveDoorItemName(DF.CFG.id_door_itemid))
+        end)
+        renderOptRow("Teks Door ID", function()
+            ImGui.PushItemWidth(150)
+            local ch, nv = ImGui.InputText("##df_door_id", tostring(DF.CFG.door_id or ""), 32)
+            ImGui.PopItemWidth()
+            if ch and type(nv) == "string" then DF.CFG.door_id = nv; DF.saveData() end
+        end)
+        renderOptRow("Label Door", function()
+            ImGui.PushItemWidth(150)
+            local ch, nv = ImGui.InputText("##df_door_lbl", tostring(DF.CFG.door_label or ""), 48)
+            ImGui.PopItemWidth()
+            if ch and type(nv) == "string" then DF.CFG.door_label = nv; DF.saveData() end
+        end)
+
+        renderOptRow("Pasang Penghalang", function()
+            if autoBtn(DF.CFG.use_blocker_door and "  ON  ##dfl_ub" or "  OFF  ##dfl_ub") then
+                DF.CFG.use_blocker_door = not DF.CFG.use_blocker_door; DF.saveData()
+            end
+        end)
+        renderOptRow("Jenis / ID Penghalang", function()
+            renderNumInput("df_blk_id", DF.CFG.blocker_door_itemid, 1, 20000, 0, "", function(v)
+                DF.CFG.blocker_door_itemid = v; DF.saveData()
+            end)
+            ImGui.SameLine()
+            if autoBtn(" < ##dfl_bp1") then
+                local nid = cyclePreset(BLOCKER_PRESETS, DF.CFG.blocker_door_itemid, -1)
+                DF.CFG.blocker_door_itemid = nid; numBufs["df_blk_id"] = tostring(nid); DF.saveData()
+            end
+            ImGui.SameLine()
+            if autoBtn(" > ##dfl_bp2") then
+                local nid = cyclePreset(BLOCKER_PRESETS, DF.CFG.blocker_door_itemid, 1)
+                DF.CFG.blocker_door_itemid = nid; numBufs["df_blk_id"] = tostring(nid); DF.saveData()
+            end
+            ImGui.SameLine()
+            ImGui.Text(resolveDoorItemName(DF.CFG.blocker_door_itemid))
+        end)
+        ImGui.EndTable()
+    end
+
+    ImGui.Separator()
+    ImGui.TextWrapped("Preset Door: Door (12), Dungeon (30), Portal (544), House (224), Air Vent (2810). Preset Penghalang: Air Vent (2810), Door (12), Dungeon (30), Portcullis (60), House (224), Screen (858), Portal (544). Bisa ketik ID custom langsung di kotak.")
+end
+
 local function renderLogsSub()
     if autoBtn(" Clear Logs ##df") then DF.STATE.logs = {} end
     ImGui.Separator()
@@ -1959,7 +2232,9 @@ function DF.render(hub)
     ImGui.SameLine()
     if autoBtn(activeSub == "find" and "[ Find World ]" or "Find World") then activeSub = "find" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "storage" and "[ List Storage ]" or "List Storage") then activeSub = "storage" end
+    if autoBtn(activeSub == "lockdoor" and "[ Lock & Door ]" or "Lock & Door") then activeSub = "lockdoor" end
+    ImGui.SameLine()
+    if autoBtn(activeSub == "storage" and "[ Storage ]" or "Storage") then activeSub = "storage" end
     ImGui.SameLine()
     if autoBtn(activeSub == "settings" and "[ Settings ]" or "Settings") then activeSub = "settings" end
     ImGui.SameLine()
@@ -1968,6 +2243,7 @@ function DF.render(hub)
 
     if activeSub == "worlds" then renderWorldsSub()
     elseif activeSub == "find" then renderFindWorldSub()
+    elseif activeSub == "lockdoor" then renderLockDoorSub()
     elseif activeSub == "storage" then renderStorageSub()
     elseif activeSub == "settings" then renderSettingsSub()
     else renderLogsSub() end
