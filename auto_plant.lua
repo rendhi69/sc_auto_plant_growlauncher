@@ -1873,6 +1873,33 @@ local function plantSingleSpot(tx, ty)
     return plantAndSpliceTile(tx, ty)
 end
 
+
+local function hasEnoughSeedInBackpack()
+    local s1 = CFG.seed_1_id
+    local s2 = CFG.seed_2_id
+
+    local bp1 = getInvCount(s1)
+    local bp2 = CFG.splice_mode and getInvCount(s2) or 999
+
+    -- VALIDASI 1: Jika di tas masih ada seed (bp1 > 0 dan jika splice bp2 > 0),
+    -- bot WAJIB menanam sampai habis (0 di tas). Jangan pernah ambil seed ke storage saat tas belum habis!
+    if bp1 > 0 and (not CFG.splice_mode or bp2 > 0) then
+        return true
+    end
+
+    -- VALIDASI 2: Jika terdeteksi 0, double-check dengan sync inventory untuk mencegah lag pembacaan paket
+    syncInventoryCache()
+    safeSleep(50)
+    bp1 = getInvCount(s1)
+    bp2 = CFG.splice_mode and getInvCount(s2) or 999
+    if bp1 > 0 and (not CFG.splice_mode or bp2 > 0) then
+        return true
+    end
+
+    -- Tas benar-benar 0 (habis ter-plant semua)
+    return false
+end
+
 local function plantTileSection(spotList, plantY)
     if not STATE.running or not spotList or #spotList == 0 then return true end
 
@@ -2241,31 +2268,6 @@ local function countPlantableSpotsInWorld()
     return cnt
 end
 
-local function hasEnoughSeedInBackpack()
-    local s1 = CFG.seed_1_id
-    local s2 = CFG.seed_2_id
-
-    local bp1 = getInvCount(s1)
-    local bp2 = CFG.splice_mode and getInvCount(s2) or 999
-
-    -- VALIDASI 1: Jika di tas masih ada seed (bp1 > 0 dan jika splice bp2 > 0),
-    -- bot WAJIB menanam sampai habis (0 di tas). Jangan pernah ambil seed ke storage saat tas belum habis!
-    if bp1 > 0 and (not CFG.splice_mode or bp2 > 0) then
-        return true
-    end
-
-    -- VALIDASI 2: Jika terdeteksi 0, double-check dengan sync inventory untuk mencegah lag pembacaan paket
-    syncInventoryCache()
-    safeSleep(50)
-    bp1 = getInvCount(s1)
-    bp2 = CFG.splice_mode and getInvCount(s2) or 999
-    if bp1 > 0 and (not CFG.splice_mode or bp2 > 0) then
-        return true
-    end
-
-    -- Tas benar-benar 0 (habis ter-plant semua)
-    return false
-end
 
 local function executePlantRow(plantY, goingRight, startX)
     local curPx = getPlayerTilePos()
