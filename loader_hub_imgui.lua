@@ -36,7 +36,6 @@ local function loadRemoteModule(relPath)
             "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/",
             "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/",
             "/storage/emulated/0/Download/",
-            "d:/rotasi 2026/SC LAMA OLD JUTUN/sc growlauncher/script/",
             "script/",
             "",
         }
