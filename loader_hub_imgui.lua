@@ -1,5 +1,5 @@
 -- ============================================================================
--- LOADER BOREN HUB IMGUI - ALL-IN-ONE MODULAR (AUTO-FETCH, LOAD & HOT-RELOAD)
+-- LOADER BOREN STORE IMGUI - ALL-IN-ONE MODULAR (AUTO-FETCH, LOAD & HOT-RELOAD)
 -- File: loader_hub_imgui.lua
 -- ============================================================================
 -- Ringan & 100% modular: memuat (load) tiap fitur dari file terpisah di GitHub
@@ -13,14 +13,29 @@ local CACHE_TAG = ""
 
 local function makeFreshTag()
     reloadSeq = reloadSeq + 1
-    local t = (os and os.time and os.time()) or (os and os.clock and math.floor(os.clock() * 1000)) or math.random(100000, 999999)
-    CACHE_TAG = tostring(math.floor(tonumber(t) or 0)) .. "_" .. tostring(reloadSeq)
+    local t = nil
+    if getTime then
+        local okT, ms = pcall(getTime)
+        if okT and tonumber(ms) then t = math.floor(tonumber(ms)) end
+    end
+    if not t and os and os.time then
+        local okO, ot = pcall(os.time)
+        if okO and tonumber(ot) then t = math.floor(tonumber(ot)) end
+    end
+    if not t and os and os.clock then
+        local okC, oc = pcall(os.clock)
+        if okC and tonumber(oc) then t = math.floor(tonumber(oc) * 1000) end
+    end
+    if not t then
+        t = math.random(100000, 999999)
+    end
+    CACHE_TAG = tostring(t) .. "_" .. tostring(reloadSeq)
     return CACHE_TAG
 end
 makeFreshTag()
 
 local function logMsg(msg)
-    if LogToConsole then pcall(LogToConsole, "`e[Boren Hub] `w" .. tostring(msg)) end
+    if LogToConsole then pcall(LogToConsole, "`e[BOREN STORE] `w" .. tostring(msg)) end
 end
 
 local function notifyMsg(msg)
@@ -193,6 +208,6 @@ end
 local okBoot = loadAllModulesSync(false)
 if okBoot then
     HUB.reload_status = "Siap (Terbaru)"
-    logMsg("`2Boren Hub (Dashboard, Plant, Dirt Farm, Build Soil, Buy Pack) siap! (/hub)")
-    notifyMsg("Boren Hub All-in-One Siap! (/hub)")
+    logMsg("`2BOREN STORE siap digunakan! (/hub)")
+    notifyMsg("BOREN STORE Siap! (/hub)")
 end

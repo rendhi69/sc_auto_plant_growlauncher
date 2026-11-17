@@ -658,7 +658,16 @@ local function triggerHotReloadAll()
             local base = (HUB.BASE_RAW_URL and HUB.BASE_RAW_URL ~= "")
                 and HUB.BASE_RAW_URL
                 or "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/"
-            local freshTag = tostring(math.floor((os and os.time and os.time()) or math.random(100000, 999999))) .. "_" .. tostring(math.random(100, 999))
+            local tNowMs = nil
+            if getTime then
+                local okT, ms = pcall(getTime)
+                if okT and tonumber(ms) then tNowMs = math.floor(tonumber(ms)) end
+            end
+            if not tNowMs and os and os.time then
+                local okO, ot = pcall(os.time)
+                if okO and tonumber(ot) then tNowMs = math.floor(tonumber(ot)) end
+            end
+            local freshTag = tostring(tNowMs or math.random(100000, 999999)) .. "_" .. tostring(math.random(100, 999))
             for _, k in ipairs({ "plant", "dirt_farm", "build_soil", "buy_pack" }) do
                 if HUB[k] and type(HUB[k].stop) == "function" then pcall(HUB[k].stop) end
             end
@@ -721,7 +730,7 @@ end
 
 local dcCopiedUntil = 0
 local ghCopiedUntil = 0
-local vectorLogoOn = true
+local rasterLogoOk  = true
 
 local function nowSec()
     if getTime then
@@ -864,6 +873,39 @@ local function isAnyBotActive()
     return false
 end
 
+local function safeSpacing()
+    if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
+end
+
+local function centeredText(txt, areaW)
+    local s = tostring(txt or "")
+    if ImGui and ImGui.GetCursorPosX and ImGui.SetCursorPosX then
+        local okX, curX = pcall(ImGui.GetCursorPosX)
+        local tw = #s * 7.5
+        if ImGui.CalcTextSize then
+            local okS, sz = pcall(ImGui.CalcTextSize, s)
+            if okS and sz then
+                local okW, w = pcall(function() return sz.x end)
+                if okW and type(w) == "number" and w > 0 then tw = w end
+            end
+        end
+        if okX and type(curX) == "number" and type(areaW) == "number" and areaW > tw then
+            pcall(ImGui.SetCursorPosX, curX + (areaW - tw) * 0.5)
+        end
+    end
+    ImGui.Text(s)
+end
+
+local function centeredBtn(lbl, btnW, areaW)
+    if ImGui and ImGui.GetCursorPosX and ImGui.SetCursorPosX then
+        local okX, curX = pcall(ImGui.GetCursorPosX)
+        if okX and type(curX) == "number" and type(areaW) == "number" and areaW > btnW then
+            pcall(ImGui.SetCursorPosX, curX + (areaW - btnW) * 0.5)
+        end
+    end
+    return fullBtn(lbl, btnW)
+end
+
 local function renderDashboardPanel()
     local availW = safeAvailX()
     local tNow   = nowSec()
@@ -883,15 +925,18 @@ local function renderDashboardPanel()
     local updStatus   = tostring((HUB and HUB.reload_status) or "Siap")
     local anyRun      = isAnyBotActive()
 
-    -- 1. HEADER STATIS (Tanpa Animasi Bergerak)
-    ImGui.Text(string.format("BOREN HUB  |  Status: %s", anyRun and "BOT AKTIF" or "STANDBY"))
-    ImGui.Text(string.format("World: %s  |  Gems: %d  |  %s", curWorld, curGems, updStatus))
+    -- 1. HEADER PROFESIONAL & STATIS (BOREN STORE)
+    safeSpacing()
+    centeredText("BOREN STORE", availW)
+    centeredText(string.format("Status: %s   |   World: %s   |   Gems: %d", anyRun and "AKTIF" or "STANDBY", curWorld, curGems), availW)
     if uiNotice ~= "" then
-        ImGui.Text("Info: " .. uiNotice)
+        centeredText(uiNotice, availW)
     end
+    safeSpacing()
     ImGui.Separator()
+    safeSpacing()
 
-    -- 2. KARTU GAMBAR LOGO DISCORD & GITHUB (64x64 Full-Color Anti-Aliased, Statis)
+    -- 2. KARTU LOGO DISCORD & GITHUB (64x64 Full-Color Anti-Aliased, Statis)
     local cardW = math.max(150, math.floor(availW * 0.47))
     local dcCopied = (tNow < dcCopiedUntil)
     local ghCopied = (tNow < ghCopiedUntil)
@@ -901,58 +946,47 @@ local function renderDashboardPanel()
     if ImGui.BeginTable("BorenDashCards", 2) then
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
-        local dcBtnText = vectorLogoOn
+        local dcBtnText = rasterLogoOk
             and ("\n\n\n\n\n\n" .. dcLabel .. "\n##card_dc")
             or  ("\n\n  " .. dcLabel .. "  \n\n##card_dc")
         if fullBtn(dcBtnText, cardW) then
             copyLinkToClipboard("Link Discord Boren", getHubLink("discord"))
             dcCopiedUntil = tNow + 2.0
         end
-        if vectorLogoOn then
-            local okV, errV = drawRasterTileOnLastItem(DC_RASTER, DC_BG_COL, dcCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
-            if not okV then
-                vectorLogoOn = false
-                setNotice("Mode Logo Gambar tidak didukung GL: " .. tostring(errV))
-            end
+        if rasterLogoOk then
+            local okV = drawRasterTileOnLastItem(DC_RASTER, DC_BG_COL, dcCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
+            if not okV then rasterLogoOk = false end
         end
 
         ImGui.TableSetColumnIndex(1)
-        local ghBtnText = vectorLogoOn
+        local ghBtnText = rasterLogoOk
             and ("\n\n\n\n\n\n" .. ghLabel .. "\n##card_gh")
             or  ("\n\n  " .. ghLabel .. "  \n\n##card_gh")
         if fullBtn(ghBtnText, cardW) then
             copyLinkToClipboard("Link GitHub Boren", getHubLink("github_repo"))
             ghCopiedUntil = tNow + 2.0
         end
-        if vectorLogoOn then
-            local okV, errV = drawRasterTileOnLastItem(GH_RASTER, GH_BG_COL, ghCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
-            if not okV then
-                vectorLogoOn = false
-                setNotice("Mode Logo Gambar tidak didukung GL: " .. tostring(errV))
-            end
+        if rasterLogoOk then
+            local okV = drawRasterTileOnLastItem(GH_RASTER, GH_BG_COL, ghCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
+            if not okV then rasterLogoOk = false end
         end
         ImGui.EndTable()
     end
 
-    ImGui.Text("Klik gambar logo di atas untuk salin link ke clipboard.")
+    safeSpacing()
+    centeredText("Klik kartu logo di atas untuk menyalin link", availW)
+    safeSpacing()
     ImGui.Separator()
+    safeSpacing()
 
-    -- 3. TOMBOL REFRESH / HOT-RELOAD (Statis)
-    if autoBtn(isReloading and "  Updating...  ##dash_rl" or "  Refresh / Update Script  ##dash_rl") then
+    -- 3. TOMBOL REFRESH / UPDATE SCRIPT (Rapi & Terpusat)
+    local rlBtnW = math.min(240, math.max(170, math.floor(availW * 0.48)))
+    if centeredBtn(isReloading and "Updating...##dash_rl" or "Refresh / Update Script##dash_rl", rlBtnW, availW) then
         if not isReloading then
             triggerHotReloadAll()
         end
     end
-    ImGui.SameLine()
-    if autoBtn(packDbReloading and " Loading DB... ##dash_db" or " Reload DB Pack ##dash_db") then
-        if not packDbReloading then
-            triggerReloadPackDb()
-        end
-    end
-    ImGui.SameLine()
-    if autoBtn(vectorLogoOn and " Logo: Gambar ##dash_vl" or " Logo: Teks ##dash_vl") then
-        vectorLogoOn = not vectorLogoOn
-    end
+    centeredText(updStatus, availW)
 end
 
 -- ============================================================================
@@ -977,7 +1011,8 @@ end
 
 local function renderLeftFeatureSidebar(colW)
     local btnW = math.max(90, colW - 18)
-    ImGui.Text("MENU")
+    centeredText("MENU", btnW)
+    safeSpacing()
     if fullBtn(activeFeature == "dashboard" and "[ Dashboard ]" or "Dashboard", btnW) then
         activeFeature = "dashboard"
     end
@@ -1090,8 +1125,8 @@ local function renderFrame()
         if ImGui.SetNextWindowSize and ImVec2 then
             pcall(ImGui.SetNextWindowSize, ImVec2(300, 155), (ImGui.Cond and ImGui.Cond.Always) or 1)
         end
-        if ImGui.Begin("Boren Hub##boren_mini") then
-            if autoBtn("  Buka Boren Hub  ") then
+        if ImGui.Begin("BOREN STORE##boren_mini") then
+            if autoBtn("  Buka BOREN STORE  ") then
                 windowOpen = true
             end
         end
@@ -1103,7 +1138,7 @@ local function renderFrame()
         pcall(ImGui.SetNextWindowSize, ImVec2(780, 470), (ImGui.Cond and ImGui.Cond.Once) or 2)
     end
 
-    if ImGui.Begin("Boren Hub##boren_main") then
+    if ImGui.Begin("BOREN STORE##boren_main") then
         local winW = safeWinW()
         local sideW = math.max(130, math.floor(winW * 0.20))
 
@@ -1147,7 +1182,7 @@ local function handleSendPacket(pktType, pktStr)
             if cmd == "/hub" then
                 windowOpen = not windowOpen
                 if LogToConsole then
-                    pcall(LogToConsole, "`e[Boren Hub] `wUI " .. (windowOpen and "`2DITAMPILKAN" or "`4DISEMBUNYIKAN"))
+                    pcall(LogToConsole, "`e[BOREN STORE] `wUI " .. (windowOpen and "`2DITAMPILKAN" or "`4DISEMBUNYIKAN"))
                 end
                 return true
             elseif cmd == "/reload" then
