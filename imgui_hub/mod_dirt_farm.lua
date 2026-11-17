@@ -69,7 +69,7 @@ DF.CFG = {
     clear_rows        = true,   -- Bersihkan lorong ganjil Y=25..53
     build_upper_dirt  = true,   -- Bangun lantai Dirt atas Y=2..22 (3-zigzag)
     auto_farm_dirt    = true,   -- Tanam & panen Dirt Seed di Y=23 bila Dirt habis saat build atas
-    place_platform    = true,   -- Pasang Wooden Platform (102) di X=1 & X=98
+    place_platform    = false,  -- Default OFF: Pasang Wooden Platform (102) di X=1 & X=98
     platform_id       = 102,
     auto_collect      = true,
     collect_range     = 3,
@@ -209,6 +209,7 @@ end
 
 function DF.saveData()
     local lines = {
+        "CFGVER=2",
         "STORAGE=" .. tostring(DF.CFG.storage_raw or ""),
         "LOOP=" .. (DF.CFG.loop_enabled and "1" or "0"),
         "FINDMODE=" .. (DF.CFG.find_world_mode and "1" or "0"),
@@ -247,9 +248,11 @@ function DF.loadData()
     local txt = f:read("*a"); f:close()
     if not txt or txt == "" then return end
     DF.STATE.rows = {}
+    local cfgVer = 0
     for line in txt:gmatch("[^\r\n]+") do
         local k, v = line:match("^([A-Z0-9]+)=(.*)$")
-        if k == "STORAGE" then DF.CFG.storage_raw = trimStr(v)
+        if k == "CFGVER" then cfgVer = tonumber(v) or 0
+        elseif k == "STORAGE" then DF.CFG.storage_raw = trimStr(v)
         elseif k == "LOOP" then DF.CFG.loop_enabled = (v == "1")
         elseif k == "FINDMODE" then DF.CFG.find_world_mode = (v == "1")
         elseif k == "FINDLEN" then DF.CFG.find_name_len = math.max(4, math.min(14, tonumber(v) or 7))
@@ -265,7 +268,7 @@ function DF.loadData()
         elseif k == "CROWS" then DF.CFG.clear_rows = (v ~= "0")
         elseif k == "UPDIRT" then DF.CFG.build_upper_dirt = (v ~= "0")
         elseif k == "AFDIRT" then DF.CFG.auto_farm_dirt = (v ~= "0")
-        elseif k == "PPLAT" then DF.CFG.place_platform = (v ~= "0")
+        elseif k == "PPLAT" then DF.CFG.place_platform = (v == "1")
         elseif k == "PLAT" then DF.CFG.platform_id = tonumber(v) or 102
         elseif k == "ACOL" then DF.CFG.auto_collect = (v ~= "0")
         elseif k == "TRASH" then DF.CFG.auto_trash = (v ~= "0")
@@ -281,6 +284,9 @@ function DF.loadData()
                 table.insert(DF.STATE.rows, p)
             end
         end
+    end
+    if cfgVer < 2 then
+        DF.CFG.place_platform = false
     end
 end
 
@@ -1704,39 +1710,55 @@ local function renderWorldsSub()
     end
 end
 
+local function renderOptRow(label, controlFn)
+    ImGui.TableNextRow()
+    ImGui.TableSetColumnIndex(0)
+    ImGui.Text(label)
+    ImGui.TableSetColumnIndex(1)
+    ImGui.Text(":")
+    ImGui.SameLine()
+    controlFn()
+end
+
 local function renderFindWorldSub()
     ImGui.Text("Auto Find World Kosong (Bebas Lock & Player)")
     if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
     ImGui.Separator()
 
-    ImGui.Text("Mode Auto Find saat Start:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.find_world_mode and "  ON  ##dffm" or "  OFF  ##dffm") then
-        DF.CFG.find_world_mode = not DF.CFG.find_world_mode; DF.saveData()
-    end
-
-    ImGui.Text("Panjang Nama World: " .. tostring(DF.CFG.find_name_len) .. " huruf"); ImGui.SameLine()
-    if autoBtn(" -1 ##dfln1") then DF.CFG.find_name_len = math.max(4, (tonumber(DF.CFG.find_name_len) or 7) - 1); DF.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +1 ##dfln2") then DF.CFG.find_name_len = math.min(14, (tonumber(DF.CFG.find_name_len) or 7) + 1); DF.saveData() end
-
-    ImGui.Text("Campur Angka (0-9):"); ImGui.SameLine()
-    if autoBtn(DF.CFG.find_use_num and "  ON  ##dffn" or "  OFF  ##dffn") then
-        DF.CFG.find_use_num = not DF.CFG.find_use_num; DF.saveData()
-    end
-
-    ImGui.Text("Target Jumlah World: " .. tostring(DF.CFG.find_target_cnt)); ImGui.SameLine()
-    if autoBtn(" -1 ##dftg1") then DF.CFG.find_target_cnt = math.max(1, (tonumber(DF.CFG.find_target_cnt) or 1) - 1); DF.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +1 ##dftg2") then DF.CFG.find_target_cnt = math.min(50, (tonumber(DF.CFG.find_target_cnt) or 1) + 1); DF.saveData() end
-
-    ImGui.Text("Auto Pasang World Lock (242):"); ImGui.SameLine()
-    if autoBtn(DF.CFG.auto_lock_wl and "  ON  ##dfwl" or "  OFF  ##dfwl") then
-        DF.CFG.auto_lock_wl = not DF.CFG.auto_lock_wl; DF.saveData()
-    end
-
-    ImGui.Text("Auto Pasang Jammer (226):"); ImGui.SameLine()
-    if autoBtn(DF.CFG.auto_place_jammer and "  ON  ##dfjm" or "  OFF  ##dfjm") then
-        DF.CFG.auto_place_jammer = not DF.CFG.auto_place_jammer; DF.saveData()
+    if ImGui.BeginTable("BorenDFFindOpts", 2) then
+        renderOptRow("Auto Find saat Start", function()
+            if autoBtn(DF.CFG.find_world_mode and "  ON  ##dffm" or "  OFF  ##dffm") then
+                DF.CFG.find_world_mode = not DF.CFG.find_world_mode; DF.saveData()
+            end
+        end)
+        renderOptRow("Panjang Nama World", function()
+            ImGui.Text(tostring(DF.CFG.find_name_len) .. " huruf"); ImGui.SameLine()
+            if autoBtn(" -1 ##dfln1") then DF.CFG.find_name_len = math.max(4, (tonumber(DF.CFG.find_name_len) or 7) - 1); DF.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +1 ##dfln2") then DF.CFG.find_name_len = math.min(14, (tonumber(DF.CFG.find_name_len) or 7) + 1); DF.saveData() end
+        end)
+        renderOptRow("Campur Angka (0-9)", function()
+            if autoBtn(DF.CFG.find_use_num and "  ON  ##dffn" or "  OFF  ##dffn") then
+                DF.CFG.find_use_num = not DF.CFG.find_use_num; DF.saveData()
+            end
+        end)
+        renderOptRow("Target Jumlah World", function()
+            ImGui.Text(tostring(DF.CFG.find_target_cnt)); ImGui.SameLine()
+            if autoBtn(" -1 ##dftg1") then DF.CFG.find_target_cnt = math.max(1, (tonumber(DF.CFG.find_target_cnt) or 1) - 1); DF.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +1 ##dftg2") then DF.CFG.find_target_cnt = math.min(50, (tonumber(DF.CFG.find_target_cnt) or 1) + 1); DF.saveData() end
+        end)
+        renderOptRow("Auto World Lock (242)", function()
+            if autoBtn(DF.CFG.auto_lock_wl and "  ON  ##dfwl" or "  OFF  ##dfwl") then
+                DF.CFG.auto_lock_wl = not DF.CFG.auto_lock_wl; DF.saveData()
+            end
+        end)
+        renderOptRow("Auto Jammer (226)", function()
+            if autoBtn(DF.CFG.auto_place_jammer and "  ON  ##dfjm" or "  OFF  ##dfjm") then
+                DF.CFG.auto_place_jammer = not DF.CFG.auto_place_jammer; DF.saveData()
+            end
+        end)
+        ImGui.EndTable()
     end
 
     ImGui.Separator()
@@ -1810,76 +1832,81 @@ local function renderSettingsSub()
     ImGui.Text("Pengaturan Dirt Farm (Break & Build)")
     ImGui.Separator()
 
-    ImGui.Text("Mode Break:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.break_3_mode and " 3 Tile Break (Cepat) ##dfb3" or " 1 Tile Break ##dfb3") then
-        DF.CFG.break_3_mode = not DF.CFG.break_3_mode; DF.saveData()
+    if ImGui.BeginTable("BorenDFSetOpts", 2) then
+        renderOptRow("Break 3 Tile", function()
+            if autoBtn(DF.CFG.break_3_mode and "  ON (3-Tile)  ##dfb3" or "  OFF (1-Tile)  ##dfb3") then
+                DF.CFG.break_3_mode = not DF.CFG.break_3_mode; DF.saveData()
+            end
+        end)
+        renderOptRow("Break Cave BG (14)", function()
+            if autoBtn(DF.CFG.break_cave_bg and "  ON  ##dfbg" or "  OFF  ##dfbg") then
+                DF.CFG.break_cave_bg = not DF.CFG.break_cave_bg; DF.saveData()
+            end
+        end)
+        renderOptRow("Break Lava & Tambal", function()
+            if autoBtn(DF.CFG.break_lava and "  ON  ##dflv" or "  OFF  ##dflv") then
+                DF.CFG.break_lava = not DF.CFG.break_lava; DF.saveData()
+            end
+        end)
+        renderOptRow("Break Rock Platform", function()
+            if autoBtn(DF.CFG.break_rock and "  ON  ##dfrk" or "  OFF  ##dfrk") then
+                DF.CFG.break_rock = not DF.CFG.break_rock; DF.saveData()
+            end
+        end)
+        renderOptRow("Clear Sisi Pinggir", function()
+            if autoBtn(DF.CFG.clear_side and "  ON  ##dfc1" or "  OFF  ##dfc1") then
+                DF.CFG.clear_side = not DF.CFG.clear_side; DF.saveData()
+            end
+        end)
+        renderOptRow("Clear Lorong Baris", function()
+            if autoBtn(DF.CFG.clear_rows and "  ON  ##dfc2" or "  OFF  ##dfc2") then
+                DF.CFG.clear_rows = not DF.CFG.clear_rows; DF.saveData()
+            end
+        end)
+        renderOptRow("Bangun Dirt Atas", function()
+            if autoBtn(DF.CFG.build_upper_dirt and "  ON  ##dfud" or "  OFF  ##dfud") then
+                DF.CFG.build_upper_dirt = not DF.CFG.build_upper_dirt; DF.saveData()
+            end
+        end)
+        renderOptRow("Auto Farm Dirt", function()
+            if autoBtn(DF.CFG.auto_farm_dirt and "  ON  ##dfaf" or "  OFF  ##dfaf") then
+                DF.CFG.auto_farm_dirt = not DF.CFG.auto_farm_dirt; DF.saveData()
+            end
+        end)
+        renderOptRow("Pasang Platform (102)", function()
+            if autoBtn(DF.CFG.place_platform and "  ON  ##dfc3" or "  OFF  ##dfc3") then
+                DF.CFG.place_platform = not DF.CFG.place_platform; DF.saveData()
+            end
+        end)
+        renderOptRow("Auto Collect Drops", function()
+            if autoBtn(DF.CFG.auto_collect and "  ON  ##dfac" or "  OFF  ##dfac") then
+                DF.CFG.auto_collect = not DF.CFG.auto_collect; DF.saveData()
+            end
+        end)
+        renderOptRow("Auto Trash Sampah", function()
+            if autoBtn(DF.CFG.auto_trash and "  ON  ##dfc4" or "  OFF  ##dfc4") then
+                DF.CFG.auto_trash = not DF.CFG.auto_trash; DF.saveData()
+            end
+        end)
+        renderOptRow("ModFly", function()
+            if autoBtn(DF.CFG.use_modfly and "  ON  ##dfc5" or "  OFF  ##dfc5") then
+                DF.CFG.use_modfly = not DF.CFG.use_modfly; DF.saveData()
+            end
+        end)
+        renderOptRow("Punch Delay", function()
+            ImGui.Text(tostring(DF.CFG.punch_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -20 ##dfp1") then DF.CFG.punch_delay = math.max(80, (tonumber(DF.CFG.punch_delay) or 160) - 20); DF.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +20 ##dfp2") then DF.CFG.punch_delay = math.min(400, (tonumber(DF.CFG.punch_delay) or 160) + 20); DF.saveData() end
+        end)
+        renderOptRow("Place Delay", function()
+            ImGui.Text(tostring(DF.CFG.place_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -20 ##dfl1") then DF.CFG.place_delay = math.max(80, (tonumber(DF.CFG.place_delay) or 160) - 20); DF.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +20 ##dfl2") then DF.CFG.place_delay = math.min(400, (tonumber(DF.CFG.place_delay) or 160) + 20); DF.saveData() end
+        end)
+        ImGui.EndTable()
     end
-
-    ImGui.Text("Break Cave Background (14):"); ImGui.SameLine()
-    if autoBtn(DF.CFG.break_cave_bg and "  ON  ##dfbg" or "  OFF  ##dfbg") then
-        DF.CFG.break_cave_bg = not DF.CFG.break_cave_bg; DF.saveData()
-    end
-
-    ImGui.Text("Break Lava & Tambal Dirt:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.break_lava and "  ON  ##dflv" or "  OFF  ##dflv") then
-        DF.CFG.break_lava = not DF.CFG.break_lava; DF.saveData()
-    end
-
-    ImGui.Text("Break Rock di Platform:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.break_rock and "  ON  ##dfrk" or "  OFF  ##dfrk") then
-        DF.CFG.break_rock = not DF.CFG.break_rock; DF.saveData()
-    end
-
-    ImGui.Text("Clear Sisi Pinggir:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.clear_side and "  ON  ##dfc1" or "  OFF  ##dfc1") then
-        DF.CFG.clear_side = not DF.CFG.clear_side; DF.saveData()
-    end
-
-    ImGui.Text("Clear Lorong Baris:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.clear_rows and "  ON  ##dfc2" or "  OFF  ##dfc2") then
-        DF.CFG.clear_rows = not DF.CFG.clear_rows; DF.saveData()
-    end
-
-    ImGui.Text("Bangun Dirt Atas (Y=2..22):"); ImGui.SameLine()
-    if autoBtn(DF.CFG.build_upper_dirt and "  ON  ##dfud" or "  OFF  ##dfud") then
-        DF.CFG.build_upper_dirt = not DF.CFG.build_upper_dirt; DF.saveData()
-    end
-
-    ImGui.Text("Auto Farm Dirt jika Habis:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.auto_farm_dirt and "  ON  ##dfaf" or "  OFF  ##dfaf") then
-        DF.CFG.auto_farm_dirt = not DF.CFG.auto_farm_dirt; DF.saveData()
-    end
-
-    ImGui.Text("Pasang Platform Sisi (102):"); ImGui.SameLine()
-    if autoBtn(DF.CFG.place_platform and "  ON  ##dfc3" or "  OFF  ##dfc3") then
-        DF.CFG.place_platform = not DF.CFG.place_platform; DF.saveData()
-    end
-
-    ImGui.Text("Auto Collect Drops:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.auto_collect and "  ON  ##dfac" or "  OFF  ##dfac") then
-        DF.CFG.auto_collect = not DF.CFG.auto_collect; DF.saveData()
-    end
-
-    ImGui.Text("Auto Trash Sampah:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.auto_trash and "  ON  ##dfc4" or "  OFF  ##dfc4") then
-        DF.CFG.auto_trash = not DF.CFG.auto_trash; DF.saveData()
-    end
-
-    ImGui.Text("ModFly:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.use_modfly and "  ON  ##dfc5" or "  OFF  ##dfc5") then
-        DF.CFG.use_modfly = not DF.CFG.use_modfly; DF.saveData()
-    end
-
-    ImGui.Separator()
-    ImGui.Text("Punch Delay: " .. tostring(DF.CFG.punch_delay) .. " ms"); ImGui.SameLine()
-    if autoBtn(" -20 ##dfp1") then DF.CFG.punch_delay = math.max(80, (tonumber(DF.CFG.punch_delay) or 160) - 20); DF.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +20 ##dfp2") then DF.CFG.punch_delay = math.min(400, (tonumber(DF.CFG.punch_delay) or 160) + 20); DF.saveData() end
-
-    ImGui.Text("Place Delay: " .. tostring(DF.CFG.place_delay) .. " ms"); ImGui.SameLine()
-    if autoBtn(" -20 ##dfl1") then DF.CFG.place_delay = math.max(80, (tonumber(DF.CFG.place_delay) or 160) - 20); DF.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +20 ##dfl2") then DF.CFG.place_delay = math.min(400, (tonumber(DF.CFG.place_delay) or 160) + 20); DF.saveData() end
 end
 
 local function renderLogsSub()

@@ -402,6 +402,16 @@ end
 -- ============================================================================
 -- PLANT SUB-TAB 3: SETTINGS
 -- ============================================================================
+local function renderOptRow(label, controlFn)
+    ImGui.TableNextRow()
+    ImGui.TableSetColumnIndex(0)
+    ImGui.Text(label)
+    ImGui.TableSetColumnIndex(1)
+    ImGui.Text(":")
+    ImGui.SameLine()
+    controlFn()
+end
+
 local function renderPlantSettingsSub()
     local E = HUB.plant
     if not E then return end
@@ -409,64 +419,63 @@ local function renderPlantSettingsSub()
     ImGui.Text("Pengaturan Auto Plant")
     ImGui.Separator()
 
-    ImGui.Text("Mode Tanam:")
-    ImGui.SameLine()
-    local is3z = (E.CFG.plant_mode == "3zigzag")
-    if autoBtn(is3z and " 3-Zigzag (Cepat) ##md" or " 1-by-1 (Presisi) ##md") then
-        E.CFG.plant_mode = is3z and "1by1" or "3zigzag"
-        E.saveData()
-    end
-
-    ImGui.Text("ModFly (Terbang):")
-    ImGui.SameLine()
-    if autoBtn(E.CFG.use_modfly and "  ON  ##mf" or "  OFF  ##mf") then
-        E.CFG.use_modfly = not E.CFG.use_modfly
-        E.saveData()
-    end
-
-    ImGui.Text("Abaikan Gems:")
-    ImGui.SameLine()
-    if autoBtn(E.CFG.ignore_gems and "  ON  ##ig" or "  OFF  ##ig") then
-        E.CFG.ignore_gems = not E.CFG.ignore_gems
-        E.saveData()
-    end
-
-    ImGui.Separator()
-
-    ImGui.Text("Plant Delay: " .. tostring(E.CFG.plant_delay) .. " ms")
-    ImGui.SameLine()
-    if autoBtn(" -20 ##pd1") then
-        E.CFG.plant_delay = math.max(80, (tonumber(E.CFG.plant_delay) or 180) - 20)
-        E.saveData()
-    end
-    ImGui.SameLine()
-    if autoBtn(" +20 ##pd2") then
-        E.CFG.plant_delay = math.min(500, (tonumber(E.CFG.plant_delay) or 180) + 20)
-        E.saveData()
-    end
-
-    ImGui.Text("Splice Delay: " .. tostring(E.CFG.splice_delay) .. " ms")
-    ImGui.SameLine()
-    if autoBtn(" -20 ##sd1") then
-        E.CFG.splice_delay = math.max(80, (tonumber(E.CFG.splice_delay) or 180) - 20)
-        E.saveData()
-    end
-    ImGui.SameLine()
-    if autoBtn(" +20 ##sd2") then
-        E.CFG.splice_delay = math.min(500, (tonumber(E.CFG.splice_delay) or 180) + 20)
-        E.saveData()
-    end
-
-    ImGui.Text("Step Delay: " .. tostring(E.CFG.step_delay) .. " ms")
-    ImGui.SameLine()
-    if autoBtn(" -10 ##wd1") then
-        E.CFG.step_delay = math.max(40, (tonumber(E.CFG.step_delay) or 110) - 10)
-        E.saveData()
-    end
-    ImGui.SameLine()
-    if autoBtn(" +10 ##wd2") then
-        E.CFG.step_delay = math.min(350, (tonumber(E.CFG.step_delay) or 110) + 10)
-        E.saveData()
+    if ImGui.BeginTable("BorenPlantSetOpts", 2) then
+        renderOptRow("Mode Tanam", function()
+            local is3z = (E.CFG.plant_mode == "3zigzag")
+            if autoBtn(is3z and " 3-Zigzag (Cepat) ##md" or " 1-by-1 (Presisi) ##md") then
+                E.CFG.plant_mode = is3z and "1by1" or "3zigzag"
+                E.saveData()
+            end
+        end)
+        renderOptRow("ModFly (Terbang)", function()
+            if autoBtn(E.CFG.use_modfly and "  ON  ##mf" or "  OFF  ##mf") then
+                E.CFG.use_modfly = not E.CFG.use_modfly
+                E.saveData()
+            end
+        end)
+        renderOptRow("Abaikan Gems", function()
+            if autoBtn(E.CFG.ignore_gems and "  ON  ##ig" or "  OFF  ##ig") then
+                E.CFG.ignore_gems = not E.CFG.ignore_gems
+                E.saveData()
+            end
+        end)
+        renderOptRow("Plant Delay", function()
+            ImGui.Text(tostring(E.CFG.plant_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -20 ##pd1") then
+                E.CFG.plant_delay = math.max(80, (tonumber(E.CFG.plant_delay) or 180) - 20)
+                E.saveData()
+            end
+            ImGui.SameLine()
+            if autoBtn(" +20 ##pd2") then
+                E.CFG.plant_delay = math.min(500, (tonumber(E.CFG.plant_delay) or 180) + 20)
+                E.saveData()
+            end
+        end)
+        renderOptRow("Splice Delay", function()
+            ImGui.Text(tostring(E.CFG.splice_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -20 ##sd1") then
+                E.CFG.splice_delay = math.max(80, (tonumber(E.CFG.splice_delay) or 180) - 20)
+                E.saveData()
+            end
+            ImGui.SameLine()
+            if autoBtn(" +20 ##sd2") then
+                E.CFG.splice_delay = math.min(500, (tonumber(E.CFG.splice_delay) or 180) + 20)
+                E.saveData()
+            end
+        end)
+        renderOptRow("Step Delay", function()
+            ImGui.Text(tostring(E.CFG.step_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -10 ##wd1") then
+                E.CFG.step_delay = math.max(40, (tonumber(E.CFG.step_delay) or 110) - 10)
+                E.saveData()
+            end
+            ImGui.SameLine()
+            if autoBtn(" +10 ##wd2") then
+                E.CFG.step_delay = math.min(350, (tonumber(E.CFG.step_delay) or 110) + 10)
+                E.saveData()
+            end
+        end)
+        ImGui.EndTable()
     end
 
     ImGui.Separator()

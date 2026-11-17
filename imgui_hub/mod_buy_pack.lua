@@ -499,6 +499,16 @@ local function availX()
     return 480
 end
 
+local function renderOptRow(label, controlFn)
+    ImGui.TableNextRow()
+    ImGui.TableSetColumnIndex(0)
+    ImGui.Text(label)
+    ImGui.TableSetColumnIndex(1)
+    ImGui.Text(":")
+    ImGui.SameLine()
+    controlFn()
+end
+
 local function renderMainSub()
     local w = availX()
     ImGui.Text("Enable:"); ImGui.SameLine()
@@ -512,8 +522,29 @@ local function renderMainSub()
     if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
     ImGui.Separator()
 
-    ImGui.Text("Pack Aktif: " .. tostring(BP.CFG.pack_name) .. " (" .. tostring(BP.CFG.pack_id) .. ")")
-    ImGui.Text("Harga: " .. tostring(BP.CFG.pack_price) .. " Gems | Item IDs: " .. tostring(BP.CFG.pack_items))
+    if ImGui.BeginTable("BorenPackMainOpts", 2) then
+        renderOptRow("Pack Aktif", function()
+            ImGui.Text(tostring(BP.CFG.pack_name) .. " (" .. tostring(BP.CFG.pack_id) .. ")")
+        end)
+        renderOptRow("Harga Pack", function()
+            ImGui.Text(tostring(BP.CFG.pack_price) .. " Gems")
+        end)
+        renderOptRow("Item IDs", function()
+            ImGui.Text(tostring(BP.CFG.pack_items))
+        end)
+        renderOptRow("Target Beli", function()
+            local qtyStr = (tonumber(BP.CFG.target_qty) or 0) <= 0 and "0 (All Gems)" or tostring(BP.CFG.target_qty)
+            ImGui.Text(qtyStr); ImGui.SameLine()
+            if autoBtn(" -10 ##bpq1") then BP.CFG.target_qty = math.max(0, (tonumber(BP.CFG.target_qty) or 0) - 10); BP.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +10 ##bpq2") then BP.CFG.target_qty = (tonumber(BP.CFG.target_qty) or 0) + 10; BP.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +1 ##bpq3") then BP.CFG.target_qty = (tonumber(BP.CFG.target_qty) or 0) + 1; BP.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" All ##bpq0") then BP.CFG.target_qty = 0; BP.saveData() end
+        end)
+        ImGui.EndTable()
+    end
 
     ImGui.Text("Pack ID (Debug Name):")
     ImGui.PushItemWidth(math.max(160, w - 12))
@@ -532,16 +563,6 @@ local function renderMainSub()
         if curW ~= "" and curW ~= "EXIT" then BP.CFG.save_world = curW; BP.saveData(); uiNotice = "Save World: " .. curW
         else uiNotice = "Masuk ke world dulu!" end
     end
-
-    local qtyStr = (tonumber(BP.CFG.target_qty) or 0) <= 0 and "0 (Habiskan Gems)" or tostring(BP.CFG.target_qty)
-    ImGui.Text("Target Beli: " .. qtyStr); ImGui.SameLine()
-    if autoBtn(" -10 ##bpq1") then BP.CFG.target_qty = math.max(0, (tonumber(BP.CFG.target_qty) or 0) - 10); BP.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +10 ##bpq2") then BP.CFG.target_qty = (tonumber(BP.CFG.target_qty) or 0) + 10; BP.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +1 ##bpq3") then BP.CFG.target_qty = (tonumber(BP.CFG.target_qty) or 0) + 1; BP.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" All (0) ##bpq0") then BP.CFG.target_qty = 0; BP.saveData() end
 
     ImGui.Separator()
     if autoBtn(" Cari Pack (" .. tostring(#BP.STATE.pack_db) .. ") ") then activeSub = "search" end
@@ -602,20 +623,27 @@ end
 local function renderSettingsSub()
     ImGui.Text("Pengaturan Buy Pack")
     ImGui.Separator()
-    ImGui.Text("Auto Drop Anti-Take:"); ImGui.SameLine()
-    if autoBtn(BP.CFG.auto_drop and "  ON  ##bpad" or "  OFF  ##bpad") then
-        BP.CFG.auto_drop = not BP.CFG.auto_drop; BP.saveData()
+
+    if ImGui.BeginTable("BorenPackSetOpts", 2) then
+        renderOptRow("Auto Drop Anti-Take", function()
+            if autoBtn(BP.CFG.auto_drop and "  ON  ##bpad" or "  OFF  ##bpad") then
+                BP.CFG.auto_drop = not BP.CFG.auto_drop; BP.saveData()
+            end
+        end)
+        renderOptRow("Buy Delay", function()
+            ImGui.Text(tostring(BP.CFG.buy_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -100 ##bpb1") then BP.CFG.buy_delay = math.max(400, (tonumber(BP.CFG.buy_delay) or 900) - 100); BP.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +100 ##bpb2") then BP.CFG.buy_delay = math.min(3000, (tonumber(BP.CFG.buy_delay) or 900) + 100); BP.saveData() end
+        end)
+        renderOptRow("Drop Delay", function()
+            ImGui.Text(tostring(BP.CFG.drop_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -50 ##bpd1") then BP.CFG.drop_delay = math.max(250, (tonumber(BP.CFG.drop_delay) or 450) - 50); BP.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +50 ##bpd2") then BP.CFG.drop_delay = math.min(1500, (tonumber(BP.CFG.drop_delay) or 450) + 50); BP.saveData() end
+        end)
+        ImGui.EndTable()
     end
-
-    ImGui.Text("Buy Delay: " .. tostring(BP.CFG.buy_delay) .. " ms"); ImGui.SameLine()
-    if autoBtn(" -100 ##bpb1") then BP.CFG.buy_delay = math.max(400, (tonumber(BP.CFG.buy_delay) or 900) - 100); BP.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +100 ##bpb2") then BP.CFG.buy_delay = math.min(3000, (tonumber(BP.CFG.buy_delay) or 900) + 100); BP.saveData() end
-
-    ImGui.Text("Drop Delay: " .. tostring(BP.CFG.drop_delay) .. " ms"); ImGui.SameLine()
-    if autoBtn(" -50 ##bpd1") then BP.CFG.drop_delay = math.max(250, (tonumber(BP.CFG.drop_delay) or 450) - 50); BP.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +50 ##bpd2") then BP.CFG.drop_delay = math.min(1500, (tonumber(BP.CFG.drop_delay) or 450) + 50); BP.saveData() end
 end
 
 local function renderLogsSub()

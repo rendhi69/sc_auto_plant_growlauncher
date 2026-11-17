@@ -795,33 +795,51 @@ local function renderStorageSub()
     end
 end
 
+local function renderOptRow(label, controlFn)
+    ImGui.TableNextRow()
+    ImGui.TableSetColumnIndex(0)
+    ImGui.Text(label)
+    ImGui.TableSetColumnIndex(1)
+    ImGui.Text(":")
+    ImGui.SameLine()
+    controlFn()
+end
+
 local function renderSettingsSub()
     ImGui.Text("Pengaturan Build Soil")
     ImGui.Separator()
-    ImGui.Text("Mode Pasang:"); ImGui.SameLine()
-    local is3z = (SB.CFG.place_mode == "3zigzag")
-    if autoBtn(is3z and " 3-Zigzag (Cepat) ##sbm" or " 1-by-1 (Presisi) ##sbm") then
-        SB.CFG.place_mode = is3z and "1by1" or "3zigzag"; SB.saveData()
-    end
-    ImGui.Text("Pasang Platform Sisi (102):"); ImGui.SameLine()
-    if autoBtn(SB.CFG.place_platform and "  ON  ##sbp" or "  OFF  ##sbp") then
-        SB.CFG.place_platform = not SB.CFG.place_platform; SB.saveData()
-    end
-    ImGui.Text("ModFly:"); ImGui.SameLine()
-    if autoBtn(SB.CFG.use_modfly and "  ON  ##sbmf" or "  OFF  ##sbmf") then
-        SB.CFG.use_modfly = not SB.CFG.use_modfly; SB.saveData()
-    end
 
-    ImGui.Separator()
-    ImGui.Text("Place Delay: " .. tostring(SB.CFG.place_delay) .. " ms"); ImGui.SameLine()
-    if autoBtn(" -20 ##sbpd1") then SB.CFG.place_delay = math.max(80, (tonumber(SB.CFG.place_delay) or 180) - 20); SB.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +20 ##sbpd2") then SB.CFG.place_delay = math.min(500, (tonumber(SB.CFG.place_delay) or 180) + 20); SB.saveData() end
-
-    ImGui.Text("Step Delay: " .. tostring(SB.CFG.step_delay) .. " ms"); ImGui.SameLine()
-    if autoBtn(" -10 ##sbwd1") then SB.CFG.step_delay = math.max(40, (tonumber(SB.CFG.step_delay) or 110) - 10); SB.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +10 ##sbwd2") then SB.CFG.step_delay = math.min(350, (tonumber(SB.CFG.step_delay) or 110) + 10); SB.saveData() end
+    if ImGui.BeginTable("BorenSoilSetOpts", 2) then
+        renderOptRow("Mode Pasang", function()
+            local is3z = (SB.CFG.place_mode == "3zigzag")
+            if autoBtn(is3z and " 3-Zigzag (Cepat) ##sbm" or " 1-by-1 (Presisi) ##sbm") then
+                SB.CFG.place_mode = is3z and "1by1" or "3zigzag"; SB.saveData()
+            end
+        end)
+        renderOptRow("Pasang Platform (102)", function()
+            if autoBtn(SB.CFG.place_platform and "  ON  ##sbp" or "  OFF  ##sbp") then
+                SB.CFG.place_platform = not SB.CFG.place_platform; SB.saveData()
+            end
+        end)
+        renderOptRow("ModFly", function()
+            if autoBtn(SB.CFG.use_modfly and "  ON  ##sbmf" or "  OFF  ##sbmf") then
+                SB.CFG.use_modfly = not SB.CFG.use_modfly; SB.saveData()
+            end
+        end)
+        renderOptRow("Place Delay", function()
+            ImGui.Text(tostring(SB.CFG.place_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -20 ##sbpd1") then SB.CFG.place_delay = math.max(80, (tonumber(SB.CFG.place_delay) or 180) - 20); SB.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +20 ##sbpd2") then SB.CFG.place_delay = math.min(500, (tonumber(SB.CFG.place_delay) or 180) + 20); SB.saveData() end
+        end)
+        renderOptRow("Step Delay", function()
+            ImGui.Text(tostring(SB.CFG.step_delay) .. " ms"); ImGui.SameLine()
+            if autoBtn(" -10 ##sbwd1") then SB.CFG.step_delay = math.max(40, (tonumber(SB.CFG.step_delay) or 110) - 10); SB.saveData() end
+            ImGui.SameLine()
+            if autoBtn(" +10 ##sbwd2") then SB.CFG.step_delay = math.min(350, (tonumber(SB.CFG.step_delay) or 110) + 10); SB.saveData() end
+        end)
+        ImGui.EndTable()
+    end
 end
 
 local function renderLogsSub()
