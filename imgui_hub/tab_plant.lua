@@ -1,11 +1,12 @@
 -- ============================================================================
--- BOREN HUB IMGUI - MODULAR UI (PLANT / SETTINGS / LOGS)
+-- BOREN HUB IMGUI - MODULAR UI (SIDEBAR KIRI + PANEL AUTOMATION KANAN)
 -- File: imgui_hub/tab_plant.lua
--- Menggunakan HANYA fungsi ImGui yang 100% terverifikasi aman di Growlauncher
--- Android & PC (mengikuti pola resmi world_saver.lua & calculator.lua):
---   Begin(1 arg), End, SetNextWindowSize, Text, TextWrapped, Button, SameLine,
---   Separator, PushItemWidth, PopItemWidth, InputText, BeginTable(2 arg),
---   TableSetupColumn, TableHeadersRow, TableNextRow, TableSetColumnIndex, EndTable.
+-- Layout:
+--   - KIRI  : Kotak Sidebar dengan daftar kotak nama fitur (Plant, Settings, Logs, Hide)
+--   - KANAN : Automation (Enable, Loop, Seed Storage), List World (Tabel 5 kolom),
+--             dan Save World (Input, + Add, + World Ini, - Hapus, Import, Export, Reset, Save)
+-- Semua tombol memakai ukuran auto-fit (h = 0 / 1-arg Button) agar 100% terbaca
+-- tajam di layar HP Android DPI tinggi maupun PC!
 -- ============================================================================
 
 local UI = {}
@@ -24,25 +25,40 @@ local function safeAvailX()
     if ImGui and ImGui.GetContentRegionAvail then
         local ok, av = pcall(ImGui.GetContentRegionAvail)
         if ok and av then
-            if type(av) == "number" then return av end
+            if type(av) == "number" and av > 40 then return av end
             local okX, x = pcall(function() return av.x end)
-            if okX and type(x) == "number" and x > 50 then return x end
+            if okX and type(x) == "number" and x > 40 then return x end
         end
     end
-    return 520
+    return 480
 end
 
-local function safeButton(label, w, h)
-    if w and h and ImVec2 then
-        local ok, res = pcall(ImGui.Button, label, ImVec2(w, h))
+local function safeWinW()
+    if ImGui and ImGui.GetWindowWidth then
+        local ok, w = pcall(ImGui.GetWindowWidth)
+        if ok and type(w) == "number" and w > 100 then return w end
+    end
+    return 720
+end
+
+-- Button lebar kustom namun tinggi AUTO-FIT (y = 0) agar teks tidak pernah terpotong di Android!
+local function fullBtn(label, width)
+    if width and width > 10 and ImVec2 then
+        local ok, res = pcall(ImGui.Button, label, ImVec2(width, 0))
         if ok then return res == true end
     end
     local ok, res = pcall(ImGui.Button, label)
     return ok and (res == true)
 end
 
+-- Button ukuran otomatis mengikuti panjang & tinggi teks
+local function autoBtn(label)
+    local ok, res = pcall(ImGui.Button, label)
+    return ok and (res == true)
+end
+
 -- ============================================================================
--- TAB 1: PLANT (Enable | Loop, Seed Storage, Tabel 5 Kolom, Add/Import/Export)
+-- PANEL KANAN - TAB 1: PLANT (AUTOMATION, LIST WORLD & SAVE WORLD)
 -- ============================================================================
 local function renderPlantTab()
     local E = HUB.plant
@@ -53,28 +69,31 @@ local function renderPlantTab()
 
     local availW = safeAvailX()
 
-    -- BARIS 1: Enable [ON/OFF]  |  Loop [ON/OFF]  |  Status
+    -- ------------------------------------------------------------------------
+    -- 1. AUTOMATION BAR: Enable [ON/OFF] | Loop [ON/OFF] | Status
+    -- ------------------------------------------------------------------------
     ImGui.Text("Enable:")
     ImGui.SameLine()
-    if safeButton((E.STATE.enabled and "[ ON ]##en" or "[ OFF ]##en"), 68, 24) then
+    if autoBtn(E.STATE.enabled and "  ON  ##en" or "  OFF  ##en") then
         if E.STATE.enabled then E.stop() else E.start() end
     end
 
     ImGui.SameLine()
-    ImGui.Text("  |  Loop:")
+    ImGui.Text(" | Loop:")
     ImGui.SameLine()
-    if safeButton((E.CFG.loop_enabled and "[ ON ]##lp" or "[ OFF ]##lp"), 68, 24) then
+    if autoBtn(E.CFG.loop_enabled and "  ON  ##lp" or "  OFF  ##lp") then
         E.CFG.loop_enabled = not E.CFG.loop_enabled
         E.saveData()
     end
 
     ImGui.SameLine()
-    ImGui.Text("  |  " .. tostring(E.STATE.status_text or "Idle"))
+    ImGui.Text(" | " .. tostring(E.STATE.status_text or "Idle"))
 
-    -- BARIS 2: Seed Storage [Required] + Remove Inaccessible
-    ImGui.Text("Seed Storage:")
-    ImGui.SameLine()
-    local storW = math.max(120, availW - 260)
+    -- ------------------------------------------------------------------------
+    -- 2. SEED STORAGE & REMOVE INACCESSIBLE
+    -- ------------------------------------------------------------------------
+    ImGui.Text("Seed Storage (WORLD:DOOR):")
+    local storW = math.max(150, math.floor(availW * 0.62))
     ImGui.PushItemWidth(storW)
     local chS, newS = ImGui.InputText("##plant_storage", tostring(E.CFG.storage_raw or ""), 256)
     ImGui.PopItemWidth()
@@ -84,14 +103,17 @@ local function renderPlantTab()
     end
 
     ImGui.SameLine()
-    if safeButton("Remove Inaccessible", 150, 24) then
+    if autoBtn("Remove Inaccessible") then
         local removed = E.removeInaccessible()
         notify("Dihapus " .. tostring(removed) .. " world inaccessible.")
     end
 
     ImGui.Separator()
 
-    -- BAGIAN TENGAH: TABEL 5 KOLOM (2-arg BeginTable seperti world_saver.lua)
+    -- ------------------------------------------------------------------------
+    -- 3. LIST WORLD (TABEL 5 KOLOM: Name | Door ID | Seed ID | Splice ID | Status)
+    -- ------------------------------------------------------------------------
+    ImGui.Text("List World (" .. tostring(#E.STATE.rows) .. "):")
     if ImGui.BeginTable("BorenPlantTable", 5) then
         ImGui.TableSetupColumn("Name")
         ImGui.TableSetupColumn("Door ID")
@@ -119,7 +141,7 @@ local function renderPlantTab()
                 ImGui.TableSetColumnIndex(0)
                 local isSel = (E.STATE.selected_idx == i)
                 local prefix = isSel and "> " or ""
-                if ImGui.Button(prefix .. tostring(row.name or "") .. "##r" .. tostring(i)) then
+                if autoBtn(prefix .. tostring(row.name or "") .. "##r" .. tostring(i)) then
                     E.STATE.selected_idx = isSel and 0 or i
                 end
 
@@ -143,31 +165,48 @@ local function renderPlantTab()
 
     ImGui.Separator()
 
-    -- BARIS BAWAH: Format Name:ID:SeedID:SpliceID + [+] [-] [Import] [Export] [Reset Status]
-    ImGui.Text("Format: Name:DoorID:SeedID:SpliceID")
-    local inputW = math.max(120, availW - 310)
-    ImGui.PushItemWidth(inputW)
+    -- ------------------------------------------------------------------------
+    -- 4. TAMBAH & SAVE WORLD (Name:DoorID:SeedID:SpliceID)
+    -- ------------------------------------------------------------------------
+    ImGui.Text("Tambah / Save World (Name:DoorID:SeedID:SpliceID):")
+    ImGui.PushItemWidth(math.max(160, availW - 12))
     local chA, newA = ImGui.InputText("##plant_add", tostring(addInputBuf or ""), 256)
     ImGui.PopItemWidth()
     if chA and type(newA) == "string" then
         addInputBuf = newA
     end
 
-    ImGui.SameLine()
-    if safeButton("+##add", 28, 24) then
+    -- Baris tombol aksi 1: + Add | + World Ini | - Hapus | Save World
+    if autoBtn(" + Add ") then
         local parsed = E.parseRowLine(addInputBuf)
         if parsed then
             table.insert(E.STATE.rows, parsed)
             addInputBuf = ""
             E.saveData()
-            E.addLog("[+] Ditambahkan: " .. E.formatRowLine(parsed))
+            E.addLog("[+] Ditambahkan & tersimpan: " .. E.formatRowLine(parsed))
+            notify("World ditambahkan & tersimpan!")
         else
             notify("Format: Name:DoorID:SeedID:SpliceID")
         end
     end
 
     ImGui.SameLine()
-    if safeButton("-##del", 28, 24) then
+    if autoBtn(" + World Ini ") then
+        local curW = ""
+        if getCurrentWorldName then
+            local okW, wn = pcall(getCurrentWorldName)
+            if okW and type(wn) == "string" then curW = wn:upper() end
+        end
+        if curW ~= "" and curW ~= "EXIT" then
+            addInputBuf = curW .. "::4585:0"
+            notify("Terisi " .. curW .. " (sesuaikan Door & Seed ID lalu klik + Add)")
+        else
+            notify("Masuk ke world terlebih dahulu!")
+        end
+    end
+
+    ImGui.SameLine()
+    if autoBtn(" - Hapus ") then
         local idx = E.STATE.selected_idx
         if idx < 1 or idx > #E.STATE.rows then idx = #E.STATE.rows end
         if idx >= 1 and idx <= #E.STATE.rows then
@@ -179,7 +218,14 @@ local function renderPlantTab()
     end
 
     ImGui.SameLine()
-    if safeButton("Import", 58, 24) then
+    if autoBtn(" Save World ") then
+        E.saveData()
+        E.addLog("[Save] " .. tostring(#E.STATE.rows) .. " world berhasil disimpan.")
+        notify("Tersimpan " .. tostring(#E.STATE.rows) .. " world!")
+    end
+
+    -- Baris tombol aksi 2: Import | Export | Reset Status
+    if autoBtn(" Import ") then
         local clip = ""
         if ImGui.GetClipboardText then
             local okC, resC = pcall(ImGui.GetClipboardText)
@@ -198,7 +244,7 @@ local function renderPlantTab()
             end
             if added > 0 then
                 E.saveData()
-                E.addLog("[Import] " .. tostring(added) .. " world ditambahkan.")
+                E.addLog("[Import] " .. tostring(added) .. " world diimpor & tersimpan.")
                 notify("Import " .. tostring(added) .. " world!")
             else
                 notify("Tidak ada baris valid di clipboard.")
@@ -207,7 +253,7 @@ local function renderPlantTab()
     end
 
     ImGui.SameLine()
-    if safeButton("Export", 58, 24) then
+    if autoBtn(" Export ") then
         local out = {}
         for _, row in ipairs(E.STATE.rows) do
             table.insert(out, E.formatRowLine(row))
@@ -219,76 +265,78 @@ local function renderPlantTab()
     end
 
     ImGui.SameLine()
-    if safeButton("Reset Status", 96, 24) then
+    if autoBtn(" Reset Status ") then
         E.resetAllStatus()
-        notify("Status di-reset ke Ready.")
+        notify("Semua status di-reset ke Ready.")
     end
 end
 
 -- ============================================================================
--- TAB 2: SETTINGS
+-- PANEL KANAN - TAB 2: SETTINGS
 -- ============================================================================
 local function renderSettingsTab()
     local E = HUB.plant
     if not E then return end
 
+    ImGui.Text("Pengaturan Auto Plant")
+    ImGui.Separator()
+
     ImGui.Text("Mode Tanam:")
     ImGui.SameLine()
     local is3z = (E.CFG.plant_mode == "3zigzag")
-    if safeButton(is3z and "3-Zigzag (Cepat)##md" or "1-by-1 (Presisi)##md", 150, 24) then
+    if autoBtn(is3z and " 3-Zigzag (Cepat) ##md" or " 1-by-1 (Presisi) ##md") then
         E.CFG.plant_mode = is3z and "1by1" or "3zigzag"
         E.saveData()
     end
 
     ImGui.Text("ModFly (Terbang):")
     ImGui.SameLine()
-    if safeButton(E.CFG.use_modfly and "[ ON ]##mf" or "[ OFF ]##mf", 72, 24) then
+    if autoBtn(E.CFG.use_modfly and "  ON  ##mf" or "  OFF  ##mf") then
         E.CFG.use_modfly = not E.CFG.use_modfly
         E.saveData()
     end
 
     ImGui.Text("Abaikan Gems:")
     ImGui.SameLine()
-    if safeButton(E.CFG.ignore_gems and "[ ON ]##ig" or "[ OFF ]##ig", 72, 24) then
+    if autoBtn(E.CFG.ignore_gems and "  ON  ##ig" or "  OFF  ##ig") then
         E.CFG.ignore_gems = not E.CFG.ignore_gems
         E.saveData()
     end
 
     ImGui.Separator()
 
-    -- Delay controls dengan tombol - / + (100% aman di semua versi GL)
     ImGui.Text("Plant Delay: " .. tostring(E.CFG.plant_delay) .. " ms")
     ImGui.SameLine()
-    if safeButton("-20##pd1", 44, 22) then
+    if autoBtn(" -20 ##pd1") then
         E.CFG.plant_delay = math.max(80, (tonumber(E.CFG.plant_delay) or 180) - 20)
         E.saveData()
     end
     ImGui.SameLine()
-    if safeButton("+20##pd2", 44, 22) then
+    if autoBtn(" +20 ##pd2") then
         E.CFG.plant_delay = math.min(500, (tonumber(E.CFG.plant_delay) or 180) + 20)
         E.saveData()
     end
 
     ImGui.Text("Splice Delay: " .. tostring(E.CFG.splice_delay) .. " ms")
     ImGui.SameLine()
-    if safeButton("-20##sd1", 44, 22) then
+    if autoBtn(" -20 ##sd1") then
         E.CFG.splice_delay = math.max(80, (tonumber(E.CFG.splice_delay) or 180) - 20)
         E.saveData()
     end
     ImGui.SameLine()
-    if safeButton("+20##sd2", 44, 22) then
+    if autoBtn(" +20 ##sd2") then
         E.CFG.splice_delay = math.min(500, (tonumber(E.CFG.splice_delay) or 180) + 20)
         E.saveData()
     end
 
     ImGui.Text("Step Delay: " .. tostring(E.CFG.step_delay) .. " ms")
     ImGui.SameLine()
-    if safeButton("-10##wd1", 44, 22) then
+    if autoBtn(" -10 ##wd1") then
         E.CFG.step_delay = math.max(40, (tonumber(E.CFG.step_delay) or 110) - 10)
         E.saveData()
     end
     ImGui.SameLine()
-    if safeButton("+10##wd2", 44, 22) then
+    if autoBtn(" +10 ##wd2") then
         E.CFG.step_delay = math.min(350, (tonumber(E.CFG.step_delay) or 110) + 10)
         E.saveData()
     end
@@ -298,16 +346,16 @@ local function renderSettingsTab()
 end
 
 -- ============================================================================
--- TAB 3: LOGS
+-- PANEL KANAN - TAB 3: LOGS
 -- ============================================================================
 local function renderLogsTab()
     local logs = HUB.logs or {}
-    if safeButton("Clear Logs", 90, 24) then
+    if autoBtn(" Clear Logs ") then
         HUB.logs = {}
         if HUB.plant then HUB.plant.STATE.logs = {} end
     end
     ImGui.SameLine()
-    if safeButton("Copy Logs", 90, 24) then
+    if autoBtn(" Copy Logs ") then
         if ImGui.SetClipboardText then
             pcall(ImGui.SetClipboardText, table.concat(logs, "\n"))
             notify("Logs disalin ke clipboard!")
@@ -324,7 +372,31 @@ local function renderLogsTab()
 end
 
 -- ============================================================================
--- MAIN IMGUI RENDER LOOP (100% STACK-SAFE, ZERO RISKY BINDINGS)
+-- SIDEBAR KIRI: KOTAK-KOTAK NAMA FITUR
+-- ============================================================================
+local function renderLeftSidebar(colW)
+    local btnW = math.max(80, colW - 18)
+    ImGui.Text("FITUR")
+    ImGui.Separator()
+
+    if fullBtn(activeTab == "plant" and "[ Plant ]" or "Plant", btnW) then
+        activeTab = "plant"
+    end
+    if fullBtn(activeTab == "settings" and "[ Settings ]" or "Settings", btnW) then
+        activeTab = "settings"
+    end
+    if fullBtn(activeTab == "logs" and "[ Logs ]" or "Logs", btnW) then
+        activeTab = "logs"
+    end
+
+    ImGui.Separator()
+    if fullBtn("Hide UI", btnW) then
+        windowOpen = false
+    end
+end
+
+-- ============================================================================
+-- MAIN IMGUI RENDER LOOP (2-KOLOM: SIDEBAR KIRI | PANEL AUTOMATION KANAN)
 -- ============================================================================
 local function renderFrame()
     if not ImGui or not HUB then return end
@@ -338,11 +410,8 @@ local function renderFrame()
     end
 
     if not windowOpen then
-        if ImGui.SetNextWindowSize and ImVec2 then
-            pcall(ImGui.SetNextWindowSize, ImVec2(125, 60), (ImGui.Cond and ImGui.Cond.Once) or 2)
-        end
         if ImGui.Begin("Boren Hub") then
-            if safeButton("Buka Hub", 105, 26) then
+            if autoBtn(" Buka Boren Hub ") then
                 windowOpen = true
             end
         end
@@ -351,20 +420,42 @@ local function renderFrame()
     end
 
     if ImGui.SetNextWindowSize and ImVec2 then
-        pcall(ImGui.SetNextWindowSize, ImVec2(580, 380), (ImGui.Cond and ImGui.Cond.Once) or 2)
+        pcall(ImGui.SetNextWindowSize, ImVec2(760, 460), (ImGui.Cond and ImGui.Cond.Once) or 2)
     end
 
     if ImGui.Begin("Boren Hub - Auto Plant") then
-        -- Navigasi Tab Modular (mudah ditambah fitur baru nanti)
-        if safeButton(activeTab == "plant" and "> Plant <" or "Plant", 90, 26) then activeTab = "plant" end
-        ImGui.SameLine()
-        if safeButton(activeTab == "settings" and "> Settings <" or "Settings", 95, 26) then activeTab = "settings" end
-        ImGui.SameLine()
-        if safeButton(activeTab == "logs" and "> Logs <" or "Logs", 80, 26) then activeTab = "logs" end
-        ImGui.SameLine()
-        if safeButton("Hide", 60, 26) then windowOpen = false end
+        local winW = safeWinW()
+        local sideW = math.max(120, math.floor(winW * 0.22))
 
-        ImGui.Separator()
+        -- Pisahkan Kiri (Sidebar Fitur) dan Kanan (Automation + List & Save World)
+        local usedCols = false
+        if ImGui.Columns and ImGui.NextColumn then
+            local okCol = pcall(ImGui.Columns, 2)
+            if okCol then
+                usedCols = true
+                if ImGui.SetColumnWidth then
+                    pcall(ImGui.SetColumnWidth, 0, sideW)
+                end
+
+                -- KOLOM KIRI: Kotak Fitur
+                renderLeftSidebar(sideW)
+
+                -- PINDAH KE KOLOM KANAN: Automation, List World & Save World
+                ImGui.NextColumn()
+            end
+        end
+
+        if not usedCols then
+            -- Fallback horizontal jika Columns tidak tersedia
+            if autoBtn(activeTab == "plant" and "[ Plant ]" or "Plant") then activeTab = "plant" end
+            ImGui.SameLine()
+            if autoBtn(activeTab == "settings" and "[ Settings ]" or "Settings") then activeTab = "settings" end
+            ImGui.SameLine()
+            if autoBtn(activeTab == "logs" and "[ Logs ]" or "Logs") then activeTab = "logs" end
+            ImGui.SameLine()
+            if autoBtn("Hide UI") then windowOpen = false end
+            ImGui.Separator()
+        end
 
         if activeTab == "plant" then
             renderPlantTab()
@@ -372,6 +463,10 @@ local function renderFrame()
             renderSettingsTab()
         else
             renderLogsTab()
+        end
+
+        if usedCols then
+            pcall(ImGui.Columns, 1)
         end
     end
     ImGui.End()
