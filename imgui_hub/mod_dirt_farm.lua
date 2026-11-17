@@ -385,12 +385,30 @@ local function getPlayerPos()
     return nil, nil
 end
 
+local function cleanWorldName(s)
+    local out = tostring(s or ""):gsub("%z", ""):gsub("`.", ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+    return out
+end
+
 local function getCurrentWorldSafe()
-    local fn = getCurrentWorldName or getWorld or getCurrentWorld
-    if not fn then return "" end
-    local ok, res = pcall(fn)
-    if ok and type(res) == "string" then return res:upper() end
-    if ok and type(res) == "table" and res.name then return tostring(res.name):upper() end
+    local fns = { getCurrentWorldName, GetWorldName, getWorld, getCurrentWorld, GetWorld }
+    for _, fn in ipairs(fns) do
+        if type(fn) == "function" then
+            local ok, res = pcall(fn)
+            if ok and res ~= nil then
+                if type(res) == "string" then
+                    local nm = cleanWorldName(res)
+                    if nm ~= "" then return nm end
+                elseif type(res) == "table" or type(res) == "userdata" then
+                    local okN, nm = pcall(function() return res.name or res.worldName end)
+                    if okN and type(nm) == "string" then
+                        local c = cleanWorldName(nm)
+                        if c ~= "" then return c end
+                    end
+                end
+            end
+        end
+    end
     return ""
 end
 
@@ -703,19 +721,19 @@ local function moveAdjacentSafe(tx, ty, prefDir)
 end
 
 local function warpToWorld(wName, doorID)
-    wName = trimStr(wName):upper()
-    doorID = trimStr(doorID):upper()
+    wName = cleanWorldName(wName)
+    doorID = cleanWorldName(doorID)
     if wName == "" then return false end
     if getCurrentWorldSafe() == wName and doorID == "" then applyCheats(); return true end
     local joinStr = (doorID ~= "") and (wName .. "|" .. doorID) or wName
-    for _ = 1, 2 do
+    for _ = 1, 3 do
         if not isActive() then return false end
         if sendPacket then
             pcall(sendPacket, 3, "action|join_request\nname|" .. joinStr .. "\ninvitedWorld|0\n")
         elseif growtopia and growtopia.warpTo then
             pcall(growtopia.warpTo, joinStr)
         end
-        local w, lim = 0, math.max(2200, tonumber(DF.CFG.warp_delay) or 3500)
+        local w, lim = 0, math.max(3500, tonumber(DF.CFG.warp_delay) or 4000)
         while w < lim and isActive() do
             safeSleep(250); w = w + 250
             if getCurrentWorldSafe() == wName then
@@ -723,7 +741,10 @@ local function warpToWorld(wName, doorID)
             end
         end
     end
-    return getCurrentWorldSafe() == wName
+    local finalW = getCurrentWorldSafe()
+    if finalW == wName then applyCheats(); return true end
+    addLog(string.format("[Warp Info] Target: %s | World aktif: %s", wName, finalW ~= "" and finalW or "EXIT"))
+    return false
 end
 
 local function rawAction(tx, ty, val)

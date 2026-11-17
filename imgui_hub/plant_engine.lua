@@ -292,13 +292,29 @@ local function getPlayerTilePos()
     return 0, 0
 end
 
+local function cleanWorldName(s)
+    local out = tostring(s or ""):gsub("%z", ""):gsub("`.", ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+    return out
+end
+
 local function getCurrentWorldSafe()
-    local fn = getCurrentWorldName or getWorld or getCurrentWorld
-    if not fn then return "" end
-    local ok, res = pcall(fn)
-    if ok and res then
-        if type(res) == "string" then return res:upper() end
-        if type(res) == "table" and res.name then return tostring(res.name):upper() end
+    local fns = { getCurrentWorldName, GetWorldName, getWorld, getCurrentWorld, GetWorld }
+    for _, fn in ipairs(fns) do
+        if type(fn) == "function" then
+            local ok, res = pcall(fn)
+            if ok and res ~= nil then
+                if type(res) == "string" then
+                    local nm = cleanWorldName(res)
+                    if nm ~= "" then return nm end
+                elseif type(res) == "table" or type(res) == "userdata" then
+                    local okN, nm = pcall(function() return res.name or res.worldName end)
+                    if okN and type(nm) == "string" then
+                        local c = cleanWorldName(nm)
+                        if c ~= "" then return c end
+                    end
+                end
+            end
+        end
     end
     return ""
 end
@@ -311,46 +327,109 @@ local function getTileSafe(tx, ty)
     return nil
 end
 
-local function isWorldProperlyLoaded(expectedWorld)
-    local curW = getCurrentWorldSafe()
-    if curW == "" or curW == "EXIT" then return false end
-    if expectedWorld and expectedWorld ~= "" and curW ~= expectedWorld:upper() then return false end
-    for checkY = 0, 59, 10 do
-        local t = getTileSafe(50, checkY)
-        if t and ((t.fg and t.fg > 0) or (t.bg and t.bg > 0)) then
-            return true
+local function hasAnyLoadedTiles()
+    -- Cek Bedrock (Y=54..58 selalu ada di semua world GT: Dirt Farm, Soil Farm, Clear World, dll.)
+    for _, cy in ipairs({ 55, 56, 54, 57, 24, 25, 52, 53, 23 }) do
+        for _, cx in ipairs({ 50, 25, 75, 10, 90, 0 }) do
+            local t = getTileSafe(cx, cy)
+            if t and ((tonumber(t.fg) or 0) > 0 or (tonumber(t.bg) or 0) > 0) then
+                return true
+            end
+        end
+    end
+    if getTiles then
+        local ok, tiles = pcall(getTiles)
+        if ok and tiles then
+            local any = false
+            pcall(function() for _ in pairs(tiles) do any = true; break end end)
+            if any then return true end
         end
     end
     return false
 end
 
-local function syncInventoryCache()
-    if not getInventory then return end
+local function isWorldProperlyLoaded(expectedWorld)
+    local curW = getCurrentWorldSafe()
+    if curW == "" or curW == "EXIT" then return false end
+    local exp = cleanWorldName(expectedWorld)
+    if exp ~= "" and curW ~= exp then return false end
+    if hasAnyLoadedTiles() then return true end
+    -- Fallback bila getTile berbeda tapi nama world & player lokal sudah aktif di world target
+    if getLocalSafe() ~= nil then return true end
+    return false
+end
+
+local function readInvItemFields(it)
+    local tp = type(it)
+    if tp ~= "table" and tp ~= "userdata" then return nil, nil end
+    local id, amt = nil, nil
+    pcall(function() id = tonumber(it.id or it.itemid or it.itemID or it.item_id) end)
+    pcall(function() amt = tonumber(it.amount or it.count or it.cnt) end)
+    return id, amt
+end
+
+local function forEachInvItem(fn)
+    if not getInventory then return 0 end
     local ok, inv = pcall(getInventory)
-    if not ok or type(inv) ~= "table" then return end
-    local map = {}
-    for _, item in pairs(inv) do
-        local id = tonumber(item.id or item.itemid or item.itemId or 0) or 0
-        local amt = tonumber(item.count or item.amount or 0) or 0
-        if id > 0 then map[id] = amt end
+    if not ok or inv == nil then return 0 end
+    local tp = type(inv)
+    if tp ~= "table" and tp ~= "userdata" then return 0 end
+    local container = inv
+    pcall(function()
+        if inv.items ~= nil and (type(inv.items) == "table" or type(inv.items) == "userdata") then
+            container = inv.items
+        end
+    end)
+    local seen = 0
+    pcall(function()
+        for _, it in pairs(container) do
+            local id, amt = readInvItemFields(it)
+            if id and id > 0 then seen = seen + 1; fn(id, amt or 0) end
+        end
+    end)
+    if seen == 0 then
+        local okLen, n = pcall(function() return #container end)
+        if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
+        local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 400
+        local misses = 0
+        for i = 0, maxI do
+            local okI, it = pcall(function() return container[i] end)
+            local id, amt = nil, nil
+            if okI then id, amt = readInvItemFields(it) end
+            if id and id > 0 then
+                misses = 0; seen = seen + 1; fn(id, amt or 0)
+            else
+                misses = misses + 1
+                if misses >= 50 and i > 5 then break end
+            end
+        end
     end
+    return seen
+end
+
+local function syncInventoryCache()
+    local map = {}
+    forEachInvItem(function(id, amt)
+        map[id] = (map[id] or 0) + (amt or 0)
+    end)
     Engine.STATE.inv_cache = map
 end
 
 local function getInvCount(itemID)
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return 0 end
-    if getInventory then
-        local ok, inv = pcall(getInventory)
-        if ok and type(inv) == "table" then
-            for _, item in pairs(inv) do
-                local id = tonumber(item.id or item.itemid or item.itemId or 0) or 0
-                if id == itemID then
-                    return tonumber(item.count or item.amount or 0) or 0
-                end
-            end
-            return 0
-        end
+    if growtopia and growtopia.checkInventoryCount then
+        local ok, cnt = pcall(growtopia.checkInventoryCount, itemID)
+        if ok and tonumber(cnt) and tonumber(cnt) > 0 then return tonumber(cnt) end
+    end
+    local total = 0
+    forEachInvItem(function(id, amt)
+        if id == itemID and amt > 0 then total = total + amt end
+    end)
+    if total > 0 then return total end
+    if growtopia and growtopia.checkInventory then
+        local ok, has = pcall(growtopia.checkInventory, itemID)
+        if ok and has == true then return 1 end
     end
     if findItem then
         local ok, c = pcall(findItem, itemID)
@@ -610,37 +689,54 @@ local function moveSafeTo(tx, ty)
 end
 
 local function warpToWorld(worldName, doorID)
-    if not worldName or worldName == "" then return false end
-    worldName = worldName:upper()
-    doorID = trimStr(doorID):upper()
+    worldName = cleanWorldName(worldName)
+    doorID = cleanWorldName(doorID)
+    if worldName == "" then return false end
 
-    if getCurrentWorldSafe() == worldName and doorID == "" and isWorldProperlyLoaded(worldName) then
+    -- Jika sudah berada di world target tanpa Door ID, langsung lanjut!
+    if getCurrentWorldSafe() == worldName and doorID == "" then
+        local tw = 0
+        while tw < 1500 and Engine.STATE.running and (not hasAnyLoadedTiles()) do
+            safeSleep(150); tw = tw + 150
+        end
         applyCheatToggles()
         return true
     end
 
     local joinStr = (doorID ~= "") and (worldName .. "|" .. doorID) or worldName
-    for attempt = 1, 2 do
+    for attempt = 1, 3 do
         if not Engine.STATE.running then return false end
         if sendPacket then
-            pcall(sendPacket, 3, "action|join_request\nname|" .. joinStr .. "\ninvitedWorld|0")
+            pcall(sendPacket, 3, "action|join_request\nname|" .. joinStr .. "\ninvitedWorld|0\n")
         elseif growtopia and growtopia.warpTo then
             pcall(growtopia.warpTo, joinStr)
         end
 
-        local waitMs = math.max(2000, tonumber(Engine.CFG.warp_delay) or 3500)
+        local waitMs = math.max(3500, tonumber(Engine.CFG.warp_delay) or 4000)
         local elapsed = 0
         while elapsed < waitMs and Engine.STATE.running do
             safeSleep(250)
             elapsed = elapsed + 250
-            if getCurrentWorldSafe() == worldName and isWorldProperlyLoaded(worldName) then
-                safeSleep(600)
+            if getCurrentWorldSafe() == worldName then
+                -- World sudah masuk! Tunggu tile selesai termuat maksimal 2 detik, lalu langsung jalan!
+                local tw = 0
+                while tw < 2000 and Engine.STATE.running and (not hasAnyLoadedTiles()) do
+                    safeSleep(150); tw = tw + 150
+                end
+                safeSleep(450)
                 applyCheatToggles()
                 return true
             end
         end
     end
-    return (getCurrentWorldSafe() == worldName and isWorldProperlyLoaded(worldName))
+
+    local finalW = getCurrentWorldSafe()
+    if finalW == worldName then
+        applyCheatToggles()
+        return true
+    end
+    addLog(string.format("[Warp Info] Target: %s | World aktif sekarang: %s", worldName, finalW ~= "" and finalW or "EXIT"))
+    return false
 end
 
 local function parseStorageEntries()
@@ -664,30 +760,51 @@ end
 local function collectFloatingSeeds(targetID, targetAmount)
     targetID = tonumber(targetID) or 0
     if targetID <= 0 then return 0 end
-    local getObjsFn = getObjects or getObjectList
+    local getObjsFn = getObjectList or getObjects or getWorldObjects
     if not getObjsFn then return 0 end
 
     local ok, objs = pcall(getObjsFn)
-    if not ok or type(objs) ~= "table" then return 0 end
+    if not ok or not objs then return 0 end
+    local container = objs
+    pcall(function() if type(objs) == "table" and objs.objects then container = objs.objects end end)
 
     local collected = 0
-    for _, obj in pairs(objs) do
-        if not Engine.STATE.running then break end
-        if getInvCount(targetID) >= targetAmount then break end
-        local oid = tonumber(obj and (obj.itemid or obj.itemId or obj.item_id or 0)) or 0
-        if obj and obj.id and oid == targetID then
-            local rx = (obj.pos and obj.pos.x) or obj.posX or obj.x or 0
-            local ry = (obj.pos and obj.pos.y) or obj.posY or obj.y or 0
+    local function handleObj(obj)
+        if not obj or not Engine.STATE.running or getInvCount(targetID) >= targetAmount then return end
+        local oid, uid, amt, rx, ry = nil, nil, 1, nil, nil
+        pcall(function() oid = tonumber(obj.itemid or obj.itemId or obj.item_id) end)
+        pcall(function() uid = tonumber(obj.id or obj.oid or obj.netid) end)
+        pcall(function() amt = tonumber(obj.amount or obj.count) or 1 end)
+        pcall(function()
+            if obj.pos then rx = tonumber(obj.pos.x or obj.pos[1]); ry = tonumber(obj.pos.y or obj.pos[2]) end
+        end)
+        if not rx then pcall(function() rx = tonumber(obj.posX or obj.x) end) end
+        if not ry then pcall(function() ry = tonumber(obj.posY or obj.y) end) end
+        if oid == targetID and uid and rx and ry then
             local ox = math.floor((rx + 10) / 32)
             local oy = math.floor((ry + 10) / 32)
             moveSafeTo(ox, oy)
             safeSleep(100)
             if sendPacketRaw then
-                pcall(sendPacketRaw, false, { type = 11, value = obj.id, x = rx, y = ry })
+                pcall(sendPacketRaw, false, { type = 11, value = uid, x = rx, y = ry })
             end
             safeSleep(160)
-            collected = collected + (tonumber(obj.amount) or 1)
+            collected = collected + amt
             syncInventoryCache()
+        end
+    end
+
+    local seen = 0
+    pcall(function()
+        for _, obj in pairs(container) do seen = seen + 1; handleObj(obj) end
+    end)
+    if seen == 0 then
+        local okLen, n = pcall(function() return #container end)
+        if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
+        local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 1000
+        for i = 0, maxI do
+            local okI, obj = pcall(function() return container[i] end)
+            if okI and obj then handleObj(obj) end
         end
     end
     return collected
