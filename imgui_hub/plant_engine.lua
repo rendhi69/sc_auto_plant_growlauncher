@@ -165,6 +165,45 @@ function Engine.formatRowLine(row)
     )
 end
 
+function Engine.parseStorageLine(raw)
+    local t = trimStr(raw)
+    if t == "" or t:sub(1, 1) == "#" then return nil end
+    local w, d = t:match("^([^:|]+)[:|](.*)$")
+    if w then
+        w = trimStr(w):upper()
+        d = trimStr(d):upper()
+        if w == "" then return nil end
+        return { name = w, door = d }
+    end
+    return { name = t:upper(), door = "" }
+end
+
+function Engine.getStorageList()
+    local list = {}
+    local raw = trimStr(Engine.CFG.storage_raw)
+    if raw == "" then return list end
+    for token in raw:gmatch("[^,\r\n;]+") do
+        local parsed = Engine.parseStorageLine(token)
+        if parsed then table.insert(list, parsed) end
+    end
+    return list
+end
+
+function Engine.setStorageList(list)
+    local out = {}
+    for _, st in ipairs(list or {}) do
+        if st and st.name and st.name ~= "" then
+            if st.door and st.door ~= "" then
+                table.insert(out, tostring(st.name):upper() .. ":" .. tostring(st.door):upper())
+            else
+                table.insert(out, tostring(st.name):upper())
+            end
+        end
+    end
+    Engine.CFG.storage_raw = table.concat(out, ",")
+    Engine.saveData()
+end
+
 function Engine.saveData()
     local path = getDataFilePath()
     local lines = {}
