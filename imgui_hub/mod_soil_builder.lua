@@ -795,6 +795,41 @@ local function renderStorageSub()
     end
 end
 
+local numBufs = {}
+
+local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
+    local key = tostring(id)
+    if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
+    ImGui.PushItemWidth(95)
+    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    ImGui.PopItemWidth()
+    if ch and type(nv) == "string" then
+        local digits = nv:gsub("[^0-9]", "")
+        numBufs[key] = digits
+        local n = tonumber(digits)
+        if n then
+            onChange(math.max(minV, math.min(maxV, math.floor(n))))
+        end
+    end
+    if unit and unit ~= "" then
+        ImGui.SameLine(); ImGui.Text(unit)
+    end
+    if step and step > 0 then
+        ImGui.SameLine()
+        if autoBtn(" - ##m_" .. key) then
+            local nv2 = math.max(minV, (tonumber(curVal) or minV) - step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+        ImGui.SameLine()
+        if autoBtn(" + ##p_" .. key) then
+            local nv2 = math.min(maxV, (tonumber(curVal) or minV) + step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+    end
+end
+
 local function renderOptRow(label, controlFn)
     ImGui.TableNextRow()
     ImGui.TableSetColumnIndex(0)
@@ -827,16 +862,14 @@ local function renderSettingsSub()
             end
         end)
         renderOptRow("Place Delay", function()
-            ImGui.Text(tostring(SB.CFG.place_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -20 ##sbpd1") then SB.CFG.place_delay = math.max(80, (tonumber(SB.CFG.place_delay) or 180) - 20); SB.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +20 ##sbpd2") then SB.CFG.place_delay = math.min(500, (tonumber(SB.CFG.place_delay) or 180) + 20); SB.saveData() end
+            renderNumInput("sb_pd", SB.CFG.place_delay, 60, 500, 20, "ms", function(v)
+                SB.CFG.place_delay = v; SB.saveData()
+            end)
         end)
         renderOptRow("Step Delay", function()
-            ImGui.Text(tostring(SB.CFG.step_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -10 ##sbwd1") then SB.CFG.step_delay = math.max(40, (tonumber(SB.CFG.step_delay) or 110) - 10); SB.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +10 ##sbwd2") then SB.CFG.step_delay = math.min(350, (tonumber(SB.CFG.step_delay) or 110) + 10); SB.saveData() end
+            renderNumInput("sb_wd", SB.CFG.step_delay, 40, 400, 10, "ms", function(v)
+                SB.CFG.step_delay = v; SB.saveData()
+            end)
         end)
         ImGui.EndTable()
     end

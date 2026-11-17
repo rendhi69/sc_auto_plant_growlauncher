@@ -402,6 +402,41 @@ end
 -- ============================================================================
 -- PLANT SUB-TAB 3: SETTINGS
 -- ============================================================================
+local numBufs = {}
+
+local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
+    local key = tostring(id)
+    if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
+    ImGui.PushItemWidth(95)
+    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    ImGui.PopItemWidth()
+    if ch and type(nv) == "string" then
+        local digits = nv:gsub("[^0-9]", "")
+        numBufs[key] = digits
+        local n = tonumber(digits)
+        if n then
+            onChange(math.max(minV, math.min(maxV, math.floor(n))))
+        end
+    end
+    if unit and unit ~= "" then
+        ImGui.SameLine(); ImGui.Text(unit)
+    end
+    if step and step > 0 then
+        ImGui.SameLine()
+        if autoBtn(" - ##m_" .. key) then
+            local nv2 = math.max(minV, (tonumber(curVal) or minV) - step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+        ImGui.SameLine()
+        if autoBtn(" + ##p_" .. key) then
+            local nv2 = math.min(maxV, (tonumber(curVal) or minV) + step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+    end
+end
+
 local function renderOptRow(label, controlFn)
     ImGui.TableNextRow()
     ImGui.TableSetColumnIndex(0)
@@ -440,40 +475,19 @@ local function renderPlantSettingsSub()
             end
         end)
         renderOptRow("Plant Delay", function()
-            ImGui.Text(tostring(E.CFG.plant_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -20 ##pd1") then
-                E.CFG.plant_delay = math.max(80, (tonumber(E.CFG.plant_delay) or 180) - 20)
-                E.saveData()
-            end
-            ImGui.SameLine()
-            if autoBtn(" +20 ##pd2") then
-                E.CFG.plant_delay = math.min(500, (tonumber(E.CFG.plant_delay) or 180) + 20)
-                E.saveData()
-            end
+            renderNumInput("pl_pd", E.CFG.plant_delay, 60, 500, 20, "ms", function(v)
+                E.CFG.plant_delay = v; E.saveData()
+            end)
         end)
         renderOptRow("Splice Delay", function()
-            ImGui.Text(tostring(E.CFG.splice_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -20 ##sd1") then
-                E.CFG.splice_delay = math.max(80, (tonumber(E.CFG.splice_delay) or 180) - 20)
-                E.saveData()
-            end
-            ImGui.SameLine()
-            if autoBtn(" +20 ##sd2") then
-                E.CFG.splice_delay = math.min(500, (tonumber(E.CFG.splice_delay) or 180) + 20)
-                E.saveData()
-            end
+            renderNumInput("pl_sd", E.CFG.splice_delay, 60, 500, 20, "ms", function(v)
+                E.CFG.splice_delay = v; E.saveData()
+            end)
         end)
         renderOptRow("Step Delay", function()
-            ImGui.Text(tostring(E.CFG.step_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -10 ##wd1") then
-                E.CFG.step_delay = math.max(40, (tonumber(E.CFG.step_delay) or 110) - 10)
-                E.saveData()
-            end
-            ImGui.SameLine()
-            if autoBtn(" +10 ##wd2") then
-                E.CFG.step_delay = math.min(350, (tonumber(E.CFG.step_delay) or 110) + 10)
-                E.saveData()
-            end
+            renderNumInput("pl_wd", E.CFG.step_delay, 40, 400, 10, "ms", function(v)
+                E.CFG.step_delay = v; E.saveData()
+            end)
         end)
         ImGui.EndTable()
     end

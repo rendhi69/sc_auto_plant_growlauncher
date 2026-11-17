@@ -1710,6 +1710,41 @@ local function renderWorldsSub()
     end
 end
 
+local numBufs = {}
+
+local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
+    local key = tostring(id)
+    if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
+    ImGui.PushItemWidth(95)
+    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    ImGui.PopItemWidth()
+    if ch and type(nv) == "string" then
+        local digits = nv:gsub("[^0-9]", "")
+        numBufs[key] = digits
+        local n = tonumber(digits)
+        if n then
+            onChange(math.max(minV, math.min(maxV, math.floor(n))))
+        end
+    end
+    if unit and unit ~= "" then
+        ImGui.SameLine(); ImGui.Text(unit)
+    end
+    if step and step > 0 then
+        ImGui.SameLine()
+        if autoBtn(" - ##m_" .. key) then
+            local nv2 = math.max(minV, (tonumber(curVal) or minV) - step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+        ImGui.SameLine()
+        if autoBtn(" + ##p_" .. key) then
+            local nv2 = math.min(maxV, (tonumber(curVal) or minV) + step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+    end
+end
+
 local function renderOptRow(label, controlFn)
     ImGui.TableNextRow()
     ImGui.TableSetColumnIndex(0)
@@ -1732,10 +1767,9 @@ local function renderFindWorldSub()
             end
         end)
         renderOptRow("Panjang Nama World", function()
-            ImGui.Text(tostring(DF.CFG.find_name_len) .. " huruf"); ImGui.SameLine()
-            if autoBtn(" -1 ##dfln1") then DF.CFG.find_name_len = math.max(4, (tonumber(DF.CFG.find_name_len) or 7) - 1); DF.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +1 ##dfln2") then DF.CFG.find_name_len = math.min(14, (tonumber(DF.CFG.find_name_len) or 7) + 1); DF.saveData() end
+            renderNumInput("df_flen", DF.CFG.find_name_len, 4, 14, 1, "huruf", function(v)
+                DF.CFG.find_name_len = v; DF.saveData()
+            end)
         end)
         renderOptRow("Campur Angka (0-9)", function()
             if autoBtn(DF.CFG.find_use_num and "  ON  ##dffn" or "  OFF  ##dffn") then
@@ -1743,10 +1777,9 @@ local function renderFindWorldSub()
             end
         end)
         renderOptRow("Target Jumlah World", function()
-            ImGui.Text(tostring(DF.CFG.find_target_cnt)); ImGui.SameLine()
-            if autoBtn(" -1 ##dftg1") then DF.CFG.find_target_cnt = math.max(1, (tonumber(DF.CFG.find_target_cnt) or 1) - 1); DF.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +1 ##dftg2") then DF.CFG.find_target_cnt = math.min(50, (tonumber(DF.CFG.find_target_cnt) or 1) + 1); DF.saveData() end
+            renderNumInput("df_ftgt", DF.CFG.find_target_cnt, 1, 50, 1, "world", function(v)
+                DF.CFG.find_target_cnt = v; DF.saveData()
+            end)
         end)
         renderOptRow("Auto World Lock (242)", function()
             if autoBtn(DF.CFG.auto_lock_wl and "  ON  ##dfwl" or "  OFF  ##dfwl") then
@@ -1894,16 +1927,19 @@ local function renderSettingsSub()
             end
         end)
         renderOptRow("Punch Delay", function()
-            ImGui.Text(tostring(DF.CFG.punch_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -20 ##dfp1") then DF.CFG.punch_delay = math.max(80, (tonumber(DF.CFG.punch_delay) or 160) - 20); DF.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +20 ##dfp2") then DF.CFG.punch_delay = math.min(400, (tonumber(DF.CFG.punch_delay) or 160) + 20); DF.saveData() end
+            renderNumInput("df_punchd", DF.CFG.punch_delay, 60, 500, 20, "ms", function(v)
+                DF.CFG.punch_delay = v; DF.saveData()
+            end)
         end)
         renderOptRow("Place Delay", function()
-            ImGui.Text(tostring(DF.CFG.place_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -20 ##dfl1") then DF.CFG.place_delay = math.max(80, (tonumber(DF.CFG.place_delay) or 160) - 20); DF.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +20 ##dfl2") then DF.CFG.place_delay = math.min(400, (tonumber(DF.CFG.place_delay) or 160) + 20); DF.saveData() end
+            renderNumInput("df_placed", DF.CFG.place_delay, 60, 500, 20, "ms", function(v)
+                DF.CFG.place_delay = v; DF.saveData()
+            end)
+        end)
+        renderOptRow("Step Delay", function()
+            renderNumInput("df_stepd", DF.CFG.step_delay, 40, 400, 10, "ms", function(v)
+                DF.CFG.step_delay = v; DF.saveData()
+            end)
         end)
         ImGui.EndTable()
     end

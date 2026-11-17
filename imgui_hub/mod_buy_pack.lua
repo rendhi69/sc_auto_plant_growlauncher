@@ -499,6 +499,41 @@ local function availX()
     return 480
 end
 
+local numBufs = {}
+
+local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
+    local key = tostring(id)
+    if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
+    ImGui.PushItemWidth(95)
+    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    ImGui.PopItemWidth()
+    if ch and type(nv) == "string" then
+        local digits = nv:gsub("[^0-9]", "")
+        numBufs[key] = digits
+        local n = tonumber(digits)
+        if n then
+            onChange(math.max(minV, math.min(maxV, math.floor(n))))
+        end
+    end
+    if unit and unit ~= "" then
+        ImGui.SameLine(); ImGui.Text(unit)
+    end
+    if step and step > 0 then
+        ImGui.SameLine()
+        if autoBtn(" - ##m_" .. key) then
+            local nv2 = math.max(minV, (tonumber(curVal) or minV) - step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+        ImGui.SameLine()
+        if autoBtn(" + ##p_" .. key) then
+            local nv2 = math.min(maxV, (tonumber(curVal) or minV) + step)
+            numBufs[key] = tostring(nv2)
+            onChange(nv2)
+        end
+    end
+end
+
 local function renderOptRow(label, controlFn)
     ImGui.TableNextRow()
     ImGui.TableSetColumnIndex(0)
@@ -532,16 +567,14 @@ local function renderMainSub()
         renderOptRow("Item IDs", function()
             ImGui.Text(tostring(BP.CFG.pack_items))
         end)
-        renderOptRow("Target Beli", function()
-            local qtyStr = (tonumber(BP.CFG.target_qty) or 0) <= 0 and "0 (All Gems)" or tostring(BP.CFG.target_qty)
-            ImGui.Text(qtyStr); ImGui.SameLine()
-            if autoBtn(" -10 ##bpq1") then BP.CFG.target_qty = math.max(0, (tonumber(BP.CFG.target_qty) or 0) - 10); BP.saveData() end
+        renderOptRow("Target Beli (0=All)", function()
+            renderNumInput("bp_qty", BP.CFG.target_qty, 0, 9999, 10, "", function(v)
+                BP.CFG.target_qty = v; BP.saveData()
+            end)
             ImGui.SameLine()
-            if autoBtn(" +10 ##bpq2") then BP.CFG.target_qty = (tonumber(BP.CFG.target_qty) or 0) + 10; BP.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +1 ##bpq3") then BP.CFG.target_qty = (tonumber(BP.CFG.target_qty) or 0) + 1; BP.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" All ##bpq0") then BP.CFG.target_qty = 0; BP.saveData() end
+            if autoBtn(" All ##bpq0") then
+                BP.CFG.target_qty = 0; numBufs["bp_qty"] = "0"; BP.saveData()
+            end
         end)
         ImGui.EndTable()
     end
@@ -631,16 +664,14 @@ local function renderSettingsSub()
             end
         end)
         renderOptRow("Buy Delay", function()
-            ImGui.Text(tostring(BP.CFG.buy_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -100 ##bpb1") then BP.CFG.buy_delay = math.max(400, (tonumber(BP.CFG.buy_delay) or 900) - 100); BP.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +100 ##bpb2") then BP.CFG.buy_delay = math.min(3000, (tonumber(BP.CFG.buy_delay) or 900) + 100); BP.saveData() end
+            renderNumInput("bp_bd", BP.CFG.buy_delay, 300, 5000, 100, "ms", function(v)
+                BP.CFG.buy_delay = v; BP.saveData()
+            end)
         end)
         renderOptRow("Drop Delay", function()
-            ImGui.Text(tostring(BP.CFG.drop_delay) .. " ms"); ImGui.SameLine()
-            if autoBtn(" -50 ##bpd1") then BP.CFG.drop_delay = math.max(250, (tonumber(BP.CFG.drop_delay) or 450) - 50); BP.saveData() end
-            ImGui.SameLine()
-            if autoBtn(" +50 ##bpd2") then BP.CFG.drop_delay = math.min(1500, (tonumber(BP.CFG.drop_delay) or 450) + 50); BP.saveData() end
+            renderNumInput("bp_dd", BP.CFG.drop_delay, 200, 3000, 50, "ms", function(v)
+                BP.CFG.drop_delay = v; BP.saveData()
+            end)
         end)
         ImGui.EndTable()
     end
