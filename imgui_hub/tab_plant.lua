@@ -21,9 +21,20 @@ local addWorldBuf = ""
 local addStorageBuf = ""
 local selectedStorageIdx = 0
 local lastFrameCount = -1
+local uiNotice = ""
 
-local function notify(msg)
-    if sendNotification then pcall(sendNotification, tostring(msg)) end
+-- JANGAN panggil sendNotification / LogToConsole dari thread OpenGL OnDrawImGui!
+-- Cukup tampilkan notifikasi instan di dalam panel ImGui agar 100% bebas crash JNI Android.
+local function setNotice(msg)
+    uiNotice = tostring(msg or "")
+end
+
+local function logUI(E, msg)
+    if E and E.addLogUI then
+        E.addLogUI(msg)
+    elseif HUB and HUB.addLog then
+        HUB.addLog(msg)
+    end
 end
 
 local function safeAvailX()
@@ -92,12 +103,15 @@ local function renderPlantWorldsSub()
     ImGui.SameLine()
     if autoBtn("Remove Inaccessible") then
         local removed = E.removeInaccessible()
-        notify("Dihapus " .. tostring(removed) .. " world inaccessible.")
+        setNotice("Dihapus " .. tostring(removed) .. " world inaccessible.")
     end
 
     local storages = E.getStorageList and E.getStorageList() or {}
     ImGui.Text(string.format("Status: %s | Storage: %d | World: %d",
         tostring(E.STATE.status_text or "Idle"), #storages, #E.STATE.rows))
+    if uiNotice ~= "" then
+        ImGui.Text("Info: " .. uiNotice)
+    end
 
     ImGui.Separator()
 
@@ -163,10 +177,10 @@ local function renderPlantWorldsSub()
             table.insert(E.STATE.rows, parsed)
             addWorldBuf = ""
             E.saveData()
-            E.addLog("[+] World ditambah: " .. E.formatRowLine(parsed))
-            notify("World ditambahkan ke List World!")
+            logUI(E, "[+] World ditambah: " .. E.formatRowLine(parsed))
+            setNotice("Ditambahkan: " .. parsed.name .. " (Seed " .. tostring(parsed.seed_id) .. ")")
         else
-            notify("Format: Name:DoorID:SeedID:SpliceID")
+            setNotice("Format: Name:DoorID:SeedID:SpliceID")
         end
     end
 
@@ -179,9 +193,9 @@ local function renderPlantWorldsSub()
         end
         if curW ~= "" and curW ~= "EXIT" then
             addWorldBuf = curW .. "::4585:0"
-            notify("Terisi " .. curW .. " (isi Door & Seed ID lalu klik + Add World)")
+            setNotice("Terisi " .. curW .. " (isi Door & Seed ID lalu klik + Add World)")
         else
-            notify("Masuk ke world terlebih dahulu!")
+            setNotice("Masuk ke world terlebih dahulu!")
         end
     end
 
@@ -193,14 +207,15 @@ local function renderPlantWorldsSub()
             local rem = table.remove(E.STATE.rows, idx)
             E.STATE.selected_idx = 0
             E.saveData()
-            E.addLog("[-] World dihapus: " .. tostring(rem and rem.name or ""))
+            logUI(E, "[-] World dihapus: " .. tostring(rem and rem.name or ""))
+            setNotice("Dihapus: " .. tostring(rem and rem.name or ""))
         end
     end
 
     ImGui.SameLine()
     if autoBtn(" Save ") then
         E.saveData()
-        notify("Tersimpan " .. tostring(#E.STATE.rows) .. " world!")
+        setNotice("Tersimpan " .. tostring(#E.STATE.rows) .. " world!")
     end
 
     if autoBtn(" Import ") then
@@ -210,7 +225,7 @@ local function renderPlantWorldsSub()
             if okC and type(resC) == "string" then clip = resC end
         end
         if clip == "" then
-            notify("Clipboard kosong!")
+            setNotice("Clipboard kosong!")
         else
             local added = 0
             for line in clip:gmatch("[^\r\n]+") do
@@ -222,10 +237,10 @@ local function renderPlantWorldsSub()
             end
             if added > 0 then
                 E.saveData()
-                E.addLog("[Import] " .. tostring(added) .. " world ditambahkan.")
-                notify("Import " .. tostring(added) .. " world!")
+                logUI(E, "[Import] " .. tostring(added) .. " world ditambahkan.")
+                setNotice("Import " .. tostring(added) .. " world!")
             else
-                notify("Tidak ada baris valid di clipboard.")
+                setNotice("Tidak ada baris valid di clipboard.")
             end
         end
     end
@@ -238,14 +253,14 @@ local function renderPlantWorldsSub()
         end
         if ImGui.SetClipboardText then
             pcall(ImGui.SetClipboardText, table.concat(out, "\n"))
-            notify("Export " .. tostring(#out) .. " world ke clipboard!")
+            setNotice("Export " .. tostring(#out) .. " world ke clipboard!")
         end
     end
 
     ImGui.SameLine()
     if autoBtn(" Reset Status ") then
         E.resetAllStatus()
-        notify("Semua status di-reset ke Ready.")
+        setNotice("Semua status di-reset ke Ready.")
     end
 end
 
@@ -260,6 +275,9 @@ local function renderPlantStorageSub()
     local storages = E.getStorageList and E.getStorageList() or {}
 
     ImGui.Text("Daftar World Storage Seed (" .. tostring(#storages) .. "):")
+    if uiNotice ~= "" then
+        ImGui.Text("Info: " .. uiNotice)
+    end
 
     if ImGui.BeginTable("BorenStorageTable", 2) then
         ImGui.TableSetupColumn("Storage World")
@@ -303,10 +321,10 @@ local function renderPlantStorageSub()
             table.insert(storages, parsed)
             E.setStorageList(storages)
             addStorageBuf = ""
-            E.addLog("[Storage +] " .. parsed.name .. (parsed.door ~= "" and (":" .. parsed.door) or ""))
-            notify("Storage ditambahkan & tersimpan!")
+            logUI(E, "[Storage +] " .. parsed.name .. (parsed.door ~= "" and (":" .. parsed.door) or ""))
+            setNotice("Storage ditambahkan: " .. parsed.name)
         else
-            notify("Format: WORLD:DOORID")
+            setNotice("Format: WORLD:DOORID")
         end
     end
 
@@ -319,9 +337,9 @@ local function renderPlantStorageSub()
         end
         if curW ~= "" and curW ~= "EXIT" then
             addStorageBuf = curW .. ":"
-            notify("Terisi " .. curW .. ": (tambahkan Door ID lalu klik + Add Storage)")
+            setNotice("Terisi " .. curW .. ": (tambahkan Door ID lalu klik + Add Storage)")
         else
-            notify("Masuk ke world terlebih dahulu!")
+            setNotice("Masuk ke world terlebih dahulu!")
         end
     end
 
@@ -333,7 +351,8 @@ local function renderPlantStorageSub()
             local rem = table.remove(storages, idx)
             selectedStorageIdx = 0
             E.setStorageList(storages)
-            E.addLog("[Storage -] " .. tostring(rem and rem.name or ""))
+            logUI(E, "[Storage -] " .. tostring(rem and rem.name or ""))
+            setNotice("Storage dihapus: " .. tostring(rem and rem.name or ""))
         end
     end
 
@@ -354,10 +373,10 @@ local function renderPlantStorageSub()
             end
             if added > 0 then
                 E.setStorageList(storages)
-                notify("Import " .. tostring(added) .. " storage!")
+                setNotice("Import " .. tostring(added) .. " storage!")
             end
         else
-            notify("Clipboard kosong!")
+            setNotice("Clipboard kosong!")
         end
     end
 
@@ -369,14 +388,14 @@ local function renderPlantStorageSub()
         end
         if ImGui.SetClipboardText then
             pcall(ImGui.SetClipboardText, table.concat(out, "\n"))
-            notify("Export " .. tostring(#out) .. " storage ke clipboard!")
+            setNotice("Export " .. tostring(#out) .. " storage ke clipboard!")
         end
     end
 
     ImGui.SameLine()
     if autoBtn(" Save ") then
         E.setStorageList(storages)
-        notify("Daftar storage tersimpan!")
+        setNotice("Daftar storage tersimpan!")
     end
 end
 
@@ -467,7 +486,7 @@ local function renderPlantLogsSub()
     if autoBtn(" Copy Logs ") then
         if ImGui.SetClipboardText then
             pcall(ImGui.SetClipboardText, table.concat(logs, "\n"))
-            notify("Logs disalin ke clipboard!")
+            setNotice("Logs disalin ke clipboard!")
         end
     end
     ImGui.Separator()
@@ -600,7 +619,10 @@ local function renderFrame()
             end
         end
 
-        renderRightPanel()
+        local okRight, errRight = pcall(renderRightPanel)
+        if not okRight then
+            setNotice("UI Err: " .. tostring(errRight))
+        end
 
         if usedCols then
             pcall(ImGui.Columns, 1)

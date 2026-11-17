@@ -56,9 +56,13 @@ local function isSystemWindows()
     return false
 end
 
+local CACHED_DATA_PATH = nil
+
 local function getDataFilePath()
+    if CACHED_DATA_PATH then return CACHED_DATA_PATH end
     if isSystemWindows() then
-        return "boren_hub_plant_data.txt"
+        CACHED_DATA_PATH = "boren_hub_plant_data.txt"
+        return CACHED_DATA_PATH
     end
     local candidates = {
         "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/",
@@ -70,22 +74,27 @@ local function getDataFilePath()
         local okR, fr = pcall(io.open, testPath, "r")
         if okR and fr then
             fr:close()
-            return testPath
+            CACHED_DATA_PATH = testPath
+            return CACHED_DATA_PATH
         end
         local okW, fw = pcall(io.open, testPath, "a")
         if okW and fw then
             fw:close()
-            return testPath
+            CACHED_DATA_PATH = testPath
+            return CACHED_DATA_PATH
         end
     end
-    return "boren_hub_plant_data.txt"
+    CACHED_DATA_PATH = "boren_hub_plant_data.txt"
+    return CACHED_DATA_PATH
 end
 
 local function trimStr(s)
-    return tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local out = tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    return out
 end
 
-local function addLog(msg)
+-- Log khusus UI / thread OnDrawImGui (TIDAK memanggil LogToConsole agar tidak crash di render thread!)
+local function addLogUI(msg)
     local line = tostring(msg or "")
     local clean = line:gsub("`.", "")
     local ts = ""
@@ -100,12 +109,17 @@ local function addLog(msg)
     if HUB_REF and HUB_REF.addLog then
         HUB_REF.addLog(ts .. clean)
     end
+end
+
+local function addLog(msg)
+    addLogUI(msg)
     if LogToConsole then
-        pcall(LogToConsole, "`e[Boren Hub] `w" .. line)
+        pcall(LogToConsole, "`e[Boren Hub] `w" .. tostring(msg or ""))
     end
 end
 
 Engine.addLog = addLog
+Engine.addLogUI = addLogUI
 
 local function safeSleep(ms)
     ms = tonumber(ms) or 50
@@ -122,10 +136,11 @@ local function ensureSeedID(id)
     return id
 end
 
--- Parse format: Name:DoorID:SeedID:SpliceID (mendukung 1 s/d 4 bagian)
+-- Parse format: Name:DoorID:SeedID:SpliceID (mendukung pemisah : atau |, 1 s/d 4 bagian)
 function Engine.parseRowLine(raw)
     local s = trimStr(raw)
     if s == "" or s:sub(1, 1) == "#" then return nil end
+    s = s:gsub("|", ":")
 
     local parts = {}
     local start = 1
@@ -1094,7 +1109,8 @@ end
 function Engine.start()
     if Engine.STATE.running then return end
     if #Engine.STATE.rows == 0 then
-        addLog("[Peringatan] Daftar world kosong! Tambahkan Name:ID:SeedID:SpliceID dulu.")
+        addLogUI("[Peringatan] Daftar world kosong! Tambahkan Name:ID:SeedID:SpliceID dulu.")
+        Engine.STATE.status_text = "List Kosong"
         Engine.STATE.enabled = false
         return
     end
@@ -1140,7 +1156,7 @@ function Engine.removeInaccessible()
     Engine.STATE.rows = kept
     Engine.STATE.selected_idx = 0
     Engine.saveData()
-    addLog(string.format("[Clean] Menghapus %d world inaccessible.", removed))
+    addLogUI(string.format("[Clean] Menghapus %d world inaccessible.", removed))
     return removed
 end
 
@@ -1149,7 +1165,7 @@ function Engine.resetAllStatus()
         row.status = "Ready"
     end
     Engine.saveData()
-    addLog("[Reset] Seluruh status world di-reset ke 'Ready'.")
+    addLogUI("[Reset] Seluruh status world di-reset ke 'Ready'.")
 end
 
 function Engine.init(hub)
