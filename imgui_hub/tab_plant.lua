@@ -722,7 +722,26 @@ end
 local animTick = 0
 local dcCopiedUntil = 0
 local ghCopiedUntil = 0
-local vectorLogoOn = false
+local vectorLogoOn = true
+
+-- Pixel-accurate 28x28 scanline spans diekstrak langsung dari logo Discord & GitHub asli
+local DC_SPANS = {
+    {4,8,10},{4,18,20},{5,6,9},{5,12,16},{5,19,22},{6,4,7},{6,8,20},{6,21,24},
+    {7,4,24},{8,3,25},{9,3,25},{10,2,26},{11,2,26},{12,2,26},
+    {13,1,9},{13,11,17},{13,19,27},{14,1,8},{14,12,16},{14,20,27},
+    {15,1,8},{15,12,16},{15,20,27},{16,1,8},{16,12,16},{16,20,27},
+    {17,1,9},{17,11,17},{17,19,27},{18,1,27},{19,1,27},{20,1,27},
+    {21,2,7},{21,9,19},{21,21,26},{22,3,9},{22,19,25},{23,6,9},{23,19,22},
+}
+
+local GH_SPANS = {
+    {1,10,18},{2,8,20},{3,6,22},{4,5,23},{5,4,24},{6,3,6},{6,9,18},{6,22,25},
+    {7,3,6},{7,22,25},{8,2,6},{8,22,26},{9,2,6},{9,22,26},{10,1,5},{10,22,26},
+    {11,1,5},{11,23,27},{12,1,5},{12,23,27},{13,1,5},{13,23,27},{14,1,5},{14,23,27},
+    {15,1,5},{15,23,27},{16,1,5},{16,22,27},{17,1,5},{17,22,27},{18,2,6},{18,21,26},
+    {19,2,4},{19,6,8},{19,20,26},{20,2,4},{20,7,10},{20,17,25},{21,3,5},{21,8,10},{21,17,25},
+    {22,4,5},{22,18,24},{23,5,6},{23,18,23},{24,6,10},{24,18,22},{25,7,10},{25,18,21},{26,9,10},{26,18,19},
+}
 
 local function colU32(r, g, b, a)
     return math.floor(r) + math.floor(g) * 256 + math.floor(b) * 65536 + math.floor(a or 255) * 16777216
@@ -750,76 +769,35 @@ local function getLastItemRect()
     return x1, y1, x2, y2
 end
 
-local function drawVectorDiscordOnLastItem(blink, copied, pulse)
+local function drawSpanLogoOnLastItem(spans, col, floatY)
     local dl = getFGDrawList()
     if not dl or not ImVec2 then return false, "DrawList FG tidak tersedia" end
     local x1, y1, x2, y2 = getLastItemRect()
     if not x1 then return false, "GetItemRect gagal" end
 
-    local cx = (x1 + x2) * 0.5
-    local cy = y1 + (y2 - y1) * 0.36
-    local r  = math.max(16, math.min((x2 - x1) * 0.19, (y2 - y1) * 0.27))
-
-    local colMain  = copied and colU32(59, 165, 93, 255) or colU32(88, 101, 242, 255) -- Hijau sukses / Blurple Discord #5865F2
-    local colGlow  = copied and colU32(87, 242, 135, 160) or colU32(138, 148, 255, 150)
-    local colWhite = colU32(255, 255, 255, 255)
-
-    local ok, err = pcall(function()
-        -- Lingkaran luar Blurple + ring glow berdenyut
-        dl:AddCircleFilled(ImVec2(cx, cy), r, colMain, 28)
-        if dl.AddCircle then
-            dl:AddCircle(ImVec2(cx, cy), r + 2 + pulse, colGlow, 28, 2)
-        end
-        -- Bentuk kepala Clyde putih (rounded pill + 2 lobe bawah controller)
-        dl:AddRectFilled(ImVec2(cx - r * 0.56, cy - r * 0.36), ImVec2(cx + r * 0.56, cy + r * 0.30), colWhite, r * 0.30)
-        dl:AddCircleFilled(ImVec2(cx - r * 0.38, cy + r * 0.22), r * 0.21, colWhite, 16)
-        dl:AddCircleFilled(ImVec2(cx + r * 0.38, cy + r * 0.22), r * 0.21, colWhite, 16)
-        -- 2 Mata Clyde (berkedip saat blink)
-        if blink then
-            dl:AddRectFilled(ImVec2(cx - r * 0.34, cy - r * 0.04), ImVec2(cx - r * 0.10, cy + r * 0.05), colMain, 2)
-            dl:AddRectFilled(ImVec2(cx + r * 0.10, cy - r * 0.04), ImVec2(cx + r * 0.34, cy + r * 0.05), colMain, 2)
-        else
-            dl:AddCircleFilled(ImVec2(cx - r * 0.22, cy - r * 0.02), r * 0.13, colMain, 14)
-            dl:AddCircleFilled(ImVec2(cx + r * 0.22, cy - r * 0.02), r * 0.13, colMain, 14)
-        end
-    end)
-    return ok, err
-end
-
-local function drawVectorGitHubOnLastItem(blink, copied, pulse)
-    local dl = getFGDrawList()
-    if not dl or not ImVec2 then return false, "DrawList FG tidak tersedia" end
-    local x1, y1, x2, y2 = getLastItemRect()
-    if not x1 then return false, "GetItemRect gagal" end
-
-    local cx = (x1 + x2) * 0.5
-    local cy = y1 + (y2 - y1) * 0.36
-    local r  = math.max(16, math.min((x2 - x1) * 0.19, (y2 - y1) * 0.27))
-
-    local colBg    = copied and colU32(46, 125, 72, 255) or colU32(30, 34, 42, 255) -- GitHub Charcoal #1E222A
-    local colRim   = copied and colU32(87, 242, 135, 220) or colU32(210, 218, 230, 200)
-    local colWhite = colU32(255, 255, 255, 255)
+    local cardW = x2 - x1
+    local cardH = y2 - y1
+    local iconSize = math.max(44, math.min(cardW * 0.42, cardH * 0.62))
+    local px = iconSize / 28.0
+    local ox = (x1 + x2 - iconSize) * 0.5
+    local oy = y1 + (cardH * 0.72 - iconSize) * 0.5 + (floatY or 0)
 
     local ok, err = pcall(function()
-        -- Lingkaran gelap GitHub + ring putih tipis berdenyut
-        dl:AddCircleFilled(ImVec2(cx, cy), r, colBg, 28)
-        if dl.AddCircle then
-            dl:AddCircle(ImVec2(cx, cy), r + 1 + pulse, colRim, 28, 2)
-        end
-        -- Siluet kepala Octocat putih + 2 telinga kucing + bahu bawah
-        dl:AddCircleFilled(ImVec2(cx - r * 0.32, cy - r * 0.38), r * 0.18, colWhite, 14)
-        dl:AddCircleFilled(ImVec2(cx + r * 0.32, cy - r * 0.38), r * 0.18, colWhite, 14)
-        dl:AddCircleFilled(ImVec2(cx, cy - r * 0.06), r * 0.44, colWhite, 22)
-        dl:AddRectFilled(ImVec2(cx - r * 0.26, cy + r * 0.26), ImVec2(cx + r * 0.26, cy + r * 0.78), colWhite, r * 0.18)
-        -- 2 Mata Octocat (berkedip saat blink)
-        if blink then
-            dl:AddRectFilled(ImVec2(cx - r * 0.28, cy - r * 0.10), ImVec2(cx - r * 0.08, cy - r * 0.02), colBg, 2)
-            dl:AddRectFilled(ImVec2(cx + r * 0.08, cy - r * 0.10), ImVec2(cx + r * 0.28, cy - r * 0.02), colBg, 2)
-        else
-            dl:AddCircleFilled(ImVec2(cx - r * 0.17, cy - r * 0.07), r * 0.09, colBg, 12)
-            dl:AddCircleFilled(ImVec2(cx + r * 0.17, cy - r * 0.07), r * 0.09, colBg, 12)
+        for _, sp in ipairs(spans) do
+            local ay = oy + sp[1] * px
+            local by = oy + (sp[1] + 1) * px + 0.6
+            dl:AddRectFilled(ImVec2(ox + sp[2] * px, ay), ImVec2(ox + sp[3] * px, by), col)
         end
     end)
+    if not ok then
+        ok, err = pcall(function()
+            for _, sp in ipairs(spans) do
+                local ay = oy + sp[1] * px
+                local by = oy + (sp[1] + 1) * px + 0.6
+                dl:AddRectFilled(ImVec2(ox + sp[2] * px, ay), ImVec2(ox + sp[3] * px, by), col, 0)
+            end
+        end)
+    end
     return ok, err
 end
 
@@ -892,61 +870,55 @@ local function renderDashboardPanel()
     end
     ImGui.Separator()
 
-    -- 2. KARTU LOGO ANIMASI KLIK-UNTUK-COPY (Tanpa menampilkan link raw)
+    -- 2. KARTU LOGO DISCORD & GITHUB ASLI (Scanline HD, klik untuk copy)
     local cardW = math.max(150, math.floor(availW * 0.47))
-
-    -- Animasi mata berkedip Discord Clyde & efek senang saat baru diklik
     local dcCopied = (animTick < dcCopiedUntil)
-    local dcBlink  = ((slowStep % 14) == 13)
-    local dcFace   = dcCopied and "  ( ^ _ ^ )  " or (dcBlink and "  ( - _ - )  " or "  ( o _ o )  ")
-    local dcTop    = dcCopied and "  * COPIED * " or "   .-----.   "
-    local dcLabel  = dcCopied and " Link Tersalin! " or " Discord Boren "
-
-    -- Animasi Octocat / Code GitHub berkedip & efek senang saat baru diklik
     local ghCopied = (animTick < ghCopiedUntil)
-    local ghBlink  = ((slowStep % 16) == 7)
-    local ghTop    = ghCopied and "  * COPIED * " or "   /\\___/\\   "
-    local ghFace   = ghCopied and "  ( ^ . ^ )  " or (ghBlink and "  ( - . - )  " or "  ( o . o )  ")
-    local ghLabel  = ghCopied and " Link Tersalin! " or "  GitHub Boren  "
+    local dcLabel  = dcCopied and "Link Tersalin!" or "Discord Boren"
+    local ghLabel  = ghCopied and "Link Tersalin!" or "GitHub Boren"
+    local floatDc  = math.sin(animTick * 0.08) * 2.5
+    local floatGh  = math.sin(animTick * 0.08 + 1.6) * 2.5
 
-    local pulsePx = ((slowStep % 4) == 0) and 0 or (((slowStep % 4) == 1 or (slowStep % 4) == 3) and 2 or 4)
+    local colDc = dcCopied and colU32(87, 242, 135, 255) or colU32(130, 144, 255, 255) -- Discord Blurple #8290FF
+    local colGh = ghCopied and colU32(87, 242, 135, 255) or colU32(208, 215, 222, 255) -- GitHub Silver #D0D7DE
+
     if ImGui.BeginTable("BorenDashCards", 2) then
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
         local dcBtnText = vectorLogoOn
-            and ("\n\n\n\n" .. dcLabel .. "\n##card_dc")
-            or  ("\n" .. dcTop .. "\n" .. dcFace .. "\n\n" .. dcLabel .. "\n##card_dc")
+            and ("\n\n\n\n\n" .. dcLabel .. "\n##card_dc")
+            or  ("\n\n  " .. dcLabel .. "  \n\n##card_dc")
         if fullBtn(dcBtnText, cardW) then
             copyLinkToClipboard("Link Discord Boren", getHubLink("discord"))
             dcCopiedUntil = animTick + 90
         end
         if vectorLogoOn then
-            local okV, errV = drawVectorDiscordOnLastItem(dcBlink, dcCopied, pulsePx)
+            local okV, errV = drawSpanLogoOnLastItem(DC_SPANS, colDc, floatDc)
             if not okV then
                 vectorLogoOn = false
-                setNotice("Logo Vektor tidak support di GL ini: " .. tostring(errV))
+                setNotice("Mode Logo Gambar tidak didukung GL: " .. tostring(errV))
             end
         end
 
         ImGui.TableSetColumnIndex(1)
         local ghBtnText = vectorLogoOn
-            and ("\n\n\n\n" .. ghLabel .. "\n##card_gh")
-            or  ("\n" .. ghTop .. "\n" .. ghFace .. "\n\n" .. ghLabel .. "\n##card_gh")
+            and ("\n\n\n\n\n" .. ghLabel .. "\n##card_gh")
+            or  ("\n\n  " .. ghLabel .. "  \n\n##card_gh")
         if fullBtn(ghBtnText, cardW) then
             copyLinkToClipboard("Link GitHub Boren", getHubLink("github_repo"))
             ghCopiedUntil = animTick + 90
         end
         if vectorLogoOn then
-            local okV, errV = drawVectorGitHubOnLastItem(ghBlink, ghCopied, pulsePx)
+            local okV, errV = drawSpanLogoOnLastItem(GH_SPANS, colGh, floatGh)
             if not okV then
                 vectorLogoOn = false
-                setNotice("Logo Vektor tidak support di GL ini: " .. tostring(errV))
+                setNotice("Mode Logo Gambar tidak didukung GL: " .. tostring(errV))
             end
         end
         ImGui.EndTable()
     end
 
-    ImGui.Text("Klik kartu logo di atas untuk salin link ke clipboard.")
+    ImGui.Text("Klik logo di atas untuk salin link ke clipboard.")
     ImGui.Separator()
 
     -- 3. TOMBOL REFRESH / HOT-RELOAD + ANIMASI LOADING SPINNER & PROGRESS BAR
@@ -967,9 +939,8 @@ local function renderDashboardPanel()
         end
     end
     ImGui.SameLine()
-    if autoBtn(vectorLogoOn and " Logo Vektor: ON ##dash_vl" or " Logo Vektor: OFF ##dash_vl") then
+    if autoBtn(vectorLogoOn and " Logo: Gambar ##dash_vl" or " Logo: Teks ##dash_vl") then
         vectorLogoOn = not vectorLogoOn
-        setNotice(vectorLogoOn and "Mode Logo Vektor (ImGui.FG) aktif!" or "Kembali ke Mode Logo Standar.")
     end
 end
 
