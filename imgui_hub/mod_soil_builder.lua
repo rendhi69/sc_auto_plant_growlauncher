@@ -19,6 +19,10 @@ SB.CFG = {
     default_block  = 8772, -- Fertile Soil Block
     platform_id    = 102,
     place_platform = false,
+    enable_water   = false, -- Pasang Water Bucket (822) di pojok kiri & kanan atas-bawah
+    water_id       = 822,
+    water_left     = true,  -- Pojok Kiri (X = 0, Y = 0..53)
+    water_right    = true,  -- Pojok Kanan (X = 99, Y = 0..53)
     place_mode     = "3zigzag", -- "3zigzag" | "1by1"
     place_delay    = 180,
     step_delay     = 110,
@@ -173,6 +177,10 @@ function SB.saveData()
         "LOOP=" .. (SB.CFG.loop_enabled and "1" or "0"),
         "BLK=" .. tostring(tonumber(SB.CFG.default_block) or 8772),
         "PPLAT=" .. (SB.CFG.place_platform and "1" or "0"),
+        "ENWTR=" .. (SB.CFG.enable_water and "1" or "0"),
+        "WTRID=" .. tostring(tonumber(SB.CFG.water_id) or 822),
+        "WTRL=" .. (SB.CFG.water_left and "1" or "0"),
+        "WTRR=" .. (SB.CFG.water_right and "1" or "0"),
         "MODE=" .. tostring(SB.CFG.place_mode or "3zigzag"),
         "PDELAY=" .. tostring(tonumber(SB.CFG.place_delay) or 180),
         "STEPD=" .. tostring(tonumber(SB.CFG.step_delay) or 110),
@@ -197,6 +205,10 @@ function SB.loadData()
         elseif k == "LOOP" then SB.CFG.loop_enabled = (v == "1")
         elseif k == "BLK" then SB.CFG.default_block = tonumber(v) or 8772
         elseif k == "PPLAT" then SB.CFG.place_platform = (v == "1")
+        elseif k == "ENWTR" then SB.CFG.enable_water = (v == "1")
+        elseif k == "WTRID" then SB.CFG.water_id = tonumber(v) or 822
+        elseif k == "WTRL" then SB.CFG.water_left = (v ~= "0")
+        elseif k == "WTRR" then SB.CFG.water_right = (v ~= "0")
         elseif k == "MODE" and (v == "3zigzag" or v == "1by1") then SB.CFG.place_mode = v
         elseif k == "PDELAY" then SB.CFG.place_delay = tonumber(v) or 180
         elseif k == "STEPD" then SB.CFG.step_delay = tonumber(v) or 110
@@ -359,12 +371,26 @@ local function applyCheats()
     pcall(editToggle, "No Lava", true)
 end
 
+local function isTileStandable(tx, ty)
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    local t = getTileSafe(tx, ty)
+    if not t then return false end
+    local fg = tonumber(t.fg) or 0
+    if fg == 0 or fg == 6 or fg == 12 or fg == 102 or fg == (tonumber(SB.CFG.platform_id) or 102) then
+        return true
+    end
+    if t.collidable == true or fg == 2 or fg == 4 or fg == 8 or fg == 10 then
+        return false
+    end
+    return true
+end
+
 local function moveSafeTo(tx, ty)
     if not SB.STATE.running then return false end
     tx = math.max(0, math.min(99, math.floor(tx or 0)))
     ty = math.max(0, math.min(53, math.floor(ty or 0)))
     local cx, cy = getPlayerPos()
-    if math.abs(cx - tx) <= 1 and math.abs(cy - ty) <= 1 then return true end
+    if cx == tx and cy == ty then return true end
     local pFn = FindPath or findPath
     if not pFn then return false end
     if SB.CFG.use_modfly and editToggle then pcall(editToggle, "ModFly", true) end
@@ -374,23 +400,48 @@ local function moveSafeTo(tx, ty)
     local maxW = (dist <= 3) and math.max(160, (tonumber(SB.CFG.step_delay) or 110) * 3) or math.max(3000, math.min(20000, dist * 220))
     local waited, lastX, lastY, stuck = 0, cx, cy, 0
     while waited < maxW and SB.STATE.running do
-        safeSleep(dist <= 3 and 30 or 70)
-        waited = waited + (dist <= 3 and 30 or 70)
+        local sl = (dist <= 3) and 25 or 65
+        safeSleep(sl); waited = waited + sl
         local nx, ny = getPlayerPos()
-        if math.abs(nx - tx) <= 1 and math.abs(ny - ty) <= 1 then
+        if nx == tx and ny == ty then
             safeSleep(SB.CFG.step_delay or 50)
             return true
         end
         if nx == lastX and ny == lastY then
             stuck = stuck + 1
-            if stuck == 20 then pcall(pFn, tx, ty)
-            elseif stuck >= 38 then break end
+            if stuck == 18 then pcall(pFn, tx, ty)
+            elseif stuck >= 35 then break end
         else
             stuck = 0; lastX, lastY = nx, ny
         end
     end
     local fx, fy = getPlayerPos()
     return (math.abs(fx - tx) <= 1 and math.abs(fy - ty) <= 1)
+end
+
+local function moveAdjacentForWater(tx, ty, prefDir)
+    local dir = prefDir or ((tx < 50) and 1 or -1)
+    local cands = {
+        { tx + dir, ty },
+        { tx, ty - 1 },
+        { tx, ty + 1 },
+        { tx + dir, ty - 1 },
+        { tx + dir, ty + 1 },
+    }
+    for _, c in ipairs(cands) do
+        if isTileStandable(c[1], c[2]) then
+            local px, py = getPlayerPos()
+            if px == c[1] and py == c[2] then return true end
+            if moveSafeTo(c[1], c[2]) then
+                local nx, ny = getPlayerPos()
+                if math.abs(nx - tx) <= 2 and math.abs(ny - ty) <= 2 and not (nx == tx and ny == ty) then
+                    return true
+                end
+            end
+        end
+    end
+    local px, py = getPlayerPos()
+    return (math.abs(px - tx) <= 2 and math.abs(py - ty) <= 2 and not (px == tx and py == ty))
 end
 
 local function warpToWorld(wName, doorID)
@@ -462,6 +513,112 @@ local function isEmptyTile(tx, ty)
     return t and (tonumber(t.fg) or 0) == 0
 end
 
+-- Deteksi bit TILEFLAG_WATER (0x0400 = 1024) kompatibel Lua 5.1/5.4 tanpa operator bitwise
+local function tileHasWater(t)
+    if not t then return false end
+    if t.water == true or t.hasWater == true then return true end
+    local fl = tonumber(t.flag or t.flags) or 0
+    return (math.floor(fl / 1024) % 2) == 1
+end
+
+-- VALIDASI KETAT PUT WATER 1x PER TILE (Anti-Spam & Anti-Ambil Balik!)
+-- Put #1 memunculkan air (flag bit 1024 ON & stok Water Bucket berkurang 1).
+-- Put #2 pada tile basah akan MENGAMBIL air balik, sehingga fungsi ini WAJIB menunggu
+-- konfirmasi server (flag/water/stok) hingga 850ms sebelum berani retry maks 1x!
+local function placeWaterOnceSafe(tx, ty, waterID, prefDir)
+    if not SB.STATE.running then return false end
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    local t = getTileSafe(tx, ty)
+    if not t then return false end
+    -- Skip jika tile tidak kosong (ada block/bedrock/door) atau SUDAH ada air!
+    if (tonumber(t.fg) or 0) ~= 0 then return true end
+    if tileHasWater(t) then return true end
+    if getInvCount(waterID) <= 0 then return false end
+
+    local pDelay = math.max(140, tonumber(SB.CFG.place_delay) or 180)
+
+    local function attemptSingleWaterPut()
+        local tPre = getTileSafe(tx, ty)
+        if not tPre or (tonumber(tPre.fg) or 0) ~= 0 or tileHasWater(tPre) then return true end
+        local flagBefore = tonumber(tPre.flag or tPre.flags) or 0
+        local invBefore  = getInvCount(waterID)
+        if invBefore <= 0 then return false end
+
+        local px, py = getPlayerPos()
+        if math.abs(px - tx) > 2 or math.abs(py - ty) > 2 or (px == tx and py == ty) then
+            if not moveAdjacentForWater(tx, ty, prefDir) then return false end
+        end
+
+        -- Cek ulang sesaat sebelum kirim paket agar tidak menimpa tile yang baru saja tersinkron basah
+        local tPre2 = getTileSafe(tx, ty)
+        if tPre2 and tileHasWater(tPre2) then return true end
+
+        placePacket(tx, ty, waterID)
+        safeSleep(math.min(pDelay, 160))
+
+        -- Polling konfirmasi hingga 850ms: begitu flag water aktif / flag berubah / bucket berkurang 1 -> STOP!
+        local waited = 0
+        while waited < 850 and SB.STATE.running do
+            local tNow = getTileSafe(tx, ty)
+            if tNow then
+                if tileHasWater(tNow) then return true end
+                local flagNow = tonumber(tNow.flag or tNow.flags) or 0
+                if flagNow ~= flagBefore then return true end
+            end
+            if invBefore > 0 and getInvCount(waterID) < invBefore then
+                return true
+            end
+            safeSleep(50); waited = waited + 50
+        end
+        return false
+    end
+
+    if attemptSingleWaterPut() then
+        return true
+    end
+
+    -- Sebelum 1x retry terakhir, pastikan benar-benar masih kering & reposisi ulang
+    if not SB.STATE.running then return false end
+    moveAdjacentForWater(tx, ty, prefDir)
+    safeSleep(150)
+    local tCheck = getTileSafe(tx, ty)
+    if tCheck and tileHasWater(tCheck) then return true end
+
+    return attemptSingleWaterPut()
+end
+
+-- Pasang Water Pojok Kiri (X=0) & Pojok Kanan (X=99) dari atas sampai bawah (Y=0..53)
+local function putWaterCorners(row)
+    if not SB.CFG.enable_water then return true end
+    local waterID = tonumber(SB.CFG.water_id) or 822
+    local cols = {}
+    if SB.CFG.water_left then table.insert(cols, { x = 0, dir = 1, label = "Kiri" }) end
+    if SB.CFG.water_right then table.insert(cols, { x = 99, dir = -1, label = "Kanan" }) end
+    if #cols == 0 then return true end
+
+    for _, col in ipairs(cols) do
+        if not SB.STATE.running then return false end
+        row.status = "Water " .. col.label .. "..."
+        SB.STATE.status_text = row.name .. " Water " .. col.label
+        addLog(string.format("[Water] Pasang air pojok %s (X=%d, Y=0..53) — 1x tervalidasi/tile", col.label, col.x))
+        for y = 0, 53 do
+            if not SB.STATE.running then return false end
+            local t = getTileSafe(col.x, y)
+            if t and (tonumber(t.fg) or 0) == 0 and (not tileHasWater(t)) then
+                if getInvCount(waterID) <= 0 then
+                    if not restockItem(row, waterID) then
+                        row.status = "No Water"
+                        SB.saveData()
+                        return false
+                    end
+                end
+                placeWaterOnceSafe(col.x, y, waterID, col.dir)
+            end
+        end
+    end
+    return true
+end
+
 local function processSoilWorld(row)
     local blockID = tonumber(row.block_id) or tonumber(SB.CFG.default_block) or 8772
     row.status = "Warping..."
@@ -470,6 +627,11 @@ local function processSoilWorld(row)
         row.status = "Inaccessible"; SB.saveData(); return false
     end
     safeSleep(500)
+
+    -- 1. Pasang Water Pojok Kiri & Kanan (atas sampai bawah Y=0..53) jika aktif
+    if SB.CFG.enable_water then
+        if not putWaterCorners(row) then return false end
+    end
 
     local pDelay = tonumber(SB.CFG.place_delay) or 180
     local goingRight = true
@@ -609,6 +771,12 @@ end
 function SB.stop()
     SB.STATE.running = false; SB.STATE.enabled = false; SB.STATE.status_text = "Stopped"
 end
+
+SB._test = {
+    tileHasWater = tileHasWater,
+    placeWaterOnceSafe = placeWaterOnceSafe,
+    putWaterCorners = putWaterCorners,
+}
 
 -- ============================================================================
 -- 3. UI RENDERER (List World | List Storage | Settings | Logs)
@@ -854,6 +1022,21 @@ local function renderSettingsSub()
         renderOptRow("Pasang Platform (102)", function()
             if autoBtn(SB.CFG.place_platform and "  ON  ##sbp" or "  OFF  ##sbp") then
                 SB.CFG.place_platform = not SB.CFG.place_platform; SB.saveData()
+            end
+        end)
+        renderOptRow("Pasang Water Pojok (822)", function()
+            if autoBtn(SB.CFG.enable_water and "  ON  ##sbw" or "  OFF  ##sbw") then
+                SB.CFG.enable_water = not SB.CFG.enable_water; SB.saveData()
+            end
+        end)
+        renderOptRow("Water Pojok Kiri (X=0)", function()
+            if autoBtn(SB.CFG.water_left and "  ON  ##sbwl" or "  OFF  ##sbwl") then
+                SB.CFG.water_left = not SB.CFG.water_left; SB.saveData()
+            end
+        end)
+        renderOptRow("Water Pojok Kanan (X=99)", function()
+            if autoBtn(SB.CFG.water_right and "  ON  ##sbwr" or "  OFF  ##sbwr") then
+                SB.CFG.water_right = not SB.CFG.water_right; SB.saveData()
             end
         end)
         renderOptRow("ModFly", function()
