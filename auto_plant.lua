@@ -1545,7 +1545,7 @@ local function moveSafeTo(tx, ty)
     ty = math.max(0, math.min(53, math.floor(ty or 0)))
 
     local curPx, curPy = getPlayerTilePos()
-    if curPx == tx and curPy == ty then
+    if curPx and curPy and math.abs(curPx - tx) <= 1 and math.abs(curPy - ty) <= 1 then
         return true
     end
 
@@ -1569,93 +1569,80 @@ local function moveSafeTo(tx, ty)
     end
 
     local pFn = FindPath or findPath
-    if pFn then
-        -- Titik singgah (waypoint) wajib tile kosong; titik garis lurus sering jatuh di block padat
-        local function isFree(x, y)
-            if x < 0 or x > 99 or y < 0 or y > 53 then return false end
-            local tt = getTileSafe(x, y)
-            return not (tt and tt.collidable)
-        end
-        local function nearestFree(cx, cy)
-            for r = 0, 3 do
-                for oy = -r, r do
-                    for ox = -r, r do
-                        if math.max(math.abs(ox), math.abs(oy)) == r and isFree(cx + ox, cy + oy) then
-                            return cx + ox, cy + oy
-                        end
-                    end
-                end
+    if not pFn then return false end
+
+    -- Pastikan cheat ModFly aktif jika di-enable agar bot bisa bergerak bebas antar lantai
+    if CFG.use_modfly and editToggle then
+        pcall(editToggle, "ModFly", true)
+    end
+
+    local startPx, startPy = getPlayerTilePos()
+    local totalDist = math.max(math.abs((startPx or 0) - sx), math.abs((startPy or 0) - sy))
+
+    -- JALUR 1: Jika jarak DEKAT (<= 3 blok, khas langkah tanam 3-zigzag)
+    if totalDist <= 3 then
+        pcall(pFn, sx, sy)
+        local maxWait = math.max(160, (tonumber(CFG.step_delay) or 110) * 3)
+        local waited = 0
+        while waited < maxWait and STATE.running do
+            while STATE.paused do safeSleep(200) if not STATE.running then return false end end
+            local px, py = getPlayerTilePos()
+            if px and py and math.abs(px - sx) <= 1 and math.abs(py - sy) <= 1 then
+                safeSleep(CFG.step_delay or 40)
+                return true
             end
-            return nil, nil
+            safeSleep(25)
+            waited = waited + 25
         end
+        local fPx, fPy = getPlayerTilePos()
+        return (fPx and fPy and math.abs(fPx - sx) <= 1 and math.abs(fPy - sy) <= 1)
+    end
 
-        local CHUNK_LIMIT = 5 -- hop pendek (5 block) agar gerakan natural & aman saat lag
-        local stuck = 0
-        while STATE.running do
-            local cx, cy = getPlayerTilePos()
-            if not cx or not cy then safeSleep(100); stuck = stuck + 1; if stuck >= 3 then break end
+    -- JALUR 2: Jika jarak JAUH (berpindah dari pintu ke baris tanaman, atau antar baris)
+    -- Growlauncher FindPath menangani kalkulasi rute platform & tangga secara otomatis.
+    pcall(pFn, sx, sy)
+
+    -- Batas waktu wajar berdasarkan jarak (misal 70 blok butuh waktu ~12-18 detik)
+    local maxWaitFar = math.max(3000, math.min(25000, totalDist * 250))
+    local waitedFar = 0
+    local lastPx, lastPy = startPx, startPy
+    local stuckTicks = 0
+
+    while waitedFar < maxWaitFar and STATE.running do
+        while STATE.paused do safeSleep(300) if not STATE.running then return false end end
+        safeSleep(70)
+        waitedFar = waitedFar + 70
+
+        local nx, ny = getPlayerTilePos()
+        if nx and ny then
+            -- Apakah bot sudah tiba di tujuan atau bersebelahan (toleransi 1 blok)?
+            if math.abs(nx - sx) <= 1 and math.abs(ny - sy) <= 1 then
+                safeSleep(CFG.step_delay or 60)
+                return true
+            end
+
+            -- Evaluasi apakah bot sedang berjalan maju atau benar-benar diam/macet
+            if nx == lastPx and ny == lastPy then
+                stuckTicks = stuckTicks + 1
+                -- Jika diam selama 1.4 detik (20 ticks), panggil ulang FindPath sekali
+                if stuckTicks == 20 then
+                    pcall(pFn, sx, sy)
+                elseif stuckTicks >= 40 then
+                    -- Bot terhenti total selama hampir 3 detik tanpa pergerakan
+                    break
+                end
             else
-                if math.abs(cx - sx) <= 1 and math.abs(cy - sy) <= 1 then
-                    safeSleep(CFG.step_delay or 40)
-                    return true
-                end
-                local dx, dy = sx - cx, sy - cy
-                local dist = math.max(math.abs(dx), math.abs(dy))
-                local wx, wy = sx, sy
-                local direct = (dist <= CHUNK_LIMIT) or stuck >= 1
-                if not direct then
-                    local r = CHUNK_LIMIT / dist
-                    local ix = math.max(0, math.min(99, math.floor(cx + dx * r + 0.5)))
-                    local iy = math.max(0, math.min(53, math.floor(cy + dy * r + 0.5)))
-                    wx, wy = nearestFree(ix, iy)
-                    if not wx then wx, wy, direct = sx, sy, true end
-                end
-
-                -- TELEPORT per hop dengan jeda SEBELUM teleport (jitter ±20% agar ritme tidak robotik)
-                local baseDelay = tonumber(CFG.step_delay) or 110
-                safeSleep(math.floor(math.max(100, baseDelay) * (0.8 + math.random() * 0.4)))
-                if not STATE.running then break end
-                pcall(pFn, wx, wy)
-                local stepDist = math.max(math.abs(wx - cx), math.abs(wy - cy))
-                local maxWait = math.max(120, math.min(1500, stepDist * 60))
-                local waited = 0
-                while waited < maxWait and STATE.running do
-                    local npx, npy = getPlayerTilePos()
-                    if npx and npy and math.abs(npx - wx) <= 1 and math.abs(npy - wy) <= 1 then break end
-                    safeSleep(30)
-                    waited = waited + 30
-                end
-
-                local nx, ny = getPlayerTilePos()
-                if nx and ny and math.abs(nx - sx) <= 1 and math.abs(ny - sy) <= 1 then
-                    safeSleep(math.max(150, baseDelay)) -- jeda setelah teleport terakhir sebelum aksi
-                    return true
-                end
-                if nx == cx and ny == cy then
-                    stuck = stuck + 1 -- tidak bergerak: coba langsung ke target, lalu menyerah
-                    if direct and stuck >= 2 then break end
-                else
-                    stuck = 0
-                end
-                -- Jeda SETELAH tiap teleport mengikuti slider "Kecepatan Melangkah" (min 200ms, jitter ±20%)
-                safeSleep(math.floor(math.max(200, baseDelay * 2) * (0.8 + math.random() * 0.4)))
+                stuckTicks = 0
+                lastPx, lastPy = nx, ny
             end
         end
     end
 
-    -- Fallback Packet 0 jika FindPath terhambat udara / ModFly
-    local okP, p = pcall(getLocal)
-    if okP and p and sendPacketRaw then
-        local state = (curPx and curPx > sx) and 48 or 32
-        pcall(sendPacketRaw, false, {
-            type  = 0,
-            x     = sx * 32,
-            y     = sy * 32,
-            state = state,
-        })
-        safeSleep(CFG.step_delay or 50)
+    local finalX, finalY = getPlayerTilePos()
+    if finalX and finalY and math.abs(finalX - sx) <= 1 and math.abs(finalY - sy) <= 1 then
         return true
     end
+
     return false
 end
 
@@ -1925,7 +1912,9 @@ local function plantTileSection(spotList, plantY)
                     sendPlantPacket(sx, plantY, s1)
                     safeSleep(delayPlant)
                     local tNow = getTileSafe(sx, plantY)
-                    if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
+                    local curPx, curPy = getPlayerTilePos()
+                    local isNear = curPx and curPy and math.abs(curPx - sx) <= 2 and math.abs(curPy - plantY) <= 2
+                    if isNear and tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
                         failCounts[k] = (failCounts[k] or 0) + 1
                         -- Wajib gagal berturut-turut minimal 4 kali (konfirmasi network nyata) sebelum mem-blacklist tile
                         if failCounts[k] >= 4 then
@@ -2006,7 +1995,9 @@ local function plantTileSection(spotList, plantY)
                     sendPlantPacket(sx, plantY, s2)
                     safeSleep(delayPlant)
                     local tNow = getTileSafe(sx, plantY)
-                    if tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
+                    local curPx, curPy = getPlayerTilePos()
+                    local isNear = curPx and curPy and math.abs(curPx - sx) <= 2 and math.abs(curPy - plantY) <= 2
+                    if isNear and tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack() then
                         failCounts[k] = (failCounts[k] or 0) + 1
                         if failCounts[k] >= 4 then
                             blocked[k] = true
@@ -2311,7 +2302,11 @@ local function executePlantRow(plantY, goingRight, startX)
             end
 
             -- Langsung menuju posisi berdiri awal tanpa harus kembali ke ujung kiri x = 0
-            moveSafeTo(firstStandX, plantY)
+            local arrivedStart = moveSafeTo(firstStandX, plantY)
+            if not arrivedStart and STATE.running then
+                safeSleep(150)
+                moveSafeTo(firstStandX, plantY)
+            end
 
             local standX = firstStandX
             while standX <= 97 do
@@ -2334,15 +2329,19 @@ local function executePlantRow(plantY, goingRight, startX)
                         if not okRestock then return false end
                     end
 
-                    moveSafeTo(standX, plantY)
+                    local moved = moveSafeTo(standX, plantY)
+                    local curPx, curPy = getPlayerTilePos()
+                    local inRange = curPx and curPy and math.abs(curPx - standX) <= 2 and math.abs(curPy - plantY) <= 2
 
-                    local sectionSpots = {}
-                    if sLeft >= 0 and isTilePlantable(sLeft, plantY) then table.insert(sectionSpots, sLeft) end
-                    if isTilePlantable(sCenter, plantY) then table.insert(sectionSpots, sCenter) end
-                    if sRight <= 99 and isTilePlantable(sRight, plantY) then table.insert(sectionSpots, sRight) end
+                    if inRange or moved then
+                        local sectionSpots = {}
+                        if sLeft >= 0 and isTilePlantable(sLeft, plantY) then table.insert(sectionSpots, sLeft) end
+                        if isTilePlantable(sCenter, plantY) then table.insert(sectionSpots, sCenter) end
+                        if sRight <= 99 and isTilePlantable(sRight, plantY) then table.insert(sectionSpots, sRight) end
 
-                    if #sectionSpots > 0 then
-                        plantTileSection(sectionSpots, plantY)
+                        if #sectionSpots > 0 then
+                            plantTileSection(sectionSpots, plantY)
+                        end
                     end
                 end
 
@@ -2402,7 +2401,11 @@ local function executePlantRow(plantY, goingRight, startX)
             end
 
             -- Langsung menuju posisi berdiri awal tanpa harus ke ujung kanan x = 98 dahulu
-            moveSafeTo(firstStandX, plantY)
+            local arrivedStart = moveSafeTo(firstStandX, plantY)
+            if not arrivedStart and STATE.running then
+                safeSleep(150)
+                moveSafeTo(firstStandX, plantY)
+            end
 
             local standX = firstStandX
             while standX >= 1 do
@@ -2425,15 +2428,19 @@ local function executePlantRow(plantY, goingRight, startX)
                         if not okRestock then return false end
                     end
 
-                    moveSafeTo(standX, plantY)
+                    local moved = moveSafeTo(standX, plantY)
+                    local curPx, curPy = getPlayerTilePos()
+                    local inRange = curPx and curPy and math.abs(curPx - standX) <= 2 and math.abs(curPy - plantY) <= 2
 
-                    local sectionSpots = {}
-                    if sRight <= 99 and isTilePlantable(sRight, plantY) then table.insert(sectionSpots, sRight) end
-                    if isTilePlantable(sCenter, plantY) then table.insert(sectionSpots, sCenter) end
-                    if sLeft >= 0 and isTilePlantable(sLeft, plantY) then table.insert(sectionSpots, sLeft) end
+                    if inRange or moved then
+                        local sectionSpots = {}
+                        if sRight <= 99 and isTilePlantable(sRight, plantY) then table.insert(sectionSpots, sRight) end
+                        if isTilePlantable(sCenter, plantY) then table.insert(sectionSpots, sCenter) end
+                        if sLeft >= 0 and isTilePlantable(sLeft, plantY) then table.insert(sectionSpots, sLeft) end
 
-                    if #sectionSpots > 0 then
-                        plantTileSection(sectionSpots, plantY)
+                        if #sectionSpots > 0 then
+                            plantTileSection(sectionSpots, plantY)
+                        end
                     end
                 end
 
@@ -2802,8 +2809,13 @@ local function autoPlantMainLoop()
                             if STATE.paused or not STATE.running then
                                 break
                             end
-                            -- Alasan lain (misal kehabisan seed): pindah indeks agar tidak infinite loop
-                            STATE.active_world_idx = STATE.active_world_idx + 1
+                            -- Jika hanya 1 world dan masih ada seed, jangan berhenti: ulangi baris tersisa
+                            if #CFG.world_list <= 1 and hasEnoughSeedInBackpack() then
+                                addLog(string.format("[Info] Melanjutkan penyisiran petak tersisa di %s...", entry.name))
+                                safeSleep(1000)
+                            else
+                                STATE.active_world_idx = STATE.active_world_idx + 1
+                            end
                         end
                     end
                 else
@@ -2838,6 +2850,21 @@ local function autoPlantMainLoop()
             -- World memang sudah berstatus DONE, lewati ke indeks berikutnya
             STATE.active_world_idx = STATE.active_world_idx + 1
         end
+
+        -- Cek apakah seluruh antrean selesai atau masih ada world tertunda
+        if STATE.active_world_idx > #CFG.world_list and STATE.running and not STATE.paused then
+            local hasPendingWorld = false
+            for _, w in ipairs(CFG.world_list) do
+                if not w.done then
+                    hasPendingWorld = true
+                    break
+                end
+            end
+            if hasPendingWorld and hasEnoughSeedInBackpack() then
+                STATE.active_world_idx = 1
+                safeSleep(1000)
+            end
+        end
     end
 
     if STATE.paused then
@@ -2865,10 +2892,22 @@ local function startBot()
     STATE.blocked_tiles = {}
     STATE.plant_fail_count = {}
     pcall(scanForeignLocksInWorld)
+
+    local function safeMainLoop()
+        local ok, err = xpcall(autoPlantMainLoop, function(e)
+            return tostring(e) .. "\n" .. debug.traceback()
+        end)
+        if not ok then
+            addLog("`4[Runtime Crash] `w" .. tostring(err))
+            STATE.running = false
+            if editToggle then pcall(editToggle, "ap_run_power", false) end
+        end
+    end
+
     if runCoroutine then
-        pcall(runCoroutine, autoPlantMainLoop)
+        pcall(runCoroutine, safeMainLoop)
     else
-        local co = coroutine.create(autoPlantMainLoop)
+        local co = coroutine.create(safeMainLoop)
         coroutine.resume(co)
     end
 end
