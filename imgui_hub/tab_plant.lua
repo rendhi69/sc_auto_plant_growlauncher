@@ -722,6 +722,106 @@ end
 local animTick = 0
 local dcCopiedUntil = 0
 local ghCopiedUntil = 0
+local vectorLogoOn = false
+
+local function colU32(r, g, b, a)
+    return math.floor(r) + math.floor(g) * 256 + math.floor(b) * 65536 + math.floor(a or 255) * 16777216
+end
+
+local function getFGDrawList()
+    if not ImGui then return nil end
+    if type(ImGui.FG) == "table" or type(ImGui.FG) == "userdata" then
+        return ImGui.FG
+    end
+    if type(ImGui.GetWindowDrawList) == "function" then
+        local ok, dl = pcall(ImGui.GetWindowDrawList)
+        if ok and dl then return dl end
+    end
+    return nil
+end
+
+local function getLastItemRect()
+    if not (ImGui and ImGui.GetItemRectMin and ImGui.GetItemRectMax) then return nil end
+    local ok1, p1 = pcall(ImGui.GetItemRectMin)
+    local ok2, p2 = pcall(ImGui.GetItemRectMax)
+    if not (ok1 and ok2 and p1 and p2) then return nil end
+    local okC, x1, y1, x2, y2 = pcall(function() return p1.x, p1.y, p2.x, p2.y end)
+    if not (okC and type(x1) == "number" and type(x2) == "number" and x2 > x1 and y2 > y1) then return nil end
+    return x1, y1, x2, y2
+end
+
+local function drawVectorDiscordOnLastItem(blink, copied, pulse)
+    local dl = getFGDrawList()
+    if not dl or not ImVec2 then return false, "DrawList FG tidak tersedia" end
+    local x1, y1, x2, y2 = getLastItemRect()
+    if not x1 then return false, "GetItemRect gagal" end
+
+    local cx = (x1 + x2) * 0.5
+    local cy = y1 + (y2 - y1) * 0.36
+    local r  = math.max(16, math.min((x2 - x1) * 0.19, (y2 - y1) * 0.27))
+
+    local colMain  = copied and colU32(59, 165, 93, 255) or colU32(88, 101, 242, 255) -- Hijau sukses / Blurple Discord #5865F2
+    local colGlow  = copied and colU32(87, 242, 135, 160) or colU32(138, 148, 255, 150)
+    local colWhite = colU32(255, 255, 255, 255)
+
+    local ok, err = pcall(function()
+        -- Lingkaran luar Blurple + ring glow berdenyut
+        dl:AddCircleFilled(ImVec2(cx, cy), r, colMain, 28)
+        if dl.AddCircle then
+            dl:AddCircle(ImVec2(cx, cy), r + 2 + pulse, colGlow, 28, 2)
+        end
+        -- Bentuk kepala Clyde putih (rounded pill + 2 lobe bawah controller)
+        dl:AddRectFilled(ImVec2(cx - r * 0.56, cy - r * 0.36), ImVec2(cx + r * 0.56, cy + r * 0.30), colWhite, r * 0.30)
+        dl:AddCircleFilled(ImVec2(cx - r * 0.38, cy + r * 0.22), r * 0.21, colWhite, 16)
+        dl:AddCircleFilled(ImVec2(cx + r * 0.38, cy + r * 0.22), r * 0.21, colWhite, 16)
+        -- 2 Mata Clyde (berkedip saat blink)
+        if blink then
+            dl:AddRectFilled(ImVec2(cx - r * 0.34, cy - r * 0.04), ImVec2(cx - r * 0.10, cy + r * 0.05), colMain, 2)
+            dl:AddRectFilled(ImVec2(cx + r * 0.10, cy - r * 0.04), ImVec2(cx + r * 0.34, cy + r * 0.05), colMain, 2)
+        else
+            dl:AddCircleFilled(ImVec2(cx - r * 0.22, cy - r * 0.02), r * 0.13, colMain, 14)
+            dl:AddCircleFilled(ImVec2(cx + r * 0.22, cy - r * 0.02), r * 0.13, colMain, 14)
+        end
+    end)
+    return ok, err
+end
+
+local function drawVectorGitHubOnLastItem(blink, copied, pulse)
+    local dl = getFGDrawList()
+    if not dl or not ImVec2 then return false, "DrawList FG tidak tersedia" end
+    local x1, y1, x2, y2 = getLastItemRect()
+    if not x1 then return false, "GetItemRect gagal" end
+
+    local cx = (x1 + x2) * 0.5
+    local cy = y1 + (y2 - y1) * 0.36
+    local r  = math.max(16, math.min((x2 - x1) * 0.19, (y2 - y1) * 0.27))
+
+    local colBg    = copied and colU32(46, 125, 72, 255) or colU32(30, 34, 42, 255) -- GitHub Charcoal #1E222A
+    local colRim   = copied and colU32(87, 242, 135, 220) or colU32(210, 218, 230, 200)
+    local colWhite = colU32(255, 255, 255, 255)
+
+    local ok, err = pcall(function()
+        -- Lingkaran gelap GitHub + ring putih tipis berdenyut
+        dl:AddCircleFilled(ImVec2(cx, cy), r, colBg, 28)
+        if dl.AddCircle then
+            dl:AddCircle(ImVec2(cx, cy), r + 1 + pulse, colRim, 28, 2)
+        end
+        -- Siluet kepala Octocat putih + 2 telinga kucing + bahu bawah
+        dl:AddCircleFilled(ImVec2(cx - r * 0.32, cy - r * 0.38), r * 0.18, colWhite, 14)
+        dl:AddCircleFilled(ImVec2(cx + r * 0.32, cy - r * 0.38), r * 0.18, colWhite, 14)
+        dl:AddCircleFilled(ImVec2(cx, cy - r * 0.06), r * 0.44, colWhite, 22)
+        dl:AddRectFilled(ImVec2(cx - r * 0.26, cy + r * 0.26), ImVec2(cx + r * 0.26, cy + r * 0.78), colWhite, r * 0.18)
+        -- 2 Mata Octocat (berkedip saat blink)
+        if blink then
+            dl:AddRectFilled(ImVec2(cx - r * 0.28, cy - r * 0.10), ImVec2(cx - r * 0.08, cy - r * 0.02), colBg, 2)
+            dl:AddRectFilled(ImVec2(cx + r * 0.08, cy - r * 0.10), ImVec2(cx + r * 0.28, cy - r * 0.02), colBg, 2)
+        else
+            dl:AddCircleFilled(ImVec2(cx - r * 0.17, cy - r * 0.07), r * 0.09, colBg, 12)
+            dl:AddCircleFilled(ImVec2(cx + r * 0.17, cy - r * 0.07), r * 0.09, colBg, 12)
+        end
+    end)
+    return ok, err
+end
 
 local SPIN_FRAMES = { "|", "/", "-", "\\" }
 local CHEV_L = { "  >", " >>", ">>>", ">> " }
@@ -809,18 +909,39 @@ local function renderDashboardPanel()
     local ghFace   = ghCopied and "  ( ^ . ^ )  " or (ghBlink and "  ( - . - )  " or "  ( o . o )  ")
     local ghLabel  = ghCopied and " Link Tersalin! " or "  GitHub Boren  "
 
+    local pulsePx = ((slowStep % 4) == 0) and 0 or (((slowStep % 4) == 1 or (slowStep % 4) == 3) and 2 or 4)
     if ImGui.BeginTable("BorenDashCards", 2) then
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
-        if fullBtn("\n" .. dcTop .. "\n" .. dcFace .. "\n\n" .. dcLabel .. "\n##card_dc", cardW) then
+        local dcBtnText = vectorLogoOn
+            and ("\n\n\n\n" .. dcLabel .. "\n##card_dc")
+            or  ("\n" .. dcTop .. "\n" .. dcFace .. "\n\n" .. dcLabel .. "\n##card_dc")
+        if fullBtn(dcBtnText, cardW) then
             copyLinkToClipboard("Link Discord Boren", getHubLink("discord"))
             dcCopiedUntil = animTick + 90
         end
+        if vectorLogoOn then
+            local okV, errV = drawVectorDiscordOnLastItem(dcBlink, dcCopied, pulsePx)
+            if not okV then
+                vectorLogoOn = false
+                setNotice("Logo Vektor tidak support di GL ini: " .. tostring(errV))
+            end
+        end
 
         ImGui.TableSetColumnIndex(1)
-        if fullBtn("\n" .. ghTop .. "\n" .. ghFace .. "\n\n" .. ghLabel .. "\n##card_gh", cardW) then
+        local ghBtnText = vectorLogoOn
+            and ("\n\n\n\n" .. ghLabel .. "\n##card_gh")
+            or  ("\n" .. ghTop .. "\n" .. ghFace .. "\n\n" .. ghLabel .. "\n##card_gh")
+        if fullBtn(ghBtnText, cardW) then
             copyLinkToClipboard("Link GitHub Boren", getHubLink("github_repo"))
             ghCopiedUntil = animTick + 90
+        end
+        if vectorLogoOn then
+            local okV, errV = drawVectorGitHubOnLastItem(ghBlink, ghCopied, pulsePx)
+            if not okV then
+                vectorLogoOn = false
+                setNotice("Logo Vektor tidak support di GL ini: " .. tostring(errV))
+            end
         end
         ImGui.EndTable()
     end
@@ -844,6 +965,11 @@ local function renderDashboardPanel()
         if not packDbReloading then
             triggerReloadPackDb()
         end
+    end
+    ImGui.SameLine()
+    if autoBtn(vectorLogoOn and " Logo Vektor: ON ##dash_vl" or " Logo Vektor: OFF ##dash_vl") then
+        vectorLogoOn = not vectorLogoOn
+        setNotice(vectorLogoOn and "Mode Logo Vektor (ImGui.FG) aktif!" or "Kembali ke Mode Logo Standar.")
     end
 end
 
