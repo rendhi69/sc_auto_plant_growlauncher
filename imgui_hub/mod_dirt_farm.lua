@@ -138,10 +138,28 @@ DF.STATE = {
 local HUB_REF = nil
 local activeSub = "worlds" -- "worlds" | "find" | "storage" | "settings" | "logs"
 local addWorldBuf = ""
+local addDoorBuf = ""
 local addStorageBuf = ""
+local addStorageDoorBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
 local breakCollectCounter = 0
+
+local function safeInputText(id, curVal, maxLen)
+    local s = tostring(curVal or "")
+    local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
+    if not ok then return false, s end
+    if type(r1) == "boolean" and type(r2) == "string" then
+        if r1 or r2 ~= s then return true, r2 end
+        return false, s
+    elseif type(r1) == "string" then
+        if (r2 == true) or r1 ~= s then return true, r1 end
+        return false, s
+    elseif type(r2) == "string" and r2 ~= s then
+        return true, r2
+    end
+    return false, s
+end
 
 -- ============================================================================
 -- 1. SAFE HELPERS & PERSISTENCE
@@ -1826,25 +1844,50 @@ local function renderWorldsSub()
     end
 
     ImGui.Separator()
-    ImGui.Text("Tambah World DF (Format WORLD:DOORID):")
-    ImGui.PushItemWidth(math.max(160, w - 12))
-    local ch, nv = ImGui.InputText("##df_add_w", tostring(addWorldBuf or ""), 256)
-    ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then addWorldBuf = nv end
+    ImGui.Text("Tambah World DF:")
+    if ImGui.BeginTable("BorenDFAddW", 2) then
+        ImGui.TableSetupColumn("World Name")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(110, math.floor(w * 0.46)))
+        local chW, nvW = safeInputText("##df_add_w", addWorldBuf, 256)
+        ImGui.PopItemWidth()
+        if chW then addWorldBuf = nvW end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(90, math.floor(w * 0.44)))
+        local chD, nvD = safeInputText("##df_add_d", addDoorBuf, 128)
+        ImGui.PopItemWidth()
+        if chD then addDoorBuf = nvD end
+        ImGui.EndTable()
+    end
 
     if autoBtn(" + Add World ##df") then
-        local p = parseWorldLine(addWorldBuf)
+        local wStr = trimStr(addWorldBuf)
+        local dStr = trimStr(addDoorBuf)
+        local comb = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
+        local p = parseWorldLine(comb)
         if p then
-            table.insert(DF.STATE.rows, p); addWorldBuf = ""; DF.saveData()
+            table.insert(DF.STATE.rows, p); addWorldBuf = ""; addDoorBuf = ""; DF.saveData()
             addLogUI("World DF ditambah: " .. p.name)
             uiNotice = "Ditambahkan: " .. p.name
-        else uiNotice = "Format: WORLD:DOORID" end
+        else uiNotice = "Isi World Name dulu!" end
     end
     ImGui.SameLine()
     if autoBtn(" + World Ini ##df") then
         local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW .. ":"; uiNotice = "Terisi " .. curW
+        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW; uiNotice = "Terisi " .. curW
         else uiNotice = "Masuk ke world dulu!" end
+    end
+    ImGui.SameLine()
+    if autoBtn(" Paste ##df_pw") then
+        if ImGui.GetClipboardText then
+            local okC, c = pcall(ImGui.GetClipboardText)
+            if okC and type(c) == "string" and c ~= "" then addWorldBuf = c:match("^[^\r\n]+") or c; uiNotice = "Paste ke World Name"
+            else uiNotice = "Clipboard kosong." end
+        end
     end
     ImGui.SameLine()
     if autoBtn(" - Hapus ##df") then
@@ -1888,9 +1931,9 @@ local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
     local key = tostring(id)
     if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
     ImGui.PushItemWidth(95)
-    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    local ch, nv = safeInputText("##" .. key, numBufs[key], 64)
     ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then
+    if ch then
         local digits = nv:gsub("[^0-9]", "")
         numBufs[key] = digits
         local n = tonumber(digits)
@@ -2010,18 +2053,35 @@ local function renderStorageSub()
     end
 
     ImGui.Separator()
-    ImGui.Text("Tambah Storage (WORLD:DOORID):")
-    ImGui.PushItemWidth(math.max(160, w - 12))
-    local ch, nv = ImGui.InputText("##df_add_st", tostring(addStorageBuf or ""), 256)
-    ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then addStorageBuf = nv end
+    ImGui.Text("Tambah Storage:")
+    if ImGui.BeginTable("BorenDFAddSt", 2) then
+        ImGui.TableSetupColumn("World Storage")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(110, math.floor(w * 0.46)))
+        local chSt, nvSt = safeInputText("##df_add_st", addStorageBuf, 256)
+        ImGui.PopItemWidth()
+        if chSt then addStorageBuf = nvSt end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(90, math.floor(w * 0.44)))
+        local chStD, nvStD = safeInputText("##df_add_std", addStorageDoorBuf, 128)
+        ImGui.PopItemWidth()
+        if chStD then addStorageDoorBuf = nvStD end
+        ImGui.EndTable()
+    end
 
     if autoBtn(" + Add Storage ##df") then
-        local p = parseWorldLine(addStorageBuf)
+        local wStr = trimStr(addStorageBuf)
+        local dStr = trimStr(addStorageDoorBuf)
+        local comb = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
+        local p = parseWorldLine(comb)
         if p then
             table.insert(storages, { name = p.name, door = p.door })
-            setStorageList(storages); addStorageBuf = ""; uiNotice = "Storage ditambah: " .. p.name
-        else uiNotice = "Format: WORLD:DOORID" end
+            setStorageList(storages); addStorageBuf = ""; addStorageDoorBuf = ""; uiNotice = "Storage ditambah: " .. p.name
+        else uiNotice = "Isi World Storage dulu!" end
     end
     ImGui.SameLine()
     if autoBtn(" - Hapus ##dfst") then
@@ -2178,15 +2238,15 @@ local function renderLockDoorSub()
         end)
         renderOptRow("Teks Door ID", function()
             ImGui.PushItemWidth(150)
-            local ch, nv = ImGui.InputText("##df_door_id", tostring(DF.CFG.door_id or ""), 32)
+            local ch, nv = safeInputText("##df_door_id", DF.CFG.door_id, 64)
             ImGui.PopItemWidth()
-            if ch and type(nv) == "string" then DF.CFG.door_id = nv; DF.saveData() end
+            if ch then DF.CFG.door_id = nv; DF.saveData() end
         end)
         renderOptRow("Label Door", function()
             ImGui.PushItemWidth(150)
-            local ch, nv = ImGui.InputText("##df_door_lbl", tostring(DF.CFG.door_label or ""), 48)
+            local ch, nv = safeInputText("##df_door_lbl", DF.CFG.door_label, 64)
             ImGui.PopItemWidth()
-            if ch and type(nv) == "string" then DF.CFG.door_label = nv; DF.saveData() end
+            if ch then DF.CFG.door_label = nv; DF.saveData() end
         end)
 
         renderOptRow("Pasang Penghalang", function()

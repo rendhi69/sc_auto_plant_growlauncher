@@ -18,10 +18,30 @@ local activePlantSub = "worlds"    -- "worlds" | "storage" | "settings" | "logs"
 local windowOpen = true
 
 local addWorldBuf = ""
+local addSeedBuf = "4585"
+local addSpliceBuf = "0"
 local addStorageBuf = ""
+local addStorageDoorBuf = ""
 local selectedStorageIdx = 0
 local lastFrameCount = -1
 local uiNotice = ""
+
+-- Kompatibel semua versi binding ImGui.InputText Android (boolean,string / string,boolean / Android IME)
+local function safeInputText(id, curVal, maxLen)
+    local s = tostring(curVal or "")
+    local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
+    if not ok then return false, s end
+    if type(r1) == "boolean" and type(r2) == "string" then
+        if r1 or r2 ~= s then return true, r2 end
+        return false, s
+    elseif type(r1) == "string" then
+        if (r2 == true) or r1 ~= s then return true, r1 end
+        return false, s
+    elseif type(r2) == "string" and r2 ~= s then
+        return true, r2
+    end
+    return false, s
+end
 
 -- JANGAN panggil sendNotification / LogToConsole dari thread OpenGL OnDrawImGui!
 -- Cukup tampilkan notifikasi instan di dalam panel ImGui agar 100% bebas crash JNI Android.
@@ -162,25 +182,67 @@ local function renderPlantWorldsSub()
 
     ImGui.Separator()
 
-    -- Form Penambahan & Save World langsung masuk ke List World
-    ImGui.Text("Tambah World (Name:DoorID:SeedID:SpliceID):")
-    ImGui.PushItemWidth(math.max(160, availW - 12))
-    local chA, newA = ImGui.InputText("##plant_add_w", tostring(addWorldBuf or ""), 256)
-    ImGui.PopItemWidth()
-    if chA and type(newA) == "string" then
-        addWorldBuf = newA
+    -- Form Penambahan & Save World: dipisah jadi [World:DoorID] [Seed ID] [Splice ID] agar gampang ketik!
+    ImGui.Text("Tambah World:")
+    if ImGui.BeginTable("BorenPlantAddRow", 3) then
+        ImGui.TableSetupColumn("World:DoorID")
+        ImGui.TableSetupColumn("Seed ID")
+        ImGui.TableSetupColumn("Splice ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(110, math.floor(availW * 0.44)))
+        local chA, newA = safeInputText("##plant_add_w", addWorldBuf, 256)
+        ImGui.PopItemWidth()
+        if chA then addWorldBuf = newA end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(70, math.floor(availW * 0.24)))
+        local chSd, newSd = safeInputText("##plant_add_sd", addSeedBuf, 64)
+        ImGui.PopItemWidth()
+        if chSd then addSeedBuf = newSd:gsub("[^0-9]", "") end
+
+        ImGui.TableSetColumnIndex(2)
+        ImGui.PushItemWidth(math.max(70, math.floor(availW * 0.24)))
+        local chSp, newSp = safeInputText("##plant_add_sp", addSpliceBuf, 64)
+        ImGui.PopItemWidth()
+        if chSp then addSpliceBuf = newSp:gsub("[^0-9]", "") end
+
+        ImGui.EndTable()
     end
 
     if autoBtn(" + Add World ") then
-        local parsed = E.parseRowLine(addWorldBuf)
+        local rawW = tostring(addWorldBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local parsed = nil
+        if rawW ~= "" then
+            -- Jika user ketik/paste lengkap world:door:seed:splice tetap didukung; jika world:door saja gabung dgn kotak Seed & Splice
+            local norm = rawW:gsub("|", ":")
+            local colons = 0
+            for _ in norm:gmatch(":") do colons = colons + 1 end
+            if colons >= 2 then
+                parsed = E.parseRowLine(norm)
+            else
+                local wPart, dPart = norm:match("^([^:]+):(.*)$")
+                local wName = (wPart or norm):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+                local dId   = (dPart or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+                local sdNum = math.floor(tonumber(addSeedBuf) or 4585)
+                local spNum = math.floor(tonumber(addSpliceBuf) or 0)
+                if sdNum <= 0 then sdNum = 4585 end
+                if spNum < 0 then spNum = 0 end
+                if wName ~= "" then
+                    parsed = { name = wName, door = dId, seed_id = sdNum, splice_id = spNum, status = "Ready" }
+                end
+            end
+        end
         if parsed then
             table.insert(E.STATE.rows, parsed)
             addWorldBuf = ""
             E.saveData()
             logUI(E, "[+] World ditambah: " .. E.formatRowLine(parsed))
-            setNotice("Ditambahkan: " .. parsed.name .. " (Seed " .. tostring(parsed.seed_id) .. ")")
+            setNotice("Ditambahkan: " .. parsed.name .. " (Seed " .. tostring(parsed.seed_id) .. ", Splice " .. tostring(parsed.splice_id) .. ")")
         else
-            setNotice("Format: Name:DoorID:SeedID:SpliceID")
+            setNotice("Isi World:DoorID dulu!")
         end
     end
 
@@ -192,10 +254,21 @@ local function renderPlantWorldsSub()
             if okW and type(wn) == "string" then curW = wn:upper() end
         end
         if curW ~= "" and curW ~= "EXIT" then
-            addWorldBuf = curW .. "::4585:0"
-            setNotice("Terisi " .. curW .. " (isi Door & Seed ID lalu klik + Add World)")
+            addWorldBuf = curW .. ":"
+            setNotice("Terisi " .. curW .. ": (tambahkan Door ID lalu klik + Add World)")
         else
             setNotice("Masuk ke world terlebih dahulu!")
+        end
+    end
+
+    ImGui.SameLine()
+    if autoBtn(" Paste ##pl_pw") then
+        if ImGui.GetClipboardText then
+            local okC, resC = pcall(ImGui.GetClipboardText)
+            if okC and type(resC) == "string" and resC ~= "" then
+                addWorldBuf = resC:match("^[^\r\n]+") or resC
+                setNotice("Paste ke World:DoorID")
+            else setNotice("Clipboard kosong!") end
         end
     end
 
@@ -307,24 +380,39 @@ local function renderPlantStorageSub()
 
     ImGui.Separator()
 
-    ImGui.Text("Tambah Storage (Format WORLD:DOORID):")
-    ImGui.PushItemWidth(math.max(160, availW - 12))
-    local chSt, newSt = ImGui.InputText("##plant_add_st", tostring(addStorageBuf or ""), 256)
-    ImGui.PopItemWidth()
-    if chSt and type(newSt) == "string" then
-        addStorageBuf = newSt
+    ImGui.Text("Tambah Storage:")
+    if ImGui.BeginTable("BorenPlantAddSt", 2) then
+        ImGui.TableSetupColumn("World Storage")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(110, math.floor(availW * 0.46)))
+        local chSt, newSt = safeInputText("##plant_add_st", addStorageBuf, 256)
+        ImGui.PopItemWidth()
+        if chSt then addStorageBuf = newSt end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(90, math.floor(availW * 0.44)))
+        local chStD, newStD = safeInputText("##plant_add_std", addStorageDoorBuf, 128)
+        ImGui.PopItemWidth()
+        if chStD then addStorageDoorBuf = newStD end
+        ImGui.EndTable()
     end
 
     if autoBtn(" + Add Storage ") then
-        local parsed = E.parseStorageLine and E.parseStorageLine(addStorageBuf)
+        local wStr = tostring(addStorageBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local dStr = tostring(addStorageDoorBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local combined = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
+        local parsed = E.parseStorageLine and E.parseStorageLine(combined)
         if parsed then
             table.insert(storages, parsed)
             E.setStorageList(storages)
-            addStorageBuf = ""
+            addStorageBuf = ""; addStorageDoorBuf = ""
             logUI(E, "[Storage +] " .. parsed.name .. (parsed.door ~= "" and (":" .. parsed.door) or ""))
             setNotice("Storage ditambahkan: " .. parsed.name)
         else
-            setNotice("Format: WORLD:DOORID")
+            setNotice("Isi World Storage dulu!")
         end
     end
 
@@ -336,8 +424,8 @@ local function renderPlantStorageSub()
             if okW and type(wn) == "string" then curW = wn:upper() end
         end
         if curW ~= "" and curW ~= "EXIT" then
-            addStorageBuf = curW .. ":"
-            setNotice("Terisi " .. curW .. ": (tambahkan Door ID lalu klik + Add Storage)")
+            addStorageBuf = curW
+            setNotice("Terisi " .. curW .. " (isi Door ID di kanan jika ada)")
         else
             setNotice("Masuk ke world terlebih dahulu!")
         end
@@ -408,9 +496,9 @@ local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
     local key = tostring(id)
     if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
     ImGui.PushItemWidth(95)
-    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    local ch, nv = safeInputText("##" .. key, numBufs[key], 64)
     ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then
+    if ch then
         local digits = nv:gsub("[^0-9]", "")
         numBufs[key] = digits
         local n = tonumber(digits)

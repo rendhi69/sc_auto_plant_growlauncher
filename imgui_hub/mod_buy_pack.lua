@@ -69,6 +69,22 @@ local searchBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
 
+local function safeInputText(id, curVal, maxLen)
+    local s = tostring(curVal or "")
+    local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
+    if not ok then return false, s end
+    if type(r1) == "boolean" and type(r2) == "string" then
+        if r1 or r2 ~= s then return true, r2 end
+        return false, s
+    elseif type(r1) == "string" then
+        if (r2 == true) or r1 ~= s then return true, r1 end
+        return false, s
+    elseif type(r2) == "string" and r2 ~= s then
+        return true, r2
+    end
+    return false, s
+end
+
 -- ============================================================================
 -- 1. SAFE HELPERS, PARSER DEBUGPACK & PERSISTENCE
 -- ============================================================================
@@ -505,9 +521,9 @@ local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
     local key = tostring(id)
     if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
     ImGui.PushItemWidth(95)
-    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    local ch, nv = safeInputText("##" .. key, numBufs[key], 64)
     ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then
+    if ch then
         local digits = nv:gsub("[^0-9]", "")
         numBufs[key] = digits
         local n = tonumber(digits)
@@ -581,23 +597,49 @@ local function renderMainSub()
 
     ImGui.Text("Pack ID (Debug Name):")
     ImGui.PushItemWidth(math.max(160, w - 12))
-    local chP, nP = ImGui.InputText("##bp_pid", tostring(BP.CFG.pack_id or ""), 128)
+    local chP, nP = safeInputText("##bp_pid", BP.CFG.pack_id, 128)
     ImGui.PopItemWidth()
-    if chP and type(nP) == "string" then BP.CFG.pack_id = nP; BP.saveData() end
+    if chP then BP.CFG.pack_id = nP; BP.saveData() end
 
-    ImGui.Text("World Save Drop (WORLD:DOOR):")
-    ImGui.PushItemWidth(math.max(150, math.floor(w * 0.65)))
-    local chW, nW = ImGui.InputText("##bp_savew", tostring(BP.CFG.save_world or ""), 128)
-    ImGui.PopItemWidth()
-    if chW and type(nW) == "string" then BP.CFG.save_world = nW; BP.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" + World Ini ##bp") then
-        local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then BP.CFG.save_world = curW; BP.saveData(); uiNotice = "Save World: " .. curW
-        else uiNotice = "Masuk ke world dulu!" end
+    ImGui.Text("World Save Drop:")
+    local swRaw = tostring(BP.CFG.save_world or ""):gsub("|", ":")
+    local swName, swDoor = swRaw:match("^([^:]+):(.*)$")
+    if not swName then swName = swRaw; swDoor = "" end
+    if ImGui.BeginTable("BorenPackSaveW", 2) then
+        ImGui.TableSetupColumn("World Save")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(110, math.floor(w * 0.46)))
+        local chWN, newWN = safeInputText("##bp_sw_n", swName, 128)
+        ImGui.PopItemWidth()
+        if chWN then
+            swName = newWN
+            BP.CFG.save_world = (swDoor ~= "") and (swName .. ":" .. swDoor) or swName
+            BP.saveData()
+        end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(90, math.floor(w * 0.44)))
+        local chWD, newWD = safeInputText("##bp_sw_d", swDoor, 128)
+        ImGui.PopItemWidth()
+        if chWD then
+            swDoor = newWD
+            BP.CFG.save_world = (swDoor ~= "") and (swName .. ":" .. swDoor) or swName
+            BP.saveData()
+        end
+        ImGui.EndTable()
     end
 
-    ImGui.Separator()
+    if autoBtn(" + World Ini ##bp") then
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then
+            BP.CFG.save_world = (swDoor ~= "") and (curW .. ":" .. swDoor) or curW
+            BP.saveData(); uiNotice = "Save World: " .. curW
+        else uiNotice = "Masuk ke world dulu!" end
+    end
+    ImGui.SameLine()
     if autoBtn(" Cari Pack (" .. tostring(#BP.STATE.pack_db) .. ") ") then activeSub = "search" end
     ImGui.SameLine()
     if autoBtn(" Save Config ##bp") then BP.saveData(); uiNotice = "Konfigurasi Buy Pack tersimpan!" end
@@ -607,9 +649,9 @@ local function renderSearchSub()
     local w = availX()
     ImGui.Text("Cari Pack (Database GitHub: " .. tostring(#BP.STATE.pack_db) .. " pack):")
     ImGui.PushItemWidth(math.max(160, w - 12))
-    local ch, nv = ImGui.InputText("##bp_search", tostring(searchBuf or ""), 128)
+    local ch, nv = safeInputText("##bp_search", searchBuf, 128)
     ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then searchBuf = nv end
+    if ch then searchBuf = nv end
 
     local q = trimStr(searchBuf):lower()
 

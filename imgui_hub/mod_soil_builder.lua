@@ -43,9 +43,27 @@ SB.STATE = {
 local HUB_REF = nil
 local activeSub = "worlds"
 local addWorldBuf = ""
+local addBlockBuf = "8772"
 local addStorageBuf = ""
+local addStorageDoorBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
+
+local function safeInputText(id, curVal, maxLen)
+    local s = tostring(curVal or "")
+    local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
+    if not ok then return false, s end
+    if type(r1) == "boolean" and type(r2) == "string" then
+        if r1 or r2 ~= s then return true, r2 end
+        return false, s
+    elseif type(r1) == "string" then
+        if (r2 == true) or r1 ~= s then return true, r1 end
+        return false, s
+    elseif type(r2) == "string" and r2 ~= s then
+        return true, r2
+    end
+    return false, s
+end
 
 -- ============================================================================
 -- 1. SAFE HELPERS & PERSISTENCE
@@ -855,25 +873,63 @@ local function renderWorldsSub()
     end
 
     ImGui.Separator()
-    ImGui.Text("Tambah World Soil (Name:DoorID:BlockID — default 8772):")
-    ImGui.PushItemWidth(math.max(160, w - 12))
-    local ch, nv = ImGui.InputText("##sb_add_w", tostring(addWorldBuf or ""), 256)
-    ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then addWorldBuf = nv end
+    ImGui.Text("Tambah World Soil:")
+    if ImGui.BeginTable("BorenSoilAddW", 2) then
+        ImGui.TableSetupColumn("World:DoorID")
+        ImGui.TableSetupColumn("Block ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(120, math.floor(w * 0.56)))
+        local chW, nvW = safeInputText("##sb_add_w", addWorldBuf, 256)
+        ImGui.PopItemWidth()
+        if chW then addWorldBuf = nvW end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(80, math.floor(w * 0.34)))
+        local chB, nvB = safeInputText("##sb_add_blk", addBlockBuf, 64)
+        ImGui.PopItemWidth()
+        if chB then addBlockBuf = nvB:gsub("[^0-9]", "") end
+        ImGui.EndTable()
+    end
 
     if autoBtn(" + Add World ##sb") then
-        local p = parseRowLine(addWorldBuf)
+        local rawW = trimStr(addWorldBuf)
+        local p = nil
+        if rawW ~= "" then
+            local norm = rawW:gsub("|", ":")
+            local colons = 0
+            for _ in norm:gmatch(":") do colons = colons + 1 end
+            if colons >= 2 then
+                p = parseRowLine(norm)
+            else
+                local wPart, dPart = norm:match("^([^:]+):(.*)$")
+                local wName = trimStr(wPart or norm):upper()
+                local dId   = trimStr(dPart or ""):upper()
+                local bid   = math.floor(tonumber(addBlockBuf) or tonumber(SB.CFG.default_block) or 8772)
+                if bid <= 0 then bid = 8772 end
+                if wName ~= "" then p = { name = wName, door = dId, block_id = bid, status = "Ready" } end
+            end
+        end
         if p then
             table.insert(SB.STATE.rows, p); addWorldBuf = ""; SB.saveData()
             addLogUI("World Soil ditambah: " .. formatRowLine(p))
             uiNotice = "Ditambahkan: " .. p.name .. " (ID " .. tostring(p.block_id) .. ")"
-        else uiNotice = "Format: Name:DoorID:BlockID" end
+        else uiNotice = "Isi World:DoorID dulu!" end
     end
     ImGui.SameLine()
     if autoBtn(" + World Ini ##sb") then
         local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW .. "::8772"; uiNotice = "Terisi " .. curW
+        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW .. ":"; uiNotice = "Terisi " .. curW .. ":"
         else uiNotice = "Masuk ke world dulu!" end
+    end
+    ImGui.SameLine()
+    if autoBtn(" Paste ##sb_pw") then
+        if ImGui.GetClipboardText then
+            local okC, c = pcall(ImGui.GetClipboardText)
+            if okC and type(c) == "string" and c ~= "" then addWorldBuf = c:match("^[^\r\n]+") or c; uiNotice = "Paste ke World:DoorID"
+            else uiNotice = "Clipboard kosong." end
+        end
     end
     ImGui.SameLine()
     if autoBtn(" - Hapus ##sb") then
@@ -940,18 +996,35 @@ local function renderStorageSub()
     end
 
     ImGui.Separator()
-    ImGui.Text("Tambah Storage (WORLD:DOORID):")
-    ImGui.PushItemWidth(math.max(160, w - 12))
-    local ch, nv = ImGui.InputText("##sb_add_st", tostring(addStorageBuf or ""), 256)
-    ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then addStorageBuf = nv end
+    ImGui.Text("Tambah Storage:")
+    if ImGui.BeginTable("BorenSoilAddSt", 2) then
+        ImGui.TableSetupColumn("World Storage")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(110, math.floor(w * 0.46)))
+        local chSt, nvSt = safeInputText("##sb_add_st", addStorageBuf, 256)
+        ImGui.PopItemWidth()
+        if chSt then addStorageBuf = nvSt end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(90, math.floor(w * 0.44)))
+        local chStD, nvStD = safeInputText("##sb_add_std", addStorageDoorBuf, 128)
+        ImGui.PopItemWidth()
+        if chStD then addStorageDoorBuf = nvStD end
+        ImGui.EndTable()
+    end
 
     if autoBtn(" + Add Storage ##sb") then
-        local p = parseStorageLine(addStorageBuf)
+        local wStr = trimStr(addStorageBuf)
+        local dStr = trimStr(addStorageDoorBuf)
+        local comb = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
+        local p = parseStorageLine(comb)
         if p then
-            table.insert(storages, p); setStorageList(storages); addStorageBuf = ""
+            table.insert(storages, p); setStorageList(storages); addStorageBuf = ""; addStorageDoorBuf = ""
             uiNotice = "Storage ditambah: " .. p.name
-        else uiNotice = "Format: WORLD:DOORID" end
+        else uiNotice = "Isi World Storage dulu!" end
     end
     ImGui.SameLine()
     if autoBtn(" - Hapus ##sbst") then
@@ -969,9 +1042,9 @@ local function renderNumInput(id, curVal, minV, maxV, step, unit, onChange)
     local key = tostring(id)
     if numBufs[key] == nil then numBufs[key] = tostring(curVal) end
     ImGui.PushItemWidth(95)
-    local ch, nv = ImGui.InputText("##" .. key, tostring(numBufs[key] or ""), 16)
+    local ch, nv = safeInputText("##" .. key, numBufs[key], 64)
     ImGui.PopItemWidth()
-    if ch and type(nv) == "string" then
+    if ch then
         local digits = nv:gsub("[^0-9]", "")
         numBufs[key] = digits
         local n = tonumber(digits)
