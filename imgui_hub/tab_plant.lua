@@ -631,14 +631,6 @@ local function triggerReloadPackDb()
     else coroutine.resume(coroutine.create(runner)) end
 end
 
-local function getModSummaryText(mod, extraUnit)
-    if not mod then return "Belum dimuat" end
-    local st = mod.STATE or {}
-    local runTag = st.enabled and "ON" or "Ready"
-    local cnt = (type(st.rows) == "table") and #st.rows or 0
-    return string.format("%s | %s (%d %s)", runTag, tostring(st.status_text or "Idle"), cnt, extraUnit or "world")
-end
-
 local function renderDashboardPanel()
     local availW = safeAvailX()
     local curWorld = "-"
@@ -652,44 +644,37 @@ local function renderDashboardPanel()
         if okG and tonumber(g) then curGems = math.floor(tonumber(g)) end
     end
 
-    ImGui.Text("BOREN STORE - ALL-IN-ONE HUB (MODULAR)")
+    local isReloading = (HUB and HUB.reloading == true) or fallbackReloading
+    local updStatus = tostring((HUB and HUB.reload_status) or "Siap")
+
+    ImGui.Text("BOREN HUB")
+    ImGui.Text(string.format("World: %s | Gems: %d | %s", curWorld, curGems, updStatus))
     if uiNotice ~= "" then
         ImGui.Text("Info: " .. uiNotice)
     end
     ImGui.Separator()
 
-    -- 1. RINGKASAN STATUS & HOT-RELOAD UPDATE
-    local isReloading = (HUB and HUB.reloading == true) or fallbackReloading
-    if ImGui.BeginTable("BorenDashStatus", 2) then
-        renderOptRow("World / Gems", function()
-            ImGui.Text(string.format("%s | %d Gems", curWorld, curGems))
-        end)
-        renderOptRow("Status Update", function()
-            ImGui.Text(tostring((HUB and HUB.reload_status) or "Siap"))
-        end)
-        renderOptRow("Auto Plant", function()
-            ImGui.Text(getModSummaryText(HUB and HUB.plant, "world"))
-        end)
-        renderOptRow("Dirt Farm", function()
-            ImGui.Text(getModSummaryText(HUB and HUB.dirt_farm, "world"))
-        end)
-        renderOptRow("Build Soil", function()
-            ImGui.Text(getModSummaryText(HUB and HUB.build_soil, "world"))
-        end)
-        renderOptRow("Buy Pack", function()
-            local bp = HUB and HUB.buy_pack
-            if not bp then
-                ImGui.Text("Belum dimuat")
-            else
-                local st = bp.STATE or {}
-                local dbN = (type(st.pack_db) == "table") and #st.pack_db or 0
-                ImGui.Text(string.format("%s | %s (%d pack)", st.enabled and "ON" or "Ready", tostring(st.status_text or "Idle"), dbN))
-            end
-        end)
+    -- KARTU LOGO KLIK-UNTUK-COPY (Tanpa menampilkan link raw)
+    local cardW = math.max(150, math.floor(availW * 0.47))
+    if ImGui.BeginTable("BorenDashCards", 2) then
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        if fullBtn("\n    ( o_o )    \n\n  Discord Boren  \n##card_dc", cardW) then
+            copyLinkToClipboard("Link Discord Boren", getHubLink("discord"))
+        end
+
+        ImGui.TableSetColumnIndex(1)
+        if fullBtn("\n     < / >     \n\n  GitHub Boren  \n##card_gh", cardW) then
+            copyLinkToClipboard("Link GitHub Boren", getHubLink("github_repo"))
+        end
         ImGui.EndTable()
     end
 
-    if autoBtn(isReloading and "  Sedang Update...  ##dash_rl" or "  Refresh / Update Semua Script  ##dash_rl") then
+    ImGui.Text("Klik logo di atas untuk salin link ke clipboard.")
+    ImGui.Separator()
+
+    -- TOMBOL REFRESH / HOT-RELOAD UPDATE SCRIPT TANPA TUTUP GL
+    if autoBtn(isReloading and "  Sedang Update...  ##dash_rl" or "  Refresh / Update Script  ##dash_rl") then
         if not isReloading then
             triggerHotReloadAll()
         end
@@ -700,36 +685,6 @@ local function renderDashboardPanel()
             triggerReloadPackDb()
         end
     end
-
-    ImGui.Separator()
-
-    -- 2. LINK DISCORD & GITHUB RAW SCRIPT
-    ImGui.Text("Link Komunitas & GitHub Raw Script:")
-    local linkBoxW = math.max(130, math.floor(availW * 0.50) - 92)
-
-    local function renderLinkRow(label, key, idSuffix)
-        local url = getHubLink(key)
-        renderOptRow(label, function()
-            ImGui.PushItemWidth(linkBoxW)
-            ImGui.InputText("##dash_lnk_" .. idSuffix, url, 256)
-            ImGui.PopItemWidth()
-            ImGui.SameLine()
-            if autoBtn(" Copy ##cp_" .. idSuffix) then
-                copyLinkToClipboard(label, url)
-            end
-        end)
-    end
-
-    if ImGui.BeginTable("BorenDashLinks", 2) then
-        renderLinkRow("Discord Server", "discord", "dc")
-        renderLinkRow("GitHub Repo", "github_repo", "gh")
-        renderLinkRow("Raw Loader Hub", "raw_loader", "raw")
-        renderLinkRow("Raw DebugPack", "raw_debugpack", "dbp")
-        ImGui.EndTable()
-    end
-
-    ImGui.Separator()
-    ImGui.TextWrapped("Tip: Tekan 'Refresh / Update Semua Script' (atau chat /reload) untuk mengambil update terbaru dari GitHub tanpa tutup Growlauncher. Chat /hub untuk sembunyikan/buka UI.")
 end
 
 -- ============================================================================

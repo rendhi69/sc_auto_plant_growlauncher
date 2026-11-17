@@ -120,7 +120,7 @@ local function requireHubMod(stepLabel, relPath, optional)
         if not optional then notifyMsg(tostring(err)) end
         return nil, err
     end
-    return mod, nil
+    return mod, nilb
 end
 
 local function loadAllModulesSync(isReload)
