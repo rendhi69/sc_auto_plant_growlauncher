@@ -635,10 +635,10 @@ local function renderFrame()
             pcall(ImGui.SetNextWindowPos, ImVec2(24, 150), (ImGui.Cond and ImGui.Cond.Once) or 2)
         end
         if ImGui.SetNextWindowSize and ImVec2 then
-            pcall(ImGui.SetNextWindowSize, ImVec2(195, 110), (ImGui.Cond and ImGui.Cond.Always) or 1)
+            pcall(ImGui.SetNextWindowSize, ImVec2(240, 115), (ImGui.Cond and ImGui.Cond.Always) or 1)
         end
-        if ImGui.Begin("Hub##boren_mini") then
-            if fullBtn("Buka Hub", 175) then
+        if ImGui.Begin("Boren Hub##boren_mini") then
+            if fullBtn("Buka Boren Hub", 216) then
                 windowOpen = true
             end
         end
