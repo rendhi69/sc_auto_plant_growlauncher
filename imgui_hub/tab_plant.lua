@@ -2252,6 +2252,10 @@ end
 
 local function handleVariant(var)
     if not HUB then return false end
+    if HUB.plant and type(HUB.plant.handleVariant) == "function" then
+        local okP, blockedP = pcall(HUB.plant.handleVariant, var)
+        if okP and blockedP == true then return true end
+    end
     for _, feat in ipairs(getDynamicFeatures()) do
         local m = feat.mod or HUB[feat.id]
         if m and type(m.handleVariant) == "function" then

@@ -15,7 +15,7 @@ Engine.CFG = {
     plant_delay   = 180,      -- ms
     splice_delay  = 180,      -- ms
     step_delay    = 110,      -- ms
-    warp_delay    = 3500,     -- ms
+    warp_delay    = 5500,     -- ms (aman terhadap delay entering / lag pindah world)
     use_modfly    = true,
     ignore_gems   = true,
     auto_clear_failed_splice = true,
@@ -35,6 +35,7 @@ Engine.STATE = {
     plant_fail_count     = {},
     inv_cache            = {},
     logs                 = {},
+    warp_event           = nil,
     hooks_installed      = false,
 }
 
@@ -690,55 +691,232 @@ local function moveSafeTo(tx, ty)
     return (fx and fy and math.abs(fx - sx) <= 1 and math.abs(fy - sy) <= 1)
 end
 
+local lastWarpSentMs = 0
+
+local function nowMsSafe()
+    if getTime then
+        local ok, ms = pcall(getTime)
+        if ok and tonumber(ms) then return math.floor(tonumber(ms)) end
+    end
+    if os and os.clock then
+        local ok, c = pcall(os.clock)
+        if ok and tonumber(c) then return math.floor(tonumber(c) * 1000) end
+    end
+    return 0
+end
+
+local function stripGTColors(s)
+    return tostring(s or ""):gsub("`.", ""):gsub("%z", ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+-- Dengarkan pesan asli server Growtopia (OnConsoleMessage / OnTextOverlay / OnFailedToEnterWorld)
+-- agar world yang sekadar delay "Entering..." / cooldown TIDAK PERNAH salah dikira Inaccessible!
+function Engine.handleVariant(var)
+    local ev = Engine.STATE.warp_event
+    if not ev or type(var) ~= "table" and type(var) ~= "userdata" then return false end
+
+    local v1, v2 = nil, nil
+    pcall(function() v1 = var.v1 or var[0] end)
+    pcall(function() v2 = var.v2 or var[1] end)
+    local fn = tostring(v1 or "")
+
+    if fn == "OnFailedToEnterWorld" then
+        ev.failed = true
+        ev.updated_ms = nowMsSafe()
+        return false
+    end
+
+    if fn == "OnConsoleMessage" or fn == "OnTextOverlay" or fn == "OnAddNotification" then
+        local rawMsg = stripGTColors(v2)
+        if rawMsg == "" then return false end
+        local low = rawMsg:lower()
+        ev.last_msg = rawMsg
+        ev.updated_ms = nowMsSafe()
+
+        -- 1. Pesan PASTI Inaccessible (nuked / banned / tidak bisa dimasuki secara permanen)
+        if low:find("that world is inaccessible", 1, true)
+            or low:find("world is inaccessible", 1, true)
+            or low:find("banned from", 1, true)
+            or low:find("has been nuked", 1, true)
+            or low:find("world is nuked", 1, true)
+            or low:find("not allowed to enter", 1, true)
+            or low:find("cannot enter this world", 1, true)
+            or low:find("invalid world", 1, true)
+            or (low:find("minimum level", 1, true) and low:find("world", 1, true))
+            or (low:find("level ", 1, true) and low:find("required to enter", 1, true))
+        then
+            ev.inaccessible = true
+            ev.inaccessible_reason = rawMsg
+            ev.entering = false
+            return false
+        end
+
+        -- 2. Pesan Cooldown / Rate Limit / Penuh sementara -> BUKAN Inaccessible!
+        if low:find("please wait", 1, true)
+            or low:find("wait a few", 1, true)
+            or low:find("wait before", 1, true)
+            or low:find("slow down", 1, true)
+            or low:find("too fast", 1, true)
+            or low:find("try again", 1, true)
+            or low:find("world is full", 1, true)
+            or low:find("too many", 1, true)
+            or low:find("connecting", 1, true)
+            or low:find("logging on", 1, true)
+        then
+            ev.cooldown = true
+            ev.inaccessible = false
+            return false
+        end
+
+        -- 3. Pesan sedang Entering -> tunggu sabar, jangan spam join_request lagi!
+        if low:find("entering ", 1, true) or low:find("entering...", 1, true) then
+            ev.entering = true
+            ev.cooldown = false
+            ev.inaccessible = false
+            return false
+        end
+    end
+    return false
+end
+
+local function waitWorldTilesReady(maxWaitMs)
+    local tw = 0
+    local lim = maxWaitMs or 6000
+    while tw < lim and Engine.STATE.running and (not hasAnyLoadedTiles()) do
+        safeSleep(150)
+        tw = tw + 150
+    end
+    safeSleep(450)
+end
+
+-- Mengembalikan (ok: boolean, reason: "ok"|"inaccessible"|"timeout"|"stopped")
+-- HANYA mengembalikan "inaccessible" jika server benar-benar menolak permanen (nuked/banned/inaccessible).
 local function warpToWorld(worldName, doorID)
     worldName = cleanWorldName(worldName)
     doorID = cleanWorldName(doorID)
-    if worldName == "" then return false end
+    if worldName == "" then return false, "inaccessible" end
 
     -- Jika sudah berada di world target tanpa Door ID, langsung lanjut!
     if getCurrentWorldSafe() == worldName and doorID == "" then
-        local tw = 0
-        while tw < 1500 and Engine.STATE.running and (not hasAnyLoadedTiles()) do
-            safeSleep(150); tw = tw + 150
-        end
+        waitWorldTilesReady(4500)
         applyCheatToggles()
-        return true
+        return true, "ok"
     end
 
+    -- Jeda anti-spam minimal 1.2 detik sejak join_request sebelumnya agar tidak kena cooldown GT
+    local tNow = nowMsSafe()
+    if lastWarpSentMs > 0 and tNow > lastWarpSentMs then
+        local since = tNow - lastWarpSentMs
+        if since < 1200 then
+            safeSleep(1200 - since)
+        end
+    end
+
+    local prevWorld = getCurrentWorldSafe()
+    local ev = {
+        target = worldName,
+        inaccessible = false,
+        inaccessible_reason = "",
+        cooldown = false,
+        entering = false,
+        failed = false,
+        last_msg = "",
+        updated_ms = nowMsSafe(),
+    }
+    Engine.STATE.warp_event = ev
+
     local joinStr = (doorID ~= "") and (worldName .. "|" .. doorID) or worldName
-    for attempt = 1, 3 do
-        if not Engine.STATE.running then return false end
+    local baseWaitMs = math.max(6000, tonumber(Engine.CFG.warp_delay) or 6000)
+    local extWaitMs  = math.max(baseWaitMs + 6000, 12000)
+
+    for attempt = 1, 4 do
+        if not Engine.STATE.running then
+            Engine.STATE.warp_event = nil
+            return false, "stopped"
+        end
+
+        ev.failed = false
+        ev.cooldown = false
+        ev.entering = false
+        lastWarpSentMs = nowMsSafe()
+
         if sendPacket then
             pcall(sendPacket, 3, "action|join_request\nname|" .. joinStr .. "\ninvitedWorld|0\n")
         elseif growtopia and growtopia.warpTo then
             pcall(growtopia.warpTo, joinStr)
         end
 
-        local waitMs = math.max(3500, tonumber(Engine.CFG.warp_delay) or 4000)
         local elapsed = 0
-        while elapsed < waitMs and Engine.STATE.running do
+        local sawTransition = false
+        while Engine.STATE.running do
             safeSleep(250)
             elapsed = elapsed + 250
-            if getCurrentWorldSafe() == worldName then
-                -- World sudah masuk! Tunggu tile selesai termuat maksimal 2 detik, lalu langsung jalan!
-                local tw = 0
-                while tw < 2000 and Engine.STATE.running and (not hasAnyLoadedTiles()) do
-                    safeSleep(150); tw = tw + 150
-                end
-                safeSleep(450)
+
+            local curW = getCurrentWorldSafe()
+            if curW == worldName then
+                -- World sudah masuk! Tunggu tile selesai termuat hingga 6 detik agar tidak dianggap kosong/error
+                Engine.STATE.status_text = "Loading: " .. worldName
+                waitWorldTilesReady(6000)
                 applyCheatToggles()
-                return true
+                Engine.STATE.warp_event = nil
+                return true, "ok"
             end
+
+            -- Server secara eksplisit menyatakan world Inaccessible / Banned / Nuked -> langsung berhenti
+            if ev.inaccessible then
+                addLog(string.format("[Inaccessible] %s ditolak server: %s", worldName, ev.inaccessible_reason))
+                Engine.STATE.warp_event = nil
+                return false, "inaccessible"
+            end
+
+            -- Deteksi sedang transisi/entering (sudah keluar dari world lama ke EXIT / sedang "Entering...")
+            if ev.entering or (prevWorld ~= "" and prevWorld ~= "EXIT" and (curW == "" or curW == "EXIT")) then
+                sawTransition = true
+                Engine.STATE.status_text = "Entering: " .. worldName
+            end
+
+            -- Jika kena rate-limit/cooldown, tunggu jeda dulu sebelum attempt berikutnya
+            if ev.cooldown and elapsed >= 1500 then
+                addLog(string.format("[Warp Delay] Cooldown server saat masuk %s, menunggu 3.5 detik...", worldName))
+                safeSleep(3500)
+                break
+            end
+
+            -- Jika OnFailedToEnterWorld (tanpa pesan inaccessible), tunggu sebentar lalu coba ulang
+            if ev.failed and (not ev.inaccessible) and elapsed >= 2000 then
+                safeSleep(2200)
+                break
+            end
+
+            -- Perpanjang waktu tunggu otomatis hingga 12 detik bila sedang Entering/Transisi (JANGAN spam join_request!)
+            local curLimit = sawTransition and extWaitMs or baseWaitMs
+            if elapsed >= curLimit then
+                break
+            end
+        end
+
+        if attempt < 4 and Engine.STATE.running then
+            addLog(string.format("[Warp] Percobaan %d/4 masuk %s masih tertunda, mencoba ulang...", attempt, worldName))
+            safeSleep(1800)
         end
     end
 
     local finalW = getCurrentWorldSafe()
     if finalW == worldName then
+        waitWorldTilesReady(4500)
         applyCheatToggles()
-        return true
+        Engine.STATE.warp_event = nil
+        return true, "ok"
     end
-    addLog(string.format("[Warp Info] Target: %s | World aktif sekarang: %s", worldName, finalW ~= "" and finalW or "EXIT"))
-    return false
+    if ev.inaccessible then
+        Engine.STATE.warp_event = nil
+        return false, "inaccessible"
+    end
+
+    addLog(string.format("[Warp Delay] Belum masuk ke %s (aktif: %s) — BUKAN Inaccessible, akan dicoba ulang.",
+        worldName, finalW ~= "" and finalW or "EXIT"))
+    Engine.STATE.warp_event = nil
+    return false, "timeout"
 end
 
 local function parseStorageEntries()
@@ -934,12 +1112,20 @@ local function restockFromStorage(row, s1, s2)
                 local bp2 = isSplice and getInvCount(s2) or 0
                 addLog(string.format("[Storage] Seed di tas: %d%s. Kembali tanam ke %s...",
                     bp1, isSplice and (" & " .. tostring(bp2)) or "", row.name))
-                if warpToWorld(row.name, row.door) then
+                local okBack, backReason = warpToWorld(row.name, row.door)
+                if (not okBack) and backReason == "timeout" and Engine.STATE.running then
+                    safeSleep(2500)
+                    okBack, backReason = warpToWorld(row.name, row.door)
+                end
+                if okBack then
                     safeSleep(500)
                     scanForeignLocksInWorld()
                     return true
-                else
+                elseif backReason == "inaccessible" then
                     row.status = "Inaccessible"
+                    return false
+                else
+                    row.status = "Retry Warp"
                     return false
                 end
             end
@@ -952,10 +1138,18 @@ local function restockFromStorage(row, s1, s2)
     if hasEnoughSeedInBackpack(s1, s2) then
         addLog(string.format("[Storage] Sisa seed di tas terdeteksi (%d). Kembali tanam ke %s dulu...",
             getInvCount(s1), row.name))
-        if warpToWorld(row.name, row.door) then
+        local okBack2, backReason2 = warpToWorld(row.name, row.door)
+        if (not okBack2) and backReason2 == "timeout" and Engine.STATE.running then
+            safeSleep(2500)
+            okBack2, backReason2 = warpToWorld(row.name, row.door)
+        end
+        if okBack2 then
             safeSleep(500)
             scanForeignLocksInWorld()
             return true
+        elseif backReason2 ~= "inaccessible" then
+            row.status = "Retry Warp"
+            return false
         end
     end
 
@@ -1222,11 +1416,22 @@ local function processWorldRow(row)
     row.status = "Warping..."
     Engine.STATE.status_text = "Warp: " .. row.name
 
-    if not warpToWorld(row.name, row.door) then
-        row.status = "Inaccessible"
-        addLog("[Inaccessible] Gagal masuk ke world " .. row.name .. "!")
-        Engine.saveData()
-        return false
+    local okWarp, warpReason = warpToWorld(row.name, row.door)
+    if not okWarp then
+        if not Engine.STATE.running or warpReason == "stopped" then
+            row.status = "Ready"
+            return false
+        elseif warpReason == "inaccessible" then
+            row.status = "Inaccessible"
+            addLog("[Inaccessible] World " .. row.name .. " tidak dapat diakses (ditolak server)!")
+            Engine.saveData()
+            return false
+        else
+            row.status = "Retry Warp"
+            addLog("[Warp Delay] Masuk ke " .. row.name .. " tertunda/lag — BUKAN Inaccessible, akan dicoba ulang.")
+            Engine.saveData()
+            return false
+        end
     end
 
     safeSleep(500)
@@ -1234,13 +1439,27 @@ local function processWorldRow(row)
     scanForeignLocksInWorld()
 
     local initHoles = countPlantableSpots(s1, s2)
+    if initHoles < 0 then
+        -- Tile mungkin masih memuat setelah entering -> tunggu ekstra hingga 4.5 detik sebelum mundur!
+        local lw = 0
+        while lw < 4500 and Engine.STATE.running and initHoles < 0 do
+            safeSleep(300)
+            lw = lw + 300
+            if isWorldProperlyLoaded(row.name) then
+                scanForeignLocksInWorld()
+                initHoles = countPlantableSpots(s1, s2)
+            end
+        end
+    end
     if initHoles == 0 then
         row.status = "Done"
         addLog("[Info] World " .. row.name .. " sudah penuh tertanam.")
         Engine.saveData()
         return true
     elseif initHoles < 0 then
-        row.status = "Inaccessible"
+        row.status = "Retry Warp"
+        addLog("[Loading Delay] Tile world " .. row.name .. " belum selesai dimuat — bukan Inaccessible, akan dicoba ulang.")
+        Engine.saveData()
         return false
     end
 
@@ -1301,6 +1520,7 @@ local function mainPlantLoop()
     applyCheatToggles()
     addLog("Auto Plant dimulai.")
 
+    local retryPass = 0
     while Engine.STATE.running do
         local ranAny = false
         for idx, row in ipairs(Engine.STATE.rows) do
@@ -1316,7 +1536,20 @@ local function mainPlantLoop()
 
         if not Engine.STATE.running then break end
 
-        if Engine.CFG.loop_enabled and #Engine.STATE.rows > 0 then
+        -- Cek apakah ada world yang hanya tertunda entering/delay ("Retry Warp")
+        local pendingRetry = 0
+        for _, row in ipairs(Engine.STATE.rows) do
+            if row.status == "Retry Warp" then pendingRetry = pendingRetry + 1 end
+        end
+
+        if pendingRetry > 0 and retryPass < 3 then
+            retryPass = retryPass + 1
+            addLog(string.format("[Retry Warp %d/3] %d world tertunda saat entering, mencoba ulang dalam 3 detik...",
+                retryPass, pendingRetry))
+            Engine.STATE.status_text = string.format("Retry Warp (%d/3)...", retryPass)
+            safeSleep(3000)
+        elseif Engine.CFG.loop_enabled and #Engine.STATE.rows > 0 then
+            retryPass = 0
             addLog("[Loop] Semua antrean selesai, mengulang dari awal dalam 3 detik...")
             Engine.STATE.status_text = "Loop Waiting..."
             for _, row in ipairs(Engine.STATE.rows) do
