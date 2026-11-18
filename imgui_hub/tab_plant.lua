@@ -148,12 +148,12 @@ local function safeAvailX()
     if ImGui and ImGui.GetContentRegionAvail then
         local ok, av = pcall(ImGui.GetContentRegionAvail)
         if ok and av then
-            if type(av) == "number" and av > 40 then return math.max(560, av) end
+            if type(av) == "number" and av > 40 then return av end
             local okX, x = pcall(function() return av.x end)
-            if okX and type(x) == "number" and x > 40 then return math.max(560, x) end
+            if okX and type(x) == "number" and x > 40 then return x end
         end
     end
-    return 560
+    return 480
 end
 
 local function safeWinW()
@@ -1825,7 +1825,7 @@ local function triggerLazyLoad(modKey, relPath)
     else doLoad() end
 end
 
-local isPinned        = true    -- Default ON: kunci posisi jendela agar tidak bergeser saat disentuh
+local isPinned        = false   -- Default OFF: Jendela bebas digeser kapan saja dengan sentuhan drag
 local pinnedX         = nil
 local pinnedY         = nil
 local lastWinX        = nil
@@ -1834,13 +1834,13 @@ local needCenterPos   = true    -- Posisikan tepat di tengah layar saat pertama 
 local switchAnimStart = 0
 local SWITCH_ANIM_DUR = 0.26
 
-local function getCenteredWindowPos(winW, winH)
+local function getScreenSize()
     local dispW, dispH = 1280, 540
     if ImGui and ImGui.GetMainViewport then
         local okV, vp = pcall(ImGui.GetMainViewport)
         if okV and vp then
             local okS, sw, sh = pcall(function() return vp.Size.x, vp.Size.y end)
-            if okS and type(sw) == "number" and sw >= 400 and type(sh) == "number" and sh >= 300 then
+            if okS and type(sw) == "number" and sw >= 320 and type(sh) == "number" and sh >= 240 then
                 dispW, dispH = sw, sh
             end
         end
@@ -1848,11 +1848,16 @@ local function getCenteredWindowPos(winW, winH)
         local okI, ioObj = pcall(ImGui.GetIO)
         if okI and ioObj then
             local okS, sw, sh = pcall(function() return ioObj.DisplaySize.x, ioObj.DisplaySize.y end)
-            if okS and type(sw) == "number" and sw >= 400 and type(sh) == "number" and sh >= 300 then
+            if okS and type(sw) == "number" and sw >= 320 and type(sh) == "number" and sh >= 240 then
                 dispW, dispH = sw, sh
             end
         end
     end
+    return dispW, dispH
+end
+
+local function getCenteredWindowPos(winW, winH)
+    local dispW, dispH = getScreenSize()
     local cx = math.max(12, math.floor((dispW - winW) * 0.5))
     local cy = math.max(12, math.floor((dispH - winH) * 0.5))
     return cx, cy
@@ -2012,14 +2017,14 @@ local function renderLeftFeatureSidebar(colW)
     end
 
     local bottomRows = dbFeat and 3 or 2
-    local bottomBlockH = (rowH * bottomRows) + 22
-    local pushDown = 14
+    local bottomBlockH = (rowH * bottomRows) + 14
+    local pushDown = 0
     if availY and availY > bottomBlockH then
-        pushDown = math.max(14, math.min(320, math.floor(availY - bottomBlockH)))
+        pushDown = math.max(0, math.min(160, math.floor(availY - bottomBlockH)))
     end
-    uiGap(pushDown)
+    if pushDown > 0 then uiGap(pushDown) end
     drawSidebarDivider(btnW)
-    uiGap(6)
+    uiGap(4)
 
     -- Database ID tepat di atas tombol Pin
     if dbFeat then
@@ -2232,7 +2237,9 @@ local function renderFrame()
         return
     end
 
-    local initW, initH = 760, 450
+    local dispW, dispH = getScreenSize()
+    local initW = math.max(480, math.min(760, math.floor(dispW - 16)))
+    local initH = math.max(300, math.min(450, math.floor(dispH - 16)))
     if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
     if ImGui.SetNextWindowSize and ImVec2 then
         pcall(ImGui.SetNextWindowSize, ImVec2(initW, initH), condOnce)
@@ -2248,20 +2255,7 @@ local function renderFrame()
         end
     end
 
-    if ImGui.SetNextWindowContentSize and ImVec2 then
-        pcall(ImGui.SetNextWindowContentSize, ImVec2(760, 0))
-    end
-
-    local mainFlags = (ImGui.WindowFlags and ImGui.WindowFlags.HorizontalScrollbar) or 2048
-    local okBegin, isVis = pcall(ImGui.Begin, "BOREN STORE##boren_main", nil, mainFlags)
-    if not okBegin then
-        okBegin, isVis = pcall(ImGui.Begin, "BOREN STORE##boren_main", mainFlags)
-    end
-    if not okBegin then
-        okBegin, isVis = pcall(ImGui.Begin, "BOREN STORE##boren_main")
-    end
-
-    if okBegin and isVis ~= false then
+    if ImGui.Begin("BOREN STORE##boren_main") then
         if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
         if ImGui.GetWindowPos then
             local okP, wp = pcall(ImGui.GetWindowPos)
@@ -2274,9 +2268,8 @@ local function renderFrame()
             end
         end
         drawWindowNeonChrome()
-        local contentW = 760
-        local sideW = math.max(140, math.floor(contentW * 0.20))
-        local rightW = contentW - sideW
+        local winW = safeWinW()
+        local sideW = math.max(130, math.floor(winW * 0.20))
 
         local usedCols = false
         if ImGui.Columns and ImGui.NextColumn then
@@ -2285,7 +2278,6 @@ local function renderFrame()
                 usedCols = true
                 if ImGui.SetColumnWidth then
                     pcall(ImGui.SetColumnWidth, 0, sideW)
-                    pcall(ImGui.SetColumnWidth, 1, rightW)
                 end
 
                 -- KOLOM KIRI: Kategori Fitur SAJA (tanpa Separator agar kanan rata atas!)
@@ -2293,9 +2285,6 @@ local function renderFrame()
 
                 -- KOLOM KANAN: Sub-menu atas (List World, List Storage, Settings, Logs) + Konten
                 ImGui.NextColumn()
-                if ImGui.Dummy and ImVec2 then
-                    pcall(ImGui.Dummy, ImVec2(rightW, 0))
-                end
             end
         end
 
