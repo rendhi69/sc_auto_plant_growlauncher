@@ -155,11 +155,13 @@ function BOOT.start(baseRawUrl)
             if m and type(m.stop) == "function" then pcall(m.stop) end
         end
     end
+    HUB.stopAll = stopAllModules
 
     local function getFallbackManifest()
         return {
             schema = "boren_gl_manifest_v1",
             core = {
+                { key = "conn",  path = "imgui_hub/conn_guard.lua",   required = false },
                 { key = "plant", path = "imgui_hub/plant_engine.lua", required = true },
                 { key = "ui",    path = "imgui_hub/tab_plant.lua",    required = true },
             },

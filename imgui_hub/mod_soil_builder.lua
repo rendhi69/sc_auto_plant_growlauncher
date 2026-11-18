@@ -487,16 +487,26 @@ local function moveAdjacentForWater(tx, ty, prefDir)
     return (math.abs(px - tx) <= 2 and math.abs(py - ty) <= 2 and not (px == tx and py == ty))
 end
 
-local function warpToWorld(wName, doorID)
+local function setConnWarping(flag)
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then
+        pcall(HUB_REF.conn.setWarping, flag == true)
+    end
+end
+
+local function warpToWorldInner(wName, doorID)
     wName = cleanWorldName(wName); doorID = cleanWorldName(doorID)
     if wName == "" then return false end
     if getCurrentWorldSafe() == wName and doorID == "" then applyCheats(); return true end
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.isPlayerOnline and (not HUB_REF.conn.isPlayerOnline()) and (not HUB_REF.conn.isReconnecting()) then
+        local okOn = HUB_REF.conn.ensureOnline({ world = "", isRunning = function() return SB.STATE.running end, onResume = applyCheats })
+        if not okOn then return false end
+    end
     local joinStr = (doorID ~= "") and (wName .. "|" .. doorID) or wName
     for _ = 1, 3 do
         if not SB.STATE.running then return false end
         if sendPacket then pcall(sendPacket, 3, "action|join_request\nname|" .. joinStr .. "\ninvitedWorld|0\n")
         elseif growtopia and growtopia.warpTo then pcall(growtopia.warpTo, joinStr) end
-        local w, lim = 0, math.max(3500, tonumber(SB.CFG.warp_delay) or 4000)
+        local w, lim = 0, math.max(4500, tonumber(SB.CFG.warp_delay) or 4500)
         while w < lim and SB.STATE.running do
             safeSleep(250); w = w + 250
             if getCurrentWorldSafe() == wName then safeSleep(600); applyCheats(); return true end
@@ -508,8 +518,34 @@ local function warpToWorld(wName, doorID)
     return false
 end
 
+local function warpToWorld(wName, doorID)
+    setConnWarping(true)
+    local ok = warpToWorldInner(wName, doorID)
+    setConnWarping(false)
+    return ok
+end
+
+local function ensureSBOnline(row)
+    local conn = HUB_REF and HUB_REF.conn
+    if not conn or not conn.ensureOnline then return true end
+    local tw = row and row.name or ""
+    local td = row and row.door or ""
+    if not conn.needsReconnect(tw) then return true end
+    SB.STATE.status_text = "RECONNECTING..."
+    if row then row.status = "Reconnecting..." end
+    local okOn = conn.ensureOnline({
+        world     = tw,
+        door      = td,
+        isRunning = function() return SB.STATE.running end,
+        onResume  = applyCheats,
+        warpFn    = function(w, d) return warpToWorld(w, d) end,
+    })
+    return okOn == true
+end
+
 local function placePacket(tx, ty, itemID)
     if not sendPacketRaw then return false end
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.STATE and HUB_REF.conn.STATE.reconnecting then return false end
     local p = getLocalSafe()
     local px = (p and (p.posX or (p.pos and p.pos.x))) or (tx * 32)
     local py = (p and (p.posY or (p.pos and p.pos.y))) or (ty * 32)
@@ -712,6 +748,7 @@ local function processSoilWorld(row)
                         if moveSafeTo(standX, standY) then
                             for _, bx in ipairs(spots) do
                                 if not SB.STATE.running then return false end
+                                if not ensureSBOnline(row) then return false end
                                 if isEmptyTile(bx, buildY) then
                                     placePacket(bx, buildY, blockID)
                                     safeSleep(pDelay)
@@ -725,6 +762,7 @@ local function processSoilWorld(row)
                 local x1, x2, st = goingRight and 2 or 97, goingRight and 97 or 2, goingRight and 1 or -1
                 for bx = x1, x2, st do
                     if not SB.STATE.running then return false end
+                    if not ensureSBOnline(row) then return false end
                     if isEmptyTile(bx, buildY) then
                         if getInvCount(blockID) <= 0 then
                             if not restockItem(row, blockID) then SB.saveData(); return false end

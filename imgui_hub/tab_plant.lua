@@ -1560,14 +1560,17 @@ local function renderDashboardPanel()
     local isReloading = (HUB and HUB.reloading == true) or fallbackReloading
     local updStatus   = tostring((HUB and HUB.reload_status) or "Siap")
     local anyRun      = isAnyBotActive()
+    local connMod     = HUB and HUB.conn or nil
+    local isReconn    = (connMod and connMod.STATE and connMod.STATE.reconnecting == true)
+    local connLabel   = isReconn and tostring(connMod.STATE.status_text or "RECONNECTING...") or (anyRun and "AKTIF" or "STANDBY")
 
     -- 1. HEADER PROFESIONAL & STATIS (BOREN STORE — Cyan & Ice White)
     safeSpacing()
     centeredText("BOREN STORE", availW, P.textCyan)
     centeredText(
-        string.format("Status: %s   |   World: %s   |   Gems: %d", anyRun and "AKTIF" or "STANDBY", curWorld, curGems),
+        string.format("Status: %s   |   World: %s   |   Gems: %d", connLabel, curWorld, curGems),
         availW,
-        anyRun and P.textActive or P.textMuted
+        isReconn and P.textPurple or (anyRun and P.textActive or P.textMuted)
     )
     if uiNotice ~= "" and uiNotice ~= updStatus then
         centeredText(uiNotice, availW, P.textPurple)
@@ -1619,7 +1622,32 @@ local function renderDashboardPanel()
     ImGui.Separator()
     safeSpacing()
 
-    -- 3. TOMBOL REFRESH / UPDATE SCRIPT (Rapi, Auto-Fit, Aksen BOREN & Terpusat)
+    -- 3. KONTROL GLOBAL AUTO RECONNECT + TOMBOL REFRESH / UPDATE SCRIPT
+    if connMod and connMod.CFG then
+        local arLabel = connMod.CFG.enabled and "Auto Reconnect: ON" or "Auto Reconnect: OFF"
+        local arTw = #arLabel * 9
+        if ImGui and ImGui.CalcTextSize then
+            local okS, sz = pcall(ImGui.CalcTextSize, arLabel)
+            if okS and sz then
+                local okW, w = pcall(function() return sz.x end)
+                if okW and type(w) == "number" and w > 0 then arTw = w end
+            end
+        end
+        local arBtnW = math.max(95, math.floor(arTw + 26))
+        if ImGui and ImGui.GetCursorPosX and ImGui.SetCursorPosX then
+            local okX, curX = pcall(ImGui.GetCursorPosX)
+            if okX and type(curX) == "number" and availW > arBtnW then
+                pcall(ImGui.SetCursorPosX, curX + (availW - arBtnW) * 0.5)
+            end
+        end
+        if toggleBtn(connMod.CFG.enabled, "dash_ar", "Auto Reconnect: ON", "Auto Reconnect: OFF") then
+            connMod.CFG.enabled = not connMod.CFG.enabled
+            if connMod.saveConfig then pcall(connMod.saveConfig) end
+            setNotice(connMod.CFG.enabled and "Auto Reconnect Global: ON (semua fitur)." or "Auto Reconnect Global: OFF.")
+        end
+        safeSpacing()
+    end
+
     local rlDisplay = isReloading and "Updating..." or "Refresh / Update Script"
     local rlTextW = #rlDisplay * 10
     if ImGui and ImGui.CalcTextSize then
@@ -2216,6 +2244,10 @@ end
 
 local function handleSendPacketRaw(pkt)
     if type(pkt) ~= "table" or not HUB then return false end
+    -- Freeze total semua paket raw saat offline / DC / fokus Reconnect agar 0 spam paket saat offline!
+    if HUB.conn and HUB.conn.STATE and (HUB.conn.STATE.reconnecting or HUB.conn.STATE.dc_flag or (HUB.conn.isPlayerOnline and not HUB.conn.isPlayerOnline())) then
+        return true
+    end
     if tonumber(pkt.type) == 11 then
         -- Anti-Take untuk modul apapun yang mengaktifkan anti_take_active (misal Auto Buy Pack)
         for _, feat in ipairs(getDynamicFeatures()) do
@@ -2254,6 +2286,10 @@ end
 
 local function handleVariant(var)
     if not HUB then return false end
+    if HUB.conn and type(HUB.conn.handleVariant) == "function" then
+        local okC, blockedC = pcall(HUB.conn.handleVariant, var)
+        if okC and blockedC == true then return true end
+    end
     if HUB.plant and type(HUB.plant.handleVariant) == "function" then
         local okP, blockedP = pcall(HUB.plant.handleVariant, var)
         if okP and blockedP == true then return true end

@@ -789,9 +789,15 @@ local function waitWorldTilesReady(maxWaitMs)
     safeSleep(450)
 end
 
+local function setConnWarping(flag)
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then
+        pcall(HUB_REF.conn.setWarping, flag == true)
+    end
+end
+
 -- Mengembalikan (ok: boolean, reason: "ok"|"inaccessible"|"timeout"|"stopped")
 -- HANYA mengembalikan "inaccessible" jika server benar-benar menolak permanen (nuked/banned/inaccessible).
-local function warpToWorld(worldName, doorID)
+local function warpToWorldInner(worldName, doorID)
     worldName = cleanWorldName(worldName)
     doorID = cleanWorldName(doorID)
     if worldName == "" then return false, "inaccessible" end
@@ -801,6 +807,16 @@ local function warpToWorld(worldName, doorID)
         waitWorldTilesReady(4500)
         applyCheatToggles()
         return true, "ok"
+    end
+
+    -- Jika benar-benar offline sebelum warp, tunggu online dulu lewat Global Reconnect!
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.isPlayerOnline and (not HUB_REF.conn.isPlayerOnline()) and (not HUB_REF.conn.isReconnecting()) then
+        local okOn = HUB_REF.conn.ensureOnline({
+            world = "",
+            isRunning = function() return Engine.STATE.running end,
+            onResume = applyCheatToggles,
+        })
+        if not okOn then return false, "stopped" end
     end
 
     -- Jeda anti-spam minimal 1.2 detik sejak join_request sebelumnya agar tidak kena cooldown GT
@@ -917,6 +933,44 @@ local function warpToWorld(worldName, doorID)
         worldName, finalW ~= "" and finalW or "EXIT"))
     Engine.STATE.warp_event = nil
     return false, "timeout"
+end
+
+local function warpToWorld(worldName, doorID)
+    setConnWarping(true)
+    local ok, reason = warpToWorldInner(worldName, doorID)
+    setConnWarping(false)
+    return ok, reason
+end
+
+-- Cek koneksi saat menanam: bila DC -> freeze total, fokus reconnect, lalu masuk ulang & lanjutkan!
+local function ensurePlantOnline(row)
+    local conn = HUB_REF and HUB_REF.conn
+    if not conn or not conn.ensureOnline then
+        return isWorldProperlyLoaded(row and row.name or "")
+    end
+    local targetW = row and row.name or ""
+    local targetD = row and row.door or ""
+    if (not conn.needsReconnect(targetW)) and isWorldProperlyLoaded(targetW) then
+        return true
+    end
+    if row then row.status = "Reconnecting..." end
+    Engine.STATE.status_text = "RECONNECTING..."
+    local okOn, didRec = conn.ensureOnline({
+        world     = targetW,
+        door      = targetD,
+        isRunning = function() return Engine.STATE.running end,
+        onResume  = applyCheatToggles,
+        warpFn    = function(w, d)
+            local okW = warpToWorld(w, d)
+            return okW == true
+        end,
+    })
+    if not okOn then return false end
+    if didRec then
+        syncInventoryCache()
+        scanForeignLocksInWorld()
+    end
+    return true
 end
 
 local function parseStorageEntries()
@@ -1163,6 +1217,9 @@ end
 -- ============================================================================
 local function sendPlantPacket(tx, ty, itemID)
     if not sendPacketRaw then return false end
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.STATE and (HUB_REF.conn.STATE.reconnecting or HUB_REF.conn.STATE.dc_flag or (HUB_REF.conn.isPlayerOnline and not HUB_REF.conn.isPlayerOnline())) then
+        return false
+    end
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return false end
     local p = getLocalSafe()
@@ -1410,6 +1467,7 @@ local function executePlantRow(row, plantY, goingRight, startX, s1, s2)
         local step = goingRight and 3 or -3
         while (goingRight and standX <= 97) or ((not goingRight) and standX >= 1) do
             if not Engine.STATE.running then return false end
+            if not ensurePlantOnline(row) then return false end
             local a = goingRight and (standX - 1) or (standX + 1)
             local b = standX
             local c = goingRight and (standX + 1) or (standX - 1)
@@ -1471,6 +1529,7 @@ local function executePlantRow(row, plantY, goingRight, startX, s1, s2)
         local curX = bX
         while (goingRight and curX <= eX) or ((not goingRight) and curX >= eX) do
             if not Engine.STATE.running then return false end
+            if not ensurePlantOnline(row) then return false end
             if isTilePlantable(curX, plantY, s1, s2) then
                 if not hasEnoughSeedInBackpack(s1, s2) then
                     if not restockFromStorage(row, s1, s2) then return false end
@@ -1577,8 +1636,8 @@ local function processWorldRow(row)
 
         for idx, plantY in ipairs(activeRows) do
             if not Engine.STATE.running then return false end
-            if not isWorldProperlyLoaded(row.name) then
-                row.status = "Disconnected"
+            if not ensurePlantOnline(row) then
+                row.status = "Retry Warp"
                 return false
             end
             local curPx = getPlayerTilePos()
@@ -1600,6 +1659,11 @@ local function processWorldRow(row)
         safeSleep(250)
     end
 
+    if not ensurePlantOnline(row) then
+        row.status = "Retry Warp"
+        Engine.saveData()
+        return false
+    end
     local rem = countPlantableSpots(s1, s2)
     if rem == 0 then
         row.status = "Done"
@@ -1672,6 +1736,7 @@ end
 
 function Engine.start()
     if Engine.STATE.running then return end
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.clearFatal then pcall(HUB_REF.conn.clearFatal) end
     if #Engine.STATE.rows == 0 then
         addLogUI("[Peringatan] Daftar world kosong! Tambahkan Name:ID:SeedID:SpliceID dulu.")
         Engine.STATE.status_text = "List Kosong"

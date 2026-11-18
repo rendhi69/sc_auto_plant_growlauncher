@@ -777,11 +777,29 @@ local function moveAdjacentSafe(tx, ty, prefDir)
     return false
 end
 
-local function warpToWorld(wName, doorID)
+local activeTargetDoor = ""
+
+local function setConnWarping(flag)
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then
+        pcall(HUB_REF.conn.setWarping, flag == true)
+    end
+end
+
+local function warpToWorldInner(wName, doorID)
     wName = cleanWorldName(wName)
     doorID = cleanWorldName(doorID)
     if wName == "" then return false end
     if getCurrentWorldSafe() == wName and doorID == "" then applyCheats(); return true end
+
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.isPlayerOnline and (not HUB_REF.conn.isPlayerOnline()) and (not HUB_REF.conn.isReconnecting()) then
+        local okOn = HUB_REF.conn.ensureOnline({
+            world = "",
+            isRunning = isActive,
+            onResume = applyCheats,
+        })
+        if not okOn then return false end
+    end
+
     local joinStr = (doorID ~= "") and (wName .. "|" .. doorID) or wName
     for _ = 1, 3 do
         if not isActive() then return false end
@@ -790,7 +808,7 @@ local function warpToWorld(wName, doorID)
         elseif growtopia and growtopia.warpTo then
             pcall(growtopia.warpTo, joinStr)
         end
-        local w, lim = 0, math.max(3500, tonumber(DF.CFG.warp_delay) or 4000)
+        local w, lim = 0, math.max(4500, tonumber(DF.CFG.warp_delay) or 4500)
         while w < lim and isActive() do
             safeSleep(250); w = w + 250
             if getCurrentWorldSafe() == wName then
@@ -804,9 +822,44 @@ local function warpToWorld(wName, doorID)
     return false
 end
 
+local function warpToWorld(wName, doorID)
+    setConnWarping(true)
+    local ok = warpToWorldInner(wName, doorID)
+    setConnWarping(false)
+    return ok
+end
+
+-- Cek koneksi saat Dirt Farm berjalan: bila DC -> freeze total, fokus reconnect, lalu masuk ulang & lanjutkan!
+local function ensureDFOnline(expectedWorld, expectedDoor)
+    local conn = HUB_REF and HUB_REF.conn
+    if not conn or not conn.ensureOnline then return true end
+    local tw = cleanWorldName(expectedWorld or activeTargetWorld)
+    local td = cleanWorldName(expectedDoor or activeTargetDoor)
+    if not conn.needsReconnect(tw) then return true end
+    DF.STATE.status_text = "RECONNECTING..."
+    local okOn, didRec = conn.ensureOnline({
+        world     = tw,
+        door      = td,
+        isRunning = isActive,
+        onResume  = function()
+            if not DF.STATE.in_storage then
+                DF.STATE.anti_take_active = false
+                applyCheats()
+            end
+        end,
+        warpFn    = function(w, d) return warpToWorld(w, d) end,
+    })
+    if okOn and didRec and (not DF.STATE.in_storage) then
+        DF.STATE.anti_take_active = false
+        setAutoCollectActive(DF.CFG.auto_collect == true)
+    end
+    return okOn == true
+end
+
 local function rawAction(tx, ty, val)
     if not sendPacketRaw then return false end
-    -- GUARD KERAS: Jangan pernah mengirim paket break/place saat masih di storage atau belum di world target!
+    -- GUARD KERAS: Jangan pernah mengirim paket break/place saat Reconnect, masih di storage, atau salah world!
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.STATE and HUB_REF.conn.STATE.reconnecting then return false end
     if DF.STATE.in_storage then return false end
     if activeTargetWorld ~= "" and getCurrentWorldSafe() ~= activeTargetWorld then return false end
     local p = getLocalSafe()
@@ -976,6 +1029,7 @@ local function breakTileLayerWithLagGuard(tx, ty, isFgLayer, prefDir)
     local pDelay = math.max(80, tonumber(DF.CFG.punch_delay) or 160)
     for round = 1, 5 do
         if not isActive() then return false end
+        if not ensureDFOnline(activeTargetWorld, activeTargetDoor) then return false end
         local t = getTileSafe(tx, ty)
         if not t then return false end
 
@@ -2084,6 +2138,7 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
     DF.STATE.anti_take_active = false
     DF.STATE.in_storage = false
     activeTargetWorld = targetName
+    activeTargetDoor  = cleanWorldName(row.door)
     setAutoCollectActive(DF.CFG.auto_collect == true)
     safeSleep(550)
 
@@ -2250,6 +2305,7 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
             local outOfDirt = false
             while (goingRight and standX <= maxX) or ((not goingRight) and standX >= minX) do
                 if not DF.STATE.running then return false end
+                if not ensureDFOnline(row.name, row.door) then return false end
                 local xs = goingRight and { standX - 1, standX, standX + 1 } or { standX + 1, standX, standX - 1 }
                 local miss = {}
                 for _, bx in ipairs(xs) do
@@ -2378,6 +2434,7 @@ end
 
 function DF.start()
     if DF.STATE.running then return end
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.clearFatal then pcall(HUB_REF.conn.clearFatal) end
     if (not DF.CFG.find_world_mode) and #DF.STATE.rows == 0 then
         addLogUI("List world kosong! Tambah world atau aktifkan Find World.")
         DF.STATE.status_text = "List Kosong"

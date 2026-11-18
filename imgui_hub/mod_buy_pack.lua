@@ -338,17 +338,26 @@ local function warpToSaveWorld()
     if wName == "" then return true end
     if getCurrentWorldSafe() == wName and dId == "" then return true end
 
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then pcall(HUB_REF.conn.setWarping, true) end
     local joinStr = (dId ~= "") and (wName .. "|" .. dId) or wName
     for _ = 1, 3 do
-        if not BP.STATE.running then return false end
+        if not BP.STATE.running then
+            if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then pcall(HUB_REF.conn.setWarping, false) end
+            return false
+        end
         if sendPacket then pcall(sendPacket, 3, "action|join_request\nname|" .. joinStr .. "\ninvitedWorld|0\n")
         elseif growtopia and growtopia.warpTo then pcall(growtopia.warpTo, joinStr) end
-        local w, lim = 0, math.max(3500, tonumber(BP.CFG.warp_delay) or 4000)
+        local w, lim = 0, math.max(4500, tonumber(BP.CFG.warp_delay) or 4500)
         while w < lim and BP.STATE.running do
             safeSleep(250); w = w + 250
-            if getCurrentWorldSafe() == wName then safeSleep(600); return true end
+            if getCurrentWorldSafe() == wName then
+                safeSleep(600)
+                if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then pcall(HUB_REF.conn.setWarping, false) end
+                return true
+            end
         end
     end
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then pcall(HUB_REF.conn.setWarping, false) end
     return getCurrentWorldSafe() == wName
 end
 
@@ -417,7 +426,30 @@ local function mainLoop()
     addLog(string.format("Mulai Auto Buy: %s (%s) | Target: %s",
         tostring(BP.CFG.pack_name), packCode, targetQty > 0 and tostring(targetQty) or "Habiskan Gems"))
 
+    local saveWName, saveWDoor = "", ""
+    do
+        local rawS = trimStr(BP.CFG.save_world):gsub("|", ":")
+        if rawS ~= "" then
+            local wn, di = rawS:match("^([^:]+):(.*)$")
+            saveWName = trimStr(wn or rawS):upper()
+            saveWDoor = trimStr(di or ""):upper()
+        end
+    end
+    if HUB_REF and HUB_REF.conn and HUB_REF.conn.clearFatal then pcall(HUB_REF.conn.clearFatal) end
+
     while BP.STATE.running do
+        if HUB_REF and HUB_REF.conn and HUB_REF.conn.needsReconnect and HUB_REF.conn.needsReconnect(saveWName) then
+            BP.STATE.buying_now = false
+            BP.STATE.status_text = "RECONNECTING..."
+            local okOn = HUB_REF.conn.ensureOnline({
+                world     = saveWName,
+                door      = saveWDoor,
+                isRunning = function() return BP.STATE.running end,
+                warpFn    = function() return warpToSaveWorld() end,
+            })
+            if not okOn then break end
+        end
+
         if targetQty > 0 and BP.STATE.bought_count >= targetQty then
             addLog("Target pembelian tercapai (" .. tostring(BP.STATE.bought_count) .. " pack)!")
             break
