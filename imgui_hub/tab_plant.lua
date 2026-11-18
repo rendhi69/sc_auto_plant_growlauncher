@@ -1876,6 +1876,7 @@ end
 -- MAIN IMGUI RENDER LOOP
 -- ============================================================================
 local wasItemActive = false
+local miniWinW, miniWinH = 280, 172
 
 local function renderFrame()
     if not ImGui or not HUB then return end
@@ -1895,23 +1896,76 @@ local function renderFrame()
     if not windowOpen then
         wasItemActive = false
         if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
-        local miniW, miniH = 230, 128
         if ImGui.SetNextWindowPos and ImVec2 then
-            local mcx, mcy = getCenteredWindowPos(miniW, miniH)
+            local mcx, mcy = getCenteredWindowPos(miniWinW, miniWinH)
             pcall(ImGui.SetNextWindowPos, ImVec2(mcx, mcy), condOnce)
         end
         if ImGui.SetNextWindowSize and ImVec2 then
-            pcall(ImGui.SetNextWindowSize, ImVec2(miniW, miniH), condAlways)
+            local okSz = pcall(ImGui.SetNextWindowSize, ImVec2(miniWinW, miniWinH), condAlways)
+            if not okSz then pcall(ImGui.SetNextWindowSize, ImVec2(miniWinW, miniWinH)) end
         end
         if ImGui.Begin("BOREN STORE##boren_mini") then
             if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
             drawWindowNeonChrome()
-            uiGap(4)
+
+            -- Ukur lebar teks aktual (setelah FontScale) agar tombol & title bar bebas terpotong
+            local lblText = "Open Menu"
+            local btnTextW, titleTextW = 120, 140
+            if ImGui.CalcTextSize then
+                local okB, szB = pcall(ImGui.CalcTextSize, lblText)
+                if okB and szB then
+                    local okW, w = pcall(function() return szB.x end)
+                    if okW and type(w) == "number" and w > 20 then btnTextW = w end
+                end
+                local okT, szT = pcall(ImGui.CalcTextSize, "BOREN STORE")
+                if okT and szT then
+                    local okW, w = pcall(function() return szT.x end)
+                    if okW and type(w) == "number" and w > 20 then titleTextW = w end
+                end
+            end
+            local targetBtnW = math.max(170, math.ceil(btnTextW + 52))
+            local exactW = math.max(260, math.min(480, math.ceil(math.max(targetBtnW + 36, titleTextW + 100))))
+
             local avM = safeAvailX()
-            if centeredBtn("Open Menu##open_boren", math.max(150, avM - 10), avM, true) then
+            if avM > miniWinW then avM = math.max(160, miniWinW - 24) end
+            local drawBtnW = math.max(140, math.min(avM - 4, math.max(targetBtnW, avM - 8)))
+
+            if centeredBtn(lblText .. "##open_boren", drawBtnW, avM, true) then
                 windowOpen = true
                 switchAnimStart = nowSec()
             end
+
+            -- Auto-fit tinggi presisi dari batas bawah aktual tombol (bebas terpotong di semua DPI HP!)
+            local exactH = nil
+            local _, by1, _, by2 = getLastItemRect()
+            if by1 and by2 and ImGui.GetWindowPos then
+                local okP, wp, wpY = pcall(ImGui.GetWindowPos)
+                local wy = nil
+                if okP and wp then
+                    if type(wp) == "number" and type(wpY) == "number" then
+                        wy = wpY
+                    else
+                        local okY, y = pcall(function() return wp.y end)
+                        if okY and type(y) == "number" then wy = y end
+                    end
+                end
+                if wy and by2 > wy then
+                    local btnH = math.max(26, by2 - by1)
+                    local bottomPad = math.max(22, math.ceil(btnH * 0.45))
+                    exactH = math.ceil((by2 - wy) + bottomPad)
+                end
+            end
+            if not exactH and ImGui.GetCursorPosY then
+                local okCY, cy = pcall(ImGui.GetCursorPosY)
+                if okCY and type(cy) == "number" and cy > 30 then
+                    exactH = math.ceil(cy + 24)
+                end
+            end
+            if exactH then
+                exactH = math.max(115, math.min(340, exactH))
+                if math.abs(exactH - miniWinH) >= 2 then miniWinH = exactH end
+            end
+            if math.abs(exactW - miniWinW) >= 2 then miniWinW = exactW end
         end
         ImGui.End()
         popBorenTheme(cCnt, vCnt)
