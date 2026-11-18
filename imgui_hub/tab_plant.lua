@@ -27,17 +27,94 @@ local lastFrameCount = -1
 local uiNotice = ""
 
 -- Kompatibel semua versi binding ImGui.InputText Android (3-arg / 2-arg / null-byte strip / Android IME)
+-- Opsi B (Hybrid): 1x klik ketik normal di ImGui + 2x tap/double-click otomatis buka Native Keyboard Dialog GT (tanpa ubah UI & tanpa bocor console!)
+local lastTapTimeMap = {}
+local lastSectionKetikFn = nil
+local lastItemActiveAt = 0
+local debouncedSaves = {} -- [key] = { due = sec, fn = function }
+
+local function safeNowSec()
+    if os and type(os.clock) == "function" then
+        local ok, c = pcall(os.clock)
+        if ok and type(c) == "number" then return c end
+    end
+    if os and type(os.time) == "function" then
+        local ok, t = pcall(os.time)
+        if ok and type(t) == "number" then return t end
+    end
+    return 0
+end
+
+local function scheduleDebouncedSave(key, fn, delaySec)
+    if type(fn) ~= "function" then return end
+    debouncedSaves[tostring(key or "default")] = {
+        due = safeNowSec() + (tonumber(delaySec) or 0.55),
+        fn  = fn,
+    }
+end
+
+local function flushDebouncedSaves(forceAll)
+    local now = safeNowSec()
+    for k, item in pairs(debouncedSaves) do
+        if forceAll or (item and now >= (item.due or 0)) then
+            debouncedSaves[k] = nil
+            if item and type(item.fn) == "function" then
+                pcall(item.fn)
+            end
+        end
+    end
+end
+
 local function cleanInputStr(v)
     return tostring(v or ""):gsub("%z.*", "")
 end
 
-local function safeInputText(id, curVal, maxLen)
+local function checkInputDoubleTap(id)
+    local triggered = false
+    if ImGui and ImGui.IsItemHovered and ImGui.IsMouseDoubleClicked then
+        local okH, hov = pcall(ImGui.IsItemHovered)
+        if okH and hov then
+            local okD, dbl = pcall(ImGui.IsMouseDoubleClicked, 0)
+            if okD and dbl then triggered = true end
+        end
+    end
+    if (not triggered) and ImGui and ImGui.IsItemClicked then
+        local okC, clk = pcall(ImGui.IsItemClicked, 0)
+        if okC and clk then
+            local now = safeNowSec()
+            local prev = lastTapTimeMap[id] or 0
+            if prev > 0 and (now - prev) > 0.04 and (now - prev) <= 0.42 then
+                triggered = true
+                lastTapTimeMap[id] = 0
+            else
+                lastTapTimeMap[id] = now
+            end
+        end
+    end
+    return triggered
+end
+
+local function safeInputText(id, curVal, maxLen, onDoubleTapFn)
     local s = cleanInputStr(curVal)
     local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
     if not ok then
         ok, r1, r2 = pcall(ImGui.InputText, id, s)
         if not ok then return false, s end
     end
+
+    -- Catat fokus aktif agar Input Guard bisa menahan bocornya ketikan/Enter ke chat & console
+    if ImGui and ImGui.IsItemActive then
+        local okA, act = pcall(ImGui.IsItemActive)
+        if okA and act then lastItemActiveAt = safeNowSec() end
+    end
+
+    -- Opsi B: Double-tap/double-click kotak input -> buka Native Keyboard Dialog HP (0 perubahan UI!)
+    local dtFn = (type(onDoubleTapFn) == "function") and onDoubleTapFn or lastSectionKetikFn
+    if dtFn and checkInputDoubleTap(tostring(id)) then
+        pcall(dtFn)
+        return false, s
+    end
+
     if type(r1) == "boolean" and type(r2) == "string" then
         local c = cleanInputStr(r2)
         if r1 or c ~= s then return true, c end
@@ -408,6 +485,7 @@ end
 
 -- Judul bagian berwarna Cyan + jarak rapi
 local function uiSection(title, skipTopSep)
+    lastSectionKetikFn = nil
     if not skipTopSep then
         uiGap(6)
         if ImGui and ImGui.Separator then pcall(ImGui.Separator) end
@@ -562,6 +640,8 @@ end
 local showKetikBtn = false -- Sembunyikan tombol "Ketik (Keyboard HP)" di UI (fungsi tetap aktif; ketik /ketik di chat jika ingin munculkan)
 
 local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+    -- Simpan callback dialog native untuk section ini agar double-tap kotak input di bawahnya otomatis membuka keyboard HP (Opsi B)
+    lastSectionKetikFn = (type(onKetikClick) == "function") and onKetikClick or nil
     if not skipTopSep then
         uiGap(6)
         if ImGui and ImGui.Separator then pcall(ImGui.Separator) end
@@ -591,6 +671,8 @@ local UI_KIT = {
     readClipboardLines = readClipboardLines,
     renderActionBar    = renderActionBar,
     openInputDialog    = openNativeInputDialog,
+    safeInputText      = safeInputText,
+    scheduleSave       = scheduleDebouncedSave,
 }
 
 -- ============================================================================
@@ -2131,6 +2213,7 @@ local function renderFrame()
         end
 
         local okRight, errRight = pcall(renderRightPanel)
+        lastSectionKetikFn = nil
         if not okRight then
             setNotice("UI Err: " .. tostring(errRight))
         end
@@ -2143,11 +2226,13 @@ local function renderFrame()
         if ImGui.IsAnyItemActive then
             local okA, actv = pcall(ImGui.IsAnyItemActive)
             wasItemActive = (okA and actv == true)
+            if wasItemActive then lastItemActiveAt = safeNowSec() end
         else
             wasItemActive = false
         end
     end
     ImGui.End()
+    flushDebouncedSaves(false)
     popBorenTheme(cCnt, vCnt)
 end
 
@@ -2236,6 +2321,17 @@ local function handleSendPacket(pktType, pktStr)
             if m and type(m.handleSendPacket) == "function" then
                 local ok, blocked = pcall(m.handleSendPacket, pktType, pktStr)
                 if ok and blocked == true then return true end
+            end
+        end
+    end
+
+    -- 3. INPUT GUARD (Anti-Bocor Chat & Console saat mengetik di kotak ImGui!)
+    if type(pktStr) == "string" and windowOpen and pktStr:find("action|input", 1, true) then
+        local txt = pktStr:match("text|([^\n\r]+)")
+        if txt and txt:sub(1, 1) ~= "/" then
+            local typingNow = wasItemActive or ((safeNowSec() - lastItemActiveAt) <= 0.45)
+            if typingNow then
+                return true
             end
         end
     end

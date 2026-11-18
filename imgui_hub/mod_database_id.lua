@@ -424,7 +424,11 @@ local function cleanInputStr(v)
     return (tostring(v or ""):gsub("%z.*", ""))
 end
 
-local function safeInputText(id, curVal, maxLen)
+local function safeInputText(id, curVal, maxLen, onDoubleTapFn)
+    local k = HUB_REF and HUB_REF.ui_kit
+    if k and k.safeInputText then
+        return k.safeInputText(id, curVal, maxLen, onDoubleTapFn)
+    end
     local s = cleanInputStr(curVal)
     local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 128)
     if not ok then

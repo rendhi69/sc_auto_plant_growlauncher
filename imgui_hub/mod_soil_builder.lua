@@ -56,7 +56,11 @@ local addStorageDoorBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
 
-local function safeInputText(id, curVal, maxLen)
+local function safeInputText(id, curVal, maxLen, onDoubleTapFn)
+    local k = HUB_REF and HUB_REF.ui_kit
+    if k and k.safeInputText then
+        return k.safeInputText(id, curVal, maxLen, onDoubleTapFn)
+    end
     local s = tostring(curVal or "")
     local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
     if not ok then return false, s end

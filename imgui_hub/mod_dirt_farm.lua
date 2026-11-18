@@ -143,6 +143,7 @@ DF.CFG = {
     collect_range     = 3,
     auto_trash        = true,
     trash_thresh      = 180,
+    trash_list_raw    = "14,4,5,10,11", -- Default: Cave BG (14), Lava (4), Lava Seed (5), Rock (10), Rock Seed (11) — TANPA Cave BG Seed (15)!
     -- Delays & Cheats
     punch_delay       = 160,
     place_delay       = 160,
@@ -151,23 +152,40 @@ DF.CFG = {
     use_modfly        = true,
 }
 
+local DEFAULT_TRASH_RAW = "14,4,5,10,11"
+local TRASH_ITEM_NAME_MAP = {
+    [2]  = "Dirt",
+    [3]  = "Dirt Seed",
+    [4]  = "Lava",
+    [5]  = "Lava Seed",
+    [10] = "Rock",
+    [11] = "Rock Seed",
+    [14] = "Cave Background",
+    [15] = "Cave Background Seed",
+}
+
 DF.STATE = {
-    enabled          = false,
-    running          = false,
-    finding_one      = false,
-    in_storage       = false,
-    anti_take_active = false,
-    pending_drop_id  = 0,
-    pending_drop_amt = 0,
-    drop_confirmed   = false,
-    status_text      = "Idle",
-    rows             = {},   -- { { name="W", door="D", status="Ready" }, ... }
-    selected_idx     = 0,
-    selected_st      = 0,
-    selected_sw      = 0,
-    found_count      = 0,
-    df_stash_spots   = {},   -- Petak drop sementara Dirt/Seed di DF agar tidak langsung terhisap balik saat break
-    logs             = {},
+    enabled            = false,
+    running            = false,
+    finding_one        = false,
+    in_storage         = false,
+    anti_take_active   = false,
+    pending_drop_id    = 0,
+    pending_drop_amt   = 0,
+    drop_confirmed     = false,
+    checking_door_edit = false,
+    door_edit_seen     = false,
+    door_edit_id       = "",
+    door_edit_locked   = false,
+    status_text        = "Idle",
+    rows               = {},   -- { { name="W", door="D", status="Ready" }, ... }
+    selected_idx       = 0,
+    selected_st        = 0,
+    selected_sw        = 0,
+    selected_tr        = 0,
+    found_count        = 0,
+    df_stash_spots     = {},   -- Petak drop sementara Dirt/Seed di DF agar tidak langsung terhisap balik saat break
+    logs               = {},
 }
 
 local HUB_REF = nil
@@ -178,12 +196,17 @@ local addStorageBuf = ""
 local addStorageDoorBuf = ""
 local addSaveBuf = ""
 local addSaveDoorBuf = ""
+local addTrashBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
 local breakCollectCounter = 0
 local activeTargetWorld = ""
 
-local function safeInputText(id, curVal, maxLen)
+local function safeInputText(id, curVal, maxLen, onDoubleTapFn)
+    local k = HUB_REF and HUB_REF.ui_kit
+    if k and k.safeInputText then
+        return k.safeInputText(id, curVal, maxLen, onDoubleTapFn)
+    end
     local s = tostring(curVal or "")
     local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
     if not ok then return false, s end
@@ -197,6 +220,15 @@ local function safeInputText(id, curVal, maxLen)
         return true, r2
     end
     return false, s
+end
+
+local function saveDataDebounced()
+    local k = HUB_REF and HUB_REF.ui_kit
+    if k and k.scheduleSave then
+        k.scheduleSave("df_cfg", DF.saveData, 0.55)
+    else
+        DF.saveData()
+    end
 end
 
 -- ============================================================================
@@ -325,11 +357,39 @@ local function setSaveWorldList(list)
     DF.saveData()
 end
 
+local function getTrashList()
+    local list, seen = {}, {}
+    local raw = trimStr(DF.CFG.trash_list_raw)
+    if raw == "" then return list end
+    for tok in raw:gmatch("[^,%s;|\r\n]+") do
+        local n = math.floor(tonumber(tok) or 0)
+        if n > 0 and not seen[n] then
+            seen[n] = true
+            table.insert(list, n)
+        end
+    end
+    return list
+end
+
+local function setTrashList(list)
+    local out, seen = {}, {}
+    for _, id in ipairs(list or {}) do
+        local n = math.floor(tonumber(id) or 0)
+        if n > 0 and not seen[n] then
+            seen[n] = true
+            table.insert(out, tostring(n))
+        end
+    end
+    DF.CFG.trash_list_raw = table.concat(out, ",")
+    DF.saveData()
+end
+
 function DF.saveData()
     local lines = {
-        "CFGVER=3",
+        "CFGVER=4",
         "STORAGE=" .. tostring(DF.CFG.storage_raw or ""),
         "SAVEW=" .. tostring(DF.CFG.save_world or ""),
+        "TRASHLIST=" .. tostring(DF.CFG.trash_list_raw or ""),
         "LOOP=" .. (DF.CFG.loop_enabled and "1" or "0"),
         "FINDMODE=" .. (DF.CFG.find_world_mode and "1" or "0"),
         "FINDLEN=" .. tostring(tonumber(DF.CFG.find_name_len) or 7),
@@ -376,11 +436,13 @@ function DF.loadData()
     if not txt or txt == "" then return end
     DF.STATE.rows = {}
     local cfgVer = 0
+    local sawTrashList = false
     for line in txt:gmatch("[^\r\n]+") do
         local k, v = line:match("^([A-Z0-9]+)=(.*)$")
         if k == "CFGVER" then cfgVer = tonumber(v) or 0
         elseif k == "STORAGE" then DF.CFG.storage_raw = trimStr(v)
         elseif k == "SAVEW" then DF.CFG.save_world = trimStr(v)
+        elseif k == "TRASHLIST" then DF.CFG.trash_list_raw = trimStr(v); sawTrashList = true
         elseif k == "LOOP" then DF.CFG.loop_enabled = (v == "1")
         elseif k == "FINDMODE" then DF.CFG.find_world_mode = (v == "1")
         elseif k == "FINDLEN" then DF.CFG.find_name_len = math.max(4, math.min(14, tonumber(v) or 7))
@@ -430,6 +492,11 @@ function DF.loadData()
         DF.CFG.auto_place_jammer = true
         DF.CFG.use_blocker_door  = true
         DF.CFG.use_id_door       = true
+    end
+    if (cfgVer < 4) or (not sawTrashList) then
+        DF.CFG.trash_list_raw = DEFAULT_TRASH_RAW
+        DF.saveData()
+    elseif cfgVer < 3 then
         DF.saveData()
     end
 end
@@ -969,18 +1036,18 @@ local function checkAutoTrash()
     end
 
     if not DF.CFG.auto_trash or not sendPacket then return end
-    local junks = { ITEM.CAVE_BG, ITEM.CAVE_BG_SEED, ITEM.LAVA, ITEM.LAVA_SEED, ITEM.ROCK, ITEM.ROCK_SEED }
-    if not DF.CFG.build_upper_dirt then
-        table.insert(junks, ITEM.DIRT)
-        table.insert(junks, ITEM.DIRT_SEED)
-    end
+    local junks = getTrashList()
+    if #junks == 0 then return end
     for _, jid in ipairs(junks) do
-        local cnt = getInvCount(jid)
-        if cnt >= thresh then
-            pcall(sendPacket, 2, "action|trash\n|itemID|" .. tostring(jid) .. "\n")
-            safeSleep(280)
-            pcall(sendPacket, 2, "action|dialog_return\ndialog_name|trash_item\nitemID|" .. tostring(jid) .. "|\ncount|" .. tostring(cnt) .. "\n")
-            safeSleep(300)
+        -- Lindungi Dirt Block (2) & Dirt Seed (3) bila Build Dirt Atas ON (harus di-stash di DF, bukan di-trash)
+        if not (DF.CFG.build_upper_dirt and (jid == ITEM.DIRT or jid == ITEM.DIRT_SEED)) then
+            local cnt = getInvCount(jid)
+            if cnt >= thresh then
+                pcall(sendPacket, 2, "action|trash\n|itemID|" .. tostring(jid) .. "\n")
+                safeSleep(280)
+                pcall(sendPacket, 2, "action|dialog_return\ndialog_name|trash_item\nitemID|" .. tostring(jid) .. "|\ncount|" .. tostring(cnt) .. "\n")
+                safeSleep(300)
+            end
         end
     end
 end
@@ -2111,6 +2178,7 @@ end
 local function resolveDoorItemName(id)
     id = tonumber(id) or 0
     if id <= 0 then return "None" end
+    if TRASH_ITEM_NAME_MAP[id] then return TRASH_ITEM_NAME_MAP[id] end
     if DOOR_NAME_MAP[id] then return DOOR_NAME_MAP[id] end
     if PLATFORM_NAME_MAP[id] then return PLATFORM_NAME_MAP[id] end
     if HUB_REF and HUB_REF.item_db and type(HUB_REF.item_db.resolveName) == "function" then
@@ -2124,16 +2192,48 @@ local function resolveDoorItemName(id)
     return "Item #" .. tostring(id)
 end
 
--- Stage 0: Break Dirt/Cave BG Moat sekitar White Door -> Pasang Cluster Security -> 2-Step SL Re-apply Lock
+-- Periksa apakah cluster lock & Door ID di world saat ini sudah terpasang di posisi yang benar
+local function inspectWorldSecurityState(doorX, doorY)
+    local blkID = math.max(1, tonumber(DF.CFG.blocker_door_itemid) or 2810)
+    local dItem = math.max(1, tonumber(DF.CFG.id_door_itemid) or 12)
+    local st = {
+        hasBlk = true, hasJam = true, hasWL = true, hasSL = true, hasDoor = true,
+        clusterComplete = true,
+    }
+    if doorX and doorY then
+        if DF.CFG.use_blocker_door and doorX - 1 >= 0 then
+            local fg = tonumber((getTileSafe(doorX - 1, doorY) or {}).fg) or 0
+            st.hasBlk = (fg == blkID or DOOR_NAME_MAP[fg] ~= nil)
+        end
+        if DF.CFG.auto_place_jammer and doorX - 1 >= 0 and doorY - 1 >= 0 then
+            local fg = tonumber((getTileSafe(doorX - 1, doorY - 1) or {}).fg) or 0
+            st.hasJam = (fg == ITEM.JAMMER)
+        end
+        if DF.CFG.auto_lock_wl and doorX + 1 <= 99 then
+            local fg = tonumber((getTileSafe(doorX + 1, doorY) or {}).fg) or 0
+            st.hasWL = (fg == ITEM.WORLD_LOCK)
+        end
+        if DF.CFG.auto_place_sl and doorY - 1 >= 0 then
+            local fg = tonumber((getTileSafe(doorX, doorY - 1) or {}).fg) or 0
+            st.hasSL = (fg == ITEM.SMALL_LOCK)
+        end
+    end
+    if DF.CFG.use_id_door then
+        local fg0 = tonumber((getTileSafe(0, 0) or {}).fg) or 0
+        st.hasDoor = (fg0 == dItem or DOOR_NAME_MAP[fg0] ~= nil)
+    end
+    st.clusterComplete = st.hasBlk and st.hasJam and st.hasWL and st.hasSL
+    return st
+end
+
+-- Stage 0: Smart Skip Lock (jika posisi lock sudah benar -> skip buat ulang lock, cukup cek Door ID!)
 local function setupWorldSecurity(row, doorX, doorY)
     if not doorX or not doorY then return true end
     local needAny = DF.CFG.use_blocker_door or DF.CFG.auto_place_jammer or DF.CFG.auto_lock_wl or DF.CFG.auto_place_sl or DF.CFG.use_id_door
     if not needAny then return true end
 
-    row.status = "Setup Lock/Door"
-    DF.STATE.status_text = row.name .. " Break Moat"
-
     local blkID = math.max(1, tonumber(DF.CFG.blocker_door_itemid) or 2810)
+    local sec = inspectWorldSecurityState(doorX, doorY)
 
     local function isKeptClusterTile(tx, ty)
         if tx == doorX and (ty == doorY or ty == doorY + 1) then return true end -- White Door & Bedrock
@@ -2146,183 +2246,234 @@ local function setupWorldSecurity(row, doorX, doorY)
         return false
     end
 
-    -- 0A. WAJIB BREAK DIRT & CAVE BG DI SEKELILING CLUSTER LOCK (Moat 1-tile Empty Air: fg=0 & bg=0)
-    -- Termasuk kiri/kanan Bedrock (doorX±1, doorY+1), atas WL (doorX+1, doorY-1), dan ring luar ±2!
-    -- Tanpa break ini dulu, Small Lock (Ignore Empty Air + Re-apply) akan bocor ke dirt bawah & bentuknya kacau!
-    local function clearSecurityMoat()
-        addLog(string.format("[Lock/Door] Break dirt & Cave BG area Moat sekitar Main Door (%d,%d)...", doorX, doorY))
-        for pass = 1, 2 do
-            local brokeAny = false
-            for my = doorY - 2, doorY + 2 do
-                for mx = doorX - 2, doorX + 2 do
-                    if not DF.STATE.running then return end
-                    local isOuterRing    = (math.abs(mx - doorX) == 2 or math.abs(my - doorY) == 2)
-                    local isLeftBedrock  = (mx == doorX - 1 and my == doorY + 1)
-                    local isRightAboveWL = (mx == doorX + 1 and my == doorY - 1)
-                    local isRightBelowWL = (mx == doorX + 1 and my == doorY + 1)
-                    if (isOuterRing or isLeftBedrock or isRightAboveWL or isRightBelowWL)
-                        and mx >= 0 and mx <= 99 and my >= 0 and my <= 53
-                        and (not isKeptClusterTile(mx, my))
-                    then
-                        local t = getTileSafe(mx, my)
-                        local fg = tonumber(t and t.fg) or 0
-                        local bg = tonumber(t and t.bg) or 0
-                        local needFg = (fg ~= 0 and isTileClearableByBot(t))
-                        local needBg = (bg ~= 0)
-                        if needFg or needBg then
-                            brokeAny = true
-                            local prefDir = (mx <= doorX) and -1 or 1
-                            breakTileCompletely(mx, my, needFg, needBg, prefDir, true)
-                        end
-                    end
-                end
-            end
-            if not brokeAny then break end
-            safeSleep(120)
-        end
-    end
-
-    clearSecurityMoat()
-
-    -- 0B. Bersihkan FG & Cave BG pada slot cluster yang belum terisi item target
-    local clusterSlots = {
-        { x = doorX - 1, y = doorY,     id = blkID,           dir = -1, enabled = DF.CFG.use_blocker_door },
-        { x = doorX - 1, y = doorY - 1, id = ITEM.JAMMER,     dir = -1, enabled = DF.CFG.auto_place_jammer },
-        { x = doorX + 1, y = doorY,     id = ITEM.WORLD_LOCK, dir =  1, enabled = DF.CFG.auto_lock_wl },
-        { x = doorX,     y = doorY - 1, id = ITEM.SMALL_LOCK, dir =  1, enabled = DF.CFG.auto_place_sl },
-    }
-    for _, sl in ipairs(clusterSlots) do
-        if sl.enabled and sl.x >= 0 and sl.x <= 99 and sl.y >= 0 and sl.y <= 53 then
-            local t = getTileSafe(sl.x, sl.y)
-            if t and tonumber(t.fg) ~= sl.id then
-                local needFg = ((tonumber(t.fg) or 0) ~= 0 and isTileClearableByBot(t))
-                local needBg = ((tonumber(t.bg) or 0) ~= 0)
-                if needFg or needBg then
-                    breakTileCompletely(sl.x, sl.y, needFg, needBg, sl.dir, true)
-                end
-            end
-        end
-    end
-
-    DF.STATE.status_text = row.name .. " Lock/Door"
-
-    local function ensureAndPlace(tx, ty, itemID, prefDir, label)
-        if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    local function ensureAndPlace(tx, ty, itemID, prefDir, label, acceptAnyDoor)
+        if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false, false end
         if getCurrentWorldSafe() ~= cleanWorldName(row.name) then
-            if not warpToWorld(row.name, row.door) then return false end
+            if not warpToWorld(row.name, row.door) then return false, false end
             safeSleep(450)
         end
         local t = getTileSafe(tx, ty)
-        if t and tonumber(t.fg) == itemID then return true end
+        local curFg = tonumber(t and t.fg) or 0
+        if curFg == itemID or (acceptAnyDoor and DOOR_NAME_MAP[curFg]) then
+            return true, true -- alreadyPresent = true
+        end
         if getInvCount(itemID) <= 0 then
             if not restockItem(row, itemID, 1, 1) then
                 addLog("[Lock/Door] Stok " .. label .. " (ID " .. tostring(itemID) .. ") habis!")
-                return false
+                return false, false
             end
-            if getCurrentWorldSafe() ~= cleanWorldName(row.name) then return false end
+            if getCurrentWorldSafe() ~= cleanWorldName(row.name) then return false, false end
             t = getTileSafe(tx, ty)
-            if t and tonumber(t.fg) == itemID then return true end
+            curFg = tonumber(t and t.fg) or 0
+            if curFg == itemID or (acceptAnyDoor and DOOR_NAME_MAP[curFg]) then
+                return true, true
+            end
         end
-        if t and (((tonumber(t.fg) or 0) ~= 0 and isTileClearableByBot(t)) or (tonumber(t.bg) or 0) ~= 0) then
-            breakTileCompletely(tx, ty, (tonumber(t.fg) or 0) ~= 0, (tonumber(t.bg) or 0) ~= 0, prefDir, true)
+        if t and ((curFg ~= 0 and isTileClearableByBot(t)) or (tonumber(t.bg) or 0) ~= 0) then
+            breakTileCompletely(tx, ty, curFg ~= 0, (tonumber(t.bg) or 0) ~= 0, prefDir, true)
         end
         local okP = placeTileAt(tx, ty, itemID, prefDir)
         if okP then addLog(string.format("[Lock/Door] %s (ID %d) terpasang di (%d,%d)", label, itemID, tx, ty)) end
-        return okP
+        return okP, false
     end
 
-    -- 1. Penghalang Kiri (Blocker) di (doorX - 1, doorY)
-    if DF.CFG.use_blocker_door and doorX - 1 >= 0 then
-        ensureAndPlace(doorX - 1, doorY, blkID, -1, "Penghalang " .. resolveDoorItemName(blkID))
-    end
+    if sec.clusterComplete then
+        addLog("[Lock/Door] Posisi lock sudah benar — skip buat ulang lock, lanjut cek Door ID.")
+    else
+        row.status = "Setup Lock/Door"
+        DF.STATE.status_text = row.name .. " Setup Lock"
 
-    -- 2. Signal Jammer (226) di (doorX - 1, doorY - 1) + punch 1x aktif
-    if DF.CFG.auto_place_jammer and doorX - 1 >= 0 and doorY - 1 >= 0 then
-        local hadJam = (tonumber((getTileSafe(doorX - 1, doorY - 1) or {}).fg) == ITEM.JAMMER)
-        if ensureAndPlace(doorX - 1, doorY - 1, ITEM.JAMMER, -1, "Signal Jammer") and (not hadJam) then
-            safeSleep(250)
-            rawAction(doorX - 1, doorY - 1, ITEM.PUNCH)
-            safeSleep(250)
-        end
-    end
-
-    -- 3. World Lock (242) di (doorX + 1, doorY) + Set Public bila wl_public ON
-    if DF.CFG.auto_lock_wl and doorX + 1 <= 99 then
-        if ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock") and DF.CFG.wl_public and sendPacket then
-            moveAdjacentSafe(doorX + 1, doorY, 1)
-            safeSleep(220)
-            rawAction(doorX + 1, doorY, ITEM.WRENCH)
-            safeSleep(380)
-            pcall(sendPacket, 2, string.format(
-                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
-                doorX + 1, doorY
-            ))
-            safeSleep(450)
-            addLog("[Lock/Door] World Lock (242) diset Public.")
-        end
-    end
-
-    -- 4. Small Lock (202) di atas White Door (doorX, doorY - 1) + 2-Step Apply (Save Ignore Air -> Re-apply Lock!)
-    if DF.CFG.auto_place_sl and doorY - 1 >= 0 then
-        -- Pastikan petak tepat di atas SL (doorX, doorY - 2) benar-benar kosong (fg=0 & bg=0)
-        if doorY - 2 >= 0 then
-            local tTop = getTileSafe(doorX, doorY - 2)
-            if tTop and ((tonumber(tTop.fg) or 0) ~= 0 or (tonumber(tTop.bg) or 0) ~= 0) then
-                breakTileCompletely(doorX, doorY - 2, true, true, 1, true)
+        -- 0A. Break Dirt & Cave BG Moat HANYA jika Small Lock belum terpasang (agar tidak merusak/mengulang lock yg sudah jadi!)
+        if DF.CFG.auto_place_sl and (not sec.hasSL) then
+            DF.STATE.status_text = row.name .. " Break Moat"
+            addLog(string.format("[Lock/Door] Break dirt & Cave BG area Moat sekitar Main Door (%d,%d)...", doorX, doorY))
+            for pass = 1, 2 do
+                local brokeAny = false
+                for my = doorY - 2, doorY + 2 do
+                    for mx = doorX - 2, doorX + 2 do
+                        if not DF.STATE.running then return end
+                        local isOuterRing    = (math.abs(mx - doorX) == 2 or math.abs(my - doorY) == 2)
+                        local isLeftBedrock  = (mx == doorX - 1 and my == doorY + 1)
+                        local isRightAboveWL = (mx == doorX + 1 and my == doorY - 1)
+                        local isRightBelowWL = (mx == doorX + 1 and my == doorY + 1)
+                        if (isOuterRing or isLeftBedrock or isRightAboveWL or isRightBelowWL)
+                            and mx >= 0 and mx <= 99 and my >= 0 and my <= 53
+                            and (not isKeptClusterTile(mx, my))
+                        then
+                            local t = getTileSafe(mx, my)
+                            local fg = tonumber(t and t.fg) or 0
+                            local bg = tonumber(t and t.bg) or 0
+                            local needFg = (fg ~= 0 and isTileClearableByBot(t))
+                            local needBg = (bg ~= 0)
+                            if needFg or needBg then
+                                brokeAny = true
+                                local prefDir = (mx <= doorX) and -1 or 1
+                                breakTileCompletely(mx, my, needFg, needBg, prefDir, true)
+                            end
+                        end
+                    end
+                end
+                if not brokeAny then break end
+                safeSleep(120)
             end
         end
-        if ensureAndPlace(doorX, doorY - 1, ITEM.SMALL_LOCK, 1, "Small Lock") and sendPacket then
-            local standY = math.max(0, doorY - 2)
-            moveSafeTo(doorX, standY)
-            safeSleep(220)
 
-            -- Step 1: Simpan Private (0) + Ignore Empty Air (1) terlebih dahulu!
-            rawAction(doorX, doorY - 1, ITEM.WRENCH)
-            safeSleep(380)
-            pcall(sendPacket, 2, string.format(
-                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|0\ncheckbox_ignore|1\ncheckbox_ignore_air|1\n",
-                doorX, doorY - 1
-            ))
-            safeSleep(480)
+        -- 0B. Bersihkan FG & Cave BG HANYA pada slot cluster yang belum terisi item target
+        local clusterSlots = {
+            { x = doorX - 1, y = doorY,     id = blkID,           dir = -1, enabled = DF.CFG.use_blocker_door and (not sec.hasBlk) },
+            { x = doorX - 1, y = doorY - 1, id = ITEM.JAMMER,     dir = -1, enabled = DF.CFG.auto_place_jammer and (not sec.hasJam) },
+            { x = doorX + 1, y = doorY,     id = ITEM.WORLD_LOCK, dir =  1, enabled = DF.CFG.auto_lock_wl and (not sec.hasWL) },
+            { x = doorX,     y = doorY - 1, id = ITEM.SMALL_LOCK, dir =  1, enabled = DF.CFG.auto_place_sl and (not sec.hasSL) },
+        }
+        for _, sl in ipairs(clusterSlots) do
+            if sl.enabled and sl.x >= 0 and sl.x <= 99 and sl.y >= 0 and sl.y <= 53 then
+                local t = getTileSafe(sl.x, sl.y)
+                if t and tonumber(t.fg) ~= sl.id then
+                    local needFg = ((tonumber(t.fg) or 0) ~= 0 and isTileClearableByBot(t))
+                    local needBg = ((tonumber(t.bg) or 0) ~= 0)
+                    if needFg or needBg then
+                        breakTileCompletely(sl.x, sl.y, needFg, needBg, sl.dir, true)
+                    end
+                end
+            end
+        end
 
-            -- Step 2: Wrench lagi & tekan Re-apply Lock (recalcLock) dengan Ignore Empty Air = ON!
-            rawAction(doorX, doorY - 1, ITEM.WRENCH)
-            safeSleep(380)
-            pcall(sendPacket, 2, string.format(
-                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\ncheckbox_public|0\ncheckbox_ignore|1\ncheckbox_ignore_air|1\n",
-                doorX, doorY - 1
-            ))
-            safeSleep(550)
-            addLog("[Lock/Door] Small Lock (202) Private + Ignore Air + Re-apply Lock selesai rapi!")
+        DF.STATE.status_text = row.name .. " Lock/Door"
+
+        -- 1. Penghalang Kiri (Blocker) di (doorX - 1, doorY) — hanya jika belum terpasang
+        if DF.CFG.use_blocker_door and (not sec.hasBlk) and doorX - 1 >= 0 then
+            ensureAndPlace(doorX - 1, doorY, blkID, -1, "Penghalang " .. resolveDoorItemName(blkID), true)
+        end
+
+        -- 2. Signal Jammer (226) di (doorX - 1, doorY - 1) — hanya jika belum terpasang
+        if DF.CFG.auto_place_jammer and (not sec.hasJam) and doorX - 1 >= 0 and doorY - 1 >= 0 then
+            local okJam, alreadyJam = ensureAndPlace(doorX - 1, doorY - 1, ITEM.JAMMER, -1, "Signal Jammer", false)
+            if okJam and (not alreadyJam) then
+                safeSleep(250)
+                rawAction(doorX - 1, doorY - 1, ITEM.PUNCH)
+                safeSleep(250)
+            end
+        end
+
+        -- 3. World Lock (242) di (doorX + 1, doorY) — hanya konfigurasi jika baru dipasang!
+        if DF.CFG.auto_lock_wl and (not sec.hasWL) and doorX + 1 <= 99 then
+            local okWL, alreadyWL = ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock", false)
+            if okWL and (not alreadyWL) and DF.CFG.wl_public and sendPacket then
+                moveAdjacentSafe(doorX + 1, doorY, 1)
+                safeSleep(220)
+                rawAction(doorX + 1, doorY, ITEM.WRENCH)
+                safeSleep(380)
+                pcall(sendPacket, 2, string.format(
+                    "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
+                    doorX + 1, doorY
+                ))
+                safeSleep(450)
+                addLog("[Lock/Door] World Lock (242) diset Public.")
+            end
+        end
+
+        -- 4. Small Lock (202) di atas White Door (doorX, doorY - 1) — hanya 2-Step Apply jika baru dipasang!
+        if DF.CFG.auto_place_sl and (not sec.hasSL) and doorY - 1 >= 0 then
+            if doorY - 2 >= 0 then
+                local tTop = getTileSafe(doorX, doorY - 2)
+                if tTop and ((tonumber(tTop.fg) or 0) ~= 0 or (tonumber(tTop.bg) or 0) ~= 0) then
+                    breakTileCompletely(doorX, doorY - 2, true, true, 1, true)
+                end
+            end
+            local okSL, alreadySL = ensureAndPlace(doorX, doorY - 1, ITEM.SMALL_LOCK, 1, "Small Lock", false)
+            if okSL and (not alreadySL) and sendPacket then
+                local standY = math.max(0, doorY - 2)
+                moveSafeTo(doorX, standY)
+                safeSleep(220)
+
+                -- Step 1: Simpan Private (0) + Ignore Empty Air (1) terlebih dahulu!
+                rawAction(doorX, doorY - 1, ITEM.WRENCH)
+                safeSleep(380)
+                pcall(sendPacket, 2, string.format(
+                    "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|0\ncheckbox_ignore|1\ncheckbox_ignore_air|1\n",
+                    doorX, doorY - 1
+                ))
+                safeSleep(480)
+
+                -- Step 2: Wrench lagi & tekan Re-apply Lock (recalcLock) dengan Ignore Empty Air = ON!
+                rawAction(doorX, doorY - 1, ITEM.WRENCH)
+                safeSleep(380)
+                pcall(sendPacket, 2, string.format(
+                    "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\ncheckbox_public|0\ncheckbox_ignore|1\ncheckbox_ignore_air|1\n",
+                    doorX, doorY - 1
+                ))
+                safeSleep(550)
+                addLog("[Lock/Door] Small Lock (202) Private + Ignore Air + Re-apply Lock selesai rapi!")
+            end
         end
     end
 
-    -- 5. Door ID di (0, 0) + Set Door ID & Label + simpan ke row.door
+    -- 5. CEK / PASANG DOOR ID di (0, 0)
+    -- Lapis 1: Jika Door sudah ada di (0,0) & bot masuk langsung ke (0,0) dengan row.door == targetID -> SKIP wrench!
+    -- Lapis 2: Jika Door sudah ada di (0,0) -> Wrench 1x baca dialog door_edit; kalau ID sudah benar & locked -> SKIP edit!
     if DF.CFG.use_id_door then
         local dItem = math.max(1, tonumber(DF.CFG.id_door_itemid) or 12)
         local targetID = trimStr(DF.CFG.door_id or "DF123"):upper()
         local targetLbl = trimStr(DF.CFG.door_label or "BOREN STORE")
-        if ensureAndPlace(0, 0, dItem, 1, "Door ID " .. resolveDoorItemName(dItem)) and targetID ~= "" and sendPacket then
-            safeSleep(250)
-            moveSafeTo(1, 0)
-            rawAction(0, 0, ITEM.WRENCH)
-            safeSleep(380)
-            pcall(sendPacket, 2, string.format(
-                "action|dialog_return\ndialog_name|door_edit\ntilex|0|\ntiley|0|\ndoor_name|%s\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1\n",
-                targetLbl, targetID
-            ))
-            safeSleep(450)
-            row.door = targetID
-            DF.saveData()
-            addLog("[Lock/Door] Door ID (0,0) diset -> ID=" .. targetID .. " | Label=" .. targetLbl)
+
+        local okDoor, alreadyDoor = ensureAndPlace(0, 0, dItem, 1, "Door ID " .. resolveDoorItemName(dItem), true)
+        if okDoor and targetID ~= "" and sendPacket then
+            local needEditDoor = true
+            if alreadyDoor then
+                local px, py = getPlayerPos()
+                if cleanWorldName(row.door) == targetID and px and py and px <= 1 and py <= 1 then
+                    needEditDoor = false
+                    addLog("[Lock/Door] Door ID (0,0) sudah valid (" .. targetID .. ") — skip edit.")
+                else
+                    -- Baca dialog door_edit 1x secara senyap lewat DF.handleVariant
+                    DF.STATE.checking_door_edit = true
+                    DF.STATE.door_edit_seen = false
+                    DF.STATE.door_edit_id = ""
+                    DF.STATE.door_edit_locked = false
+                    moveSafeTo(1, 0)
+                    safeSleep(180)
+                    rawAction(0, 0, ITEM.WRENCH)
+                    local w = 0
+                    while w < 900 and isActive() and (not DF.STATE.door_edit_seen) do
+                        safeSleep(75); w = w + 75
+                    end
+                    DF.STATE.checking_door_edit = false
+                    if DF.STATE.door_edit_seen and cleanWorldName(DF.STATE.door_edit_id) == targetID and DF.STATE.door_edit_locked then
+                        needEditDoor = false
+                        if cleanWorldName(row.door) ~= targetID then
+                            row.door = targetID
+                            DF.saveData()
+                        end
+                        addLog("[Lock/Door] Cek Door ID (0,0) OK (" .. targetID .. ") — tidak perlu edit ulang.")
+                    end
+                end
+            end
+
+            if needEditDoor then
+                safeSleep(180)
+                moveSafeTo(1, 0)
+                if not DF.STATE.door_edit_seen then
+                    rawAction(0, 0, ITEM.WRENCH)
+                    safeSleep(380)
+                end
+                pcall(sendPacket, 2, string.format(
+                    "action|dialog_return\ndialog_name|door_edit\ntilex|0|\ntiley|0|\ndoor_name|%s\ndoor_target|\ndoor_id|%s\ncheckbox_locked|1\n",
+                    targetLbl, targetID
+                ))
+                safeSleep(450)
+                row.door = targetID
+                DF.saveData()
+                addLog("[Lock/Door] Door ID (0,0) diset -> ID=" .. targetID .. " | Label=" .. targetLbl)
+            end
         end
     end
     return true
 end
 
 local function processDirtFarmWorld(row, skipPreKitCheck)
-    -- 0A. Siapkan & validasi alat di Storage (masing-masing 1 + drop kelebihan) SEBELUM masuk world DF!
-    if not skipPreKitCheck then
+    -- 0A. Mode Find World: WAJIB siapkan & validasi alat di Storage SEBELUM cari world random!
+    --     Mode Add World sendiri: masuk world target dulu -> jika posisi lock sudah lengkap, hemat trip Storage!
+    if (not skipPreKitCheck) and DF.CFG.find_world_mode then
         if not prepareAndValidateDFKit() then
             row.status = "Alat Kurang"
             DF.saveData()
@@ -2695,15 +2846,19 @@ function DF.stop()
     DF.STATE.anti_take_active = false
     DF.STATE.pending_drop_id = 0
     DF.STATE.pending_drop_amt = 0
+    DF.STATE.checking_door_edit = false
     activeTargetWorld = ""
     DF.STATE.enabled = false
     DF.STATE.status_text = "Stopped"
 end
 
--- Auto-confirm dialog drop / drop_item saat membuang kelebihan alat di Storage
+-- Auto-confirm dialog drop / drop_item + cek senyap dialog door_edit (Smart Skip Lock & Cek Door ID)
 -- Mendukung format VariantList v0/v1 maupun v1/v2 serta dialog "drop" & "drop_item" Growtopia V5.x!
 function DF.handleVariant(var)
-    if (not isActive()) or DF.STATE.pending_drop_id <= 0 then return false end
+    if not isActive() then return false end
+    local wantDrop = (DF.STATE.pending_drop_id > 0)
+    local wantDoor = (DF.STATE.checking_door_edit == true)
+    if (not wantDrop) and (not wantDoor) then return false end
     if type(var) ~= "table" and type(var) ~= "userdata" then return false end
 
     local v0, v1, v2 = nil, nil, nil
@@ -2723,8 +2878,31 @@ function DF.handleVariant(var)
 
     local low = payload:lower()
     local endDlg = (payload:match("end_dialog|([^|\r\n]+)") or ""):lower()
-    if endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
-        or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true)
+
+    -- A. Cek senyap dialog door_edit (baca door_id & checkbox_locked tanpa menampilkan popup ke layar!)
+    if wantDoor and (endDlg == "door_edit" or low:find("add_text_input|door_id|", 1, true)) then
+        local dId = ""
+        local dLocked = false
+        for line in payload:gmatch("[^\r\n]+") do
+            local parts = {}
+            for part in (line .. "|"):gmatch("([^|]*)|") do
+                parts[#parts + 1] = part
+            end
+            if parts[1] == "add_text_input" and parts[2] == "door_id" then
+                dId = trimStr(parts[4] or "")
+            elseif parts[1] == "add_checkbox" and parts[2] == "checkbox_locked" then
+                dLocked = (trimStr(parts[4] or "") == "1")
+            end
+        end
+        DF.STATE.door_edit_id = dId
+        DF.STATE.door_edit_locked = dLocked
+        DF.STATE.door_edit_seen = true
+        return true
+    end
+
+    -- B. Auto-confirm dialog drop / drop_item
+    if wantDrop and (endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
+        or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true))
     then
         if not DF.STATE.drop_confirmed then
             DF.STATE.drop_confirmed = true
@@ -3403,7 +3581,7 @@ local function renderSettingsSub()
         if DF.CFG.place_platform then
             renderOptRow("ID Platform", function()
                 renderNumInput("df_plat_id", DF.CFG.platform_id, 1, 20000, 0, "", function(v)
-                    DF.CFG.platform_id = v; DF.saveData()
+                    DF.CFG.platform_id = v; saveDataDebounced()
                 end)
                 ImGui.SameLine()
                 if autoBtn(" < ##dfp_1") then
@@ -3436,20 +3614,109 @@ local function renderSettingsSub()
         end)
         renderOptRow("Punch Delay", function()
             renderNumInput("df_punchd", DF.CFG.punch_delay, 60, 500, 20, "ms", function(v)
-                DF.CFG.punch_delay = v; DF.saveData()
+                DF.CFG.punch_delay = v; saveDataDebounced()
             end)
         end)
         renderOptRow("Place Delay", function()
             renderNumInput("df_placed", DF.CFG.place_delay, 60, 500, 20, "ms", function(v)
-                DF.CFG.place_delay = v; DF.saveData()
+                DF.CFG.place_delay = v; saveDataDebounced()
             end)
         end)
         renderOptRow("Step Delay", function()
             renderNumInput("df_stepd", DF.CFG.step_delay, 40, 400, 10, "ms", function(v)
-                DF.CFG.step_delay = v; DF.saveData()
+                DF.CFG.step_delay = v; saveDataDebounced()
             end)
         end)
         ImGui.EndTable()
+    end
+
+    -- TRASH LIST KUSTOM (Default: 14, 4, 5, 10, 11 — TANPA Cave BG Seed 15!)
+    uiGap(10)
+    local trashList = getTrashList()
+    uiSectionWithKetik("Trash List (" .. tostring(#trashList) .. " item)  [Cave BG Seed 15 aman!]", "df_ktk_tr", function()
+        uiOpenDialog("boren_in_df_tr", "Tambah Item ID ke Trash List", {
+            { id = "f_tid", label = "Item ID (pisahkan koma jika banyak)", default = addTrashBuf, maxLen = 64 },
+        }, "Tambah", function(vals)
+            local raw = trimStr(vals.f_tid or "")
+            local cur = getTrashList()
+            local added = 0
+            for tok in raw:gmatch("[^,%s;|\r\n]+") do
+                local n = math.floor(tonumber(tok) or 0)
+                if n > 0 then table.insert(cur, n); added = added + 1 end
+            end
+            if added > 0 then
+                setTrashList(cur); addTrashBuf = ""
+                uiNotice = "Trash List: +" .. tostring(added) .. " item ditambahkan."
+            end
+        end)
+    end)
+    uiNote(uiNotice)
+
+    if ImGui.BeginTable("BorenDFTrashTable", 2) then
+        ImGui.TableSetupColumn("Item ID")
+        ImGui.TableSetupColumn("Nama Item")
+        ImGui.TableHeadersRow()
+        if #trashList == 0 then
+            ImGui.TableNextRow()
+            ImGui.TableSetColumnIndex(0); ImGui.Text("(Kosong)")
+            ImGui.TableSetColumnIndex(1); ImGui.Text("Tidak ada item yang di-trash")
+        else
+            for i, tid in ipairs(trashList) do
+                ImGui.TableNextRow()
+                ImGui.TableSetColumnIndex(0)
+                local sel = (DF.STATE.selected_tr == i)
+                if autoBtn((sel and "> " or "") .. tostring(tid) .. "##dftr" .. tostring(i)) then
+                    DF.STATE.selected_tr = sel and 0 or i
+                end
+                ImGui.TableSetColumnIndex(1)
+                ImGui.Text(resolveDoorItemName(tid))
+            end
+        end
+        ImGui.EndTable()
+    end
+
+    uiGap(4)
+    local w = availX()
+    ImGui.PushItemWidth(math.max(140, math.floor(w * 0.48)))
+    local chTr, nvTr = safeInputText("##df_add_tr", addTrashBuf, 64)
+    ImGui.PopItemWidth()
+    if chTr then addTrashBuf = nvTr end
+    ImGui.SameLine()
+    ImGui.Text("ID Item (cth: 14 atau 4,5)")
+    uiGap(4)
+
+    local actTr = uiActionBar("BorenDFTrActs", w, {
+        { label = "+ Tambah ID##dftr_add", style = "accent" },
+        { label = "Hapus##dftr_del",       style = "muted" },
+        { label = "Reset Default##dftr_rst" },
+    })
+    if actTr == 1 then
+        local raw = trimStr(addTrashBuf)
+        local added = 0
+        for tok in raw:gmatch("[^,%s;|\r\n]+") do
+            local n = math.floor(tonumber(tok) or 0)
+            if n > 0 then table.insert(trashList, n); added = added + 1 end
+        end
+        if added > 0 then
+            setTrashList(trashList); addTrashBuf = ""
+            uiNotice = "Trash List: +" .. tostring(added) .. " item tersimpan!"
+        else
+            uiNotice = "Masukkan angka Item ID dulu (cth: 14)."
+        end
+    elseif actTr == 2 then
+        local idx = DF.STATE.selected_tr
+        if idx < 1 or idx > #trashList then idx = #trashList end
+        if idx >= 1 and idx <= #trashList then
+            local rem = table.remove(trashList, idx)
+            DF.STATE.selected_tr = 0
+            setTrashList(trashList)
+            uiNotice = "Dihapus dari Trash List: ID " .. tostring(rem)
+        end
+    elseif actTr == 3 then
+        DF.CFG.trash_list_raw = DEFAULT_TRASH_RAW
+        DF.STATE.selected_tr = 0
+        DF.saveData()
+        uiNotice = "Trash List di-reset ke default (14,4,5,10,11 — Cave BG Seed 15 aman)."
     end
 end
 
