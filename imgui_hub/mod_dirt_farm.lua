@@ -177,6 +177,10 @@ DF.STATE = {
     door_edit_seen     = false,
     door_edit_id       = "",
     door_edit_locked   = false,
+    checking_wl_edit   = false,
+    wl_edit_seen       = false,
+    wl_edit_is_public  = false,
+    wl_edit_return_pkt = "",
     status_text        = "Idle",
     rows               = {},   -- { { name="W", door="D", status="Ready" }, ... }
     selected_idx       = 0,
@@ -2380,21 +2384,9 @@ local function setupWorldSecurity(row, doorX, doorY)
             end
         end
 
-        -- 3. World Lock (242) di (doorX + 1, doorY) — hanya konfigurasi jika baru dipasang!
+        -- 3. World Lock (242) di (doorX + 1, doorY)
         if DF.CFG.auto_lock_wl and (not sec.hasWL) and doorX + 1 <= 99 then
-            local okWL, alreadyWL = ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock", false)
-            if okWL and (not alreadyWL) and DF.CFG.wl_public and sendPacket then
-                moveAdjacentSafe(doorX + 1, doorY, 1)
-                safeSleep(220)
-                rawAction(doorX + 1, doorY, ITEM.WRENCH)
-                safeSleep(380)
-                pcall(sendPacket, 2, string.format(
-                    "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
-                    doorX + 1, doorY
-                ))
-                safeSleep(450)
-                addLog("[Lock/Door] World Lock (242) diset Public.")
-            end
+            ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock", false)
         end
 
         -- 4. Small Lock (202) di atas White Door (doorX, doorY - 1) — hanya 2-Step Apply jika baru dipasang!
@@ -2429,6 +2421,64 @@ local function setupWorldSecurity(row, doorX, doorY)
                 ))
                 safeSleep(550)
                 addLog("[Lock/Door] Small Lock (202) Private + Ignore Air + Re-apply Lock selesai rapi!")
+            end
+        end
+    end
+
+    -- 4.5. PASTIKAN WORLD LOCK (242) = "Allow anyone to Build and Break" (Public = 1) + VERIFIKASI DINAMIS!
+    -- Berjalan untuk WL baru maupun WL lama: baca dialog lock_edit asli server; jika sudah Public -> skip; jika belum -> set & verifikasi!
+    if DF.CFG.auto_lock_wl and DF.CFG.wl_public and doorX + 1 <= 99 and sendPacket then
+        local wlX, wlY = doorX + 1, doorY
+        local tWL = getTileSafe(wlX, wlY)
+        if tWL and tonumber(tWL.fg) == ITEM.WORLD_LOCK then
+            local appliedWL = false
+            for attempt = 1, 3 do
+                if not DF.STATE.running then break end
+                moveAdjacentSafe(wlX, wlY, 1)
+                safeSleep(220)
+
+                DF.STATE.checking_wl_edit   = true
+                DF.STATE.wl_edit_seen       = false
+                DF.STATE.wl_edit_is_public  = false
+                DF.STATE.wl_edit_return_pkt = ""
+
+                rawAction(wlX, wlY, ITEM.WRENCH)
+                local w = 0
+                while w < 1300 and isActive() and (not DF.STATE.wl_edit_seen) do
+                    safeSleep(75); w = w + 75
+                end
+                DF.STATE.checking_wl_edit = false
+
+                if DF.STATE.wl_edit_seen then
+                    if DF.STATE.wl_edit_is_public then
+                        if appliedWL then
+                            addLog("[Lock/Door] World Lock (242) terverifikasi: Allow anyone to Build & Break = ON!")
+                        else
+                            addLog("[Lock/Door] World Lock (242) sudah Allow anyone to Build & Break — skip edit.")
+                        end
+                        break
+                    else
+                        local retPkt = DF.STATE.wl_edit_return_pkt
+                        if retPkt == "" then
+                            retPkt = string.format(
+                                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
+                                wlX, wlY
+                            )
+                        end
+                        pcall(sendPacket, 2, retPkt)
+                        appliedWL = true
+                        safeSleep(550)
+                    end
+                else
+                    -- Fallback bila APK tidak meneruskan OnDialogRequest lock_edit ke Lua
+                    pcall(sendPacket, 2, string.format(
+                        "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
+                        wlX, wlY
+                    ))
+                    safeSleep(550)
+                    addLog("[Lock/Door] World Lock (242) diset Allow anyone to Build & Break (fallback).")
+                    break
+                end
             end
         end
     end
@@ -3092,18 +3142,72 @@ function DF.stop()
     DF.STATE.pending_drop_id = 0
     DF.STATE.pending_drop_amt = 0
     DF.STATE.checking_door_edit = false
+    DF.STATE.checking_wl_edit = false
     activeTargetWorld = ""
     DF.STATE.enabled = false
     DF.STATE.status_text = "Stopped"
 end
 
--- Auto-confirm dialog drop / drop_item + cek senyap dialog door_edit (Smart Skip Lock & Cek Door ID)
--- Mendukung format VariantList v0/v1 maupun v1/v2 serta dialog "drop" & "drop_item" Growtopia V5.x!
+-- Parse dialog lock_edit asli Growtopia V5.x secara dinamis untuk World Lock:
+-- Mendeteksi status "Allow anyone to Build and Break" (checkbox_public / allow_build) & membangun paket dialog_return presisi!
+local function parseWLPublicDialog(payload)
+    local dName = "lock_edit"
+    local lines = { "action|dialog_return" }
+    local embedLines = {}
+    local fieldLines = {}
+    local isPublic = false
+    local sawPublicField = false
+
+    for line in tostring(payload or ""):gmatch("[^\r\n]+") do
+        local parts = {}
+        for part in (line .. "|"):gmatch("([^|]*)|") do
+            parts[#parts + 1] = part
+        end
+        local cmd = parts[1]
+        if cmd == "end_dialog" and parts[2] and parts[2] ~= "" then
+            dName = trimStr(parts[2])
+        elseif cmd == "embed_data" and parts[2] and parts[2] ~= "" then
+            embedLines[#embedLines + 1] = trimStr(parts[2]) .. "|" .. trimStr(parts[3] or "") .. "|"
+        elseif cmd == "add_checkbox" and parts[2] and parts[2] ~= "" then
+            local k = trimStr(parts[2])
+            local lbl = trimStr(parts[3] or ""):lower()
+            local curV = trimStr(parts[4] or "0")
+            local kl = k:lower()
+            local isPubBox = (kl == "checkbox_public" or kl:find("public", 1, true)
+                or kl:find("allow_build", 1, true)
+                or lbl:find("allow anyone", 1, true)
+                or lbl:find("build and break", 1, true))
+            if isPubBox then
+                sawPublicField = true
+                if curV == "1" then isPublic = true end
+                fieldLines[#fieldLines + 1] = k .. "|1"
+            else
+                fieldLines[#fieldLines + 1] = k .. "|" .. (curV ~= "" and curV or "0")
+            end
+        elseif cmd == "add_text_input" and parts[2] and parts[2] ~= "" then
+            local k = trimStr(parts[2])
+            local curV = trimStr(parts[4] or "")
+            fieldLines[#fieldLines + 1] = k .. "|" .. curV
+        end
+    end
+
+    lines[#lines + 1] = "dialog_name|" .. dName
+    for _, el in ipairs(embedLines) do lines[#lines + 1] = el end
+    for _, fl in ipairs(fieldLines) do lines[#lines + 1] = fl end
+    if not sawPublicField then
+        lines[#lines + 1] = "checkbox_public|1"
+    end
+    return isPublic, table.concat(lines, "\n") .. "\n"
+end
+
+-- Auto-confirm dialog drop / drop_item + cek senyap dialog door_edit & lock_edit (World Lock Allow Build)
+-- Mendukung format VariantList v0/v1 maupun v1/v2 serta dialog Growtopia V5.x!
 function DF.handleVariant(var)
     if not isActive() then return false end
     local wantDrop = (DF.STATE.pending_drop_id > 0)
     local wantDoor = (DF.STATE.checking_door_edit == true)
-    if (not wantDrop) and (not wantDoor) then return false end
+    local wantWL   = (DF.STATE.checking_wl_edit == true)
+    if (not wantDrop) and (not wantDoor) and (not wantWL) then return false end
     if type(var) ~= "table" and type(var) ~= "userdata" then return false end
 
     local v0, v1, v2 = nil, nil, nil
@@ -3124,7 +3228,16 @@ function DF.handleVariant(var)
     local low = payload:lower()
     local endDlg = (payload:match("end_dialog|([^|\r\n]+)") or ""):lower()
 
-    -- A. Cek senyap dialog door_edit (baca door_id & checkbox_locked tanpa menampilkan popup ke layar!)
+    -- A. Cek senyap dialog lock_edit World Lock ("Allow anyone to Build and Break")
+    if wantWL and (endDlg == "lock_edit" or low:find("checkbox_public", 1, true) or low:find("allow anyone", 1, true)) then
+        local isPub, retPkt = parseWLPublicDialog(payload)
+        DF.STATE.wl_edit_is_public  = isPub
+        DF.STATE.wl_edit_return_pkt = retPkt
+        DF.STATE.wl_edit_seen       = true
+        return true
+    end
+
+    -- B. Cek senyap dialog door_edit (baca door_id & checkbox_locked tanpa menampilkan popup ke layar!)
     if wantDoor and (endDlg == "door_edit" or low:find("add_text_input|door_id|", 1, true)) then
         local dId = ""
         local dLocked = false
@@ -3145,7 +3258,7 @@ function DF.handleVariant(var)
         return true
     end
 
-    -- B. Auto-confirm dialog drop / drop_item
+    -- C. Auto-confirm dialog drop / drop_item
     if wantDrop and (endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
         or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true))
     then
@@ -3990,7 +4103,7 @@ local function renderLockDoorSub()
             if uiToggleBtn(DF.CFG.auto_lock_wl, "dfl_wl") then
                 DF.CFG.auto_lock_wl = not DF.CFG.auto_lock_wl; DF.saveData()
             end
-            ImGui.SameLine(); ImGui.Text("  Public:"); ImGui.SameLine()
+            ImGui.SameLine(); ImGui.Text("  Allow Build:"); ImGui.SameLine()
             if uiToggleBtn(DF.CFG.wl_public, "dfl_wp") then
                 DF.CFG.wl_public = not DF.CFG.wl_public; DF.saveData()
             end
