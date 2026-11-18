@@ -11,6 +11,13 @@
 local SB = {
     id    = "build_soil",
     label = "Build Soil",
+    META  = {
+        type    = "boren_gl_feature",
+        id      = "build_soil",
+        label   = "Build Soil",
+        order   = 30,
+        enabled = true,
+    },
 }
 
 SB.CFG = {

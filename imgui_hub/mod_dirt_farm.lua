@@ -14,6 +14,13 @@
 local DF = {
     id    = "dirt_farm",
     label = "Dirt Farm",
+    META  = {
+        type    = "boren_gl_feature",
+        id      = "dirt_farm",
+        label   = "Dirt Farm",
+        order   = 20,
+        enabled = true,
+    },
 }
 
 local ITEM = {

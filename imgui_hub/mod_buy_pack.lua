@@ -8,6 +8,13 @@
 local BP = {
     id    = "buy_pack",
     label = "Buy Pack",
+    META  = {
+        type    = "boren_gl_feature",
+        id      = "buy_pack",
+        label   = "Buy Pack",
+        order   = 40,
+        enabled = true,
+    },
 }
 
 local DEBUGPACK_URL = "https://raw.githubusercontent.com/rendhi69/data-_id_item/main/debugpack.txt"

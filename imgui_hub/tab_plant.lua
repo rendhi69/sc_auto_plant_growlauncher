@@ -1479,10 +1479,26 @@ local function drawRasterTileOnLastItem(rasterRuns, bgCol, borderCol)
     return ok, err
 end
 
+local FALLBACK_FEATURES = {
+    { id = "dirt_farm",  label = "Dirt Farm",  order = 20, path = "imgui_hub/mod_dirt_farm.lua" },
+    { id = "build_soil", label = "Build Soil", order = 30, path = "imgui_hub/mod_soil_builder.lua" },
+    { id = "buy_pack",   label = "Buy Pack",   order = 40, path = "imgui_hub/mod_buy_pack.lua" },
+}
+
+local function getDynamicFeatures()
+    if HUB and type(HUB.features) == "table" and #HUB.features > 0 then
+        return HUB.features
+    end
+    return FALLBACK_FEATURES
+end
+
 local function isAnyBotActive()
     if not HUB then return false end
-    for _, k in ipairs({ "plant", "dirt_farm", "build_soil", "buy_pack" }) do
-        local m = HUB[k]
+    if HUB.plant and HUB.plant.STATE and (HUB.plant.STATE.enabled or HUB.plant.STATE.running) then
+        return true
+    end
+    for _, feat in ipairs(getDynamicFeatures()) do
+        local m = feat.mod or HUB[feat.id]
         if m and m.STATE and (m.STATE.enabled or m.STATE.running) then return true end
     end
     return false
@@ -1745,14 +1761,10 @@ local function renderLeftFeatureSidebar(colW)
     if styledBtn("Plant", btnW, activeFeature == "plant", false) then
         selectFeature("plant")
     end
-    if styledBtn("Dirt Farm", btnW, activeFeature == "dirt_farm", false) then
-        selectFeature("dirt_farm")
-    end
-    if styledBtn("Build Soil", btnW, activeFeature == "build_soil", false) then
-        selectFeature("build_soil")
-    end
-    if styledBtn("Buy Pack", btnW, activeFeature == "buy_pack", false) then
-        selectFeature("buy_pack")
+    for _, feat in ipairs(getDynamicFeatures()) do
+        if styledBtn(tostring(feat.label or feat.id), btnW, activeFeature == feat.id, false) then
+            selectFeature(feat.id)
+        end
     end
 
     uiGap(10)
@@ -1794,7 +1806,7 @@ local function renderLeftFeatureSidebar(colW)
 end
 
 -- ============================================================================
--- PANEL KANAN: SUB-MENU ATAS + KONTEN KATEGORI AKTIF
+-- PANEL KANAN: SUB-MENU ATAS + KONTEN KATEGORI AKTIF (DINAMIS)
 -- ============================================================================
 local function renderRightPanel()
     -- Micro slide-in halus saat baru pindah fitur (6px -> 0px dalam 0.26 detik)
@@ -1838,34 +1850,24 @@ local function renderRightPanel()
             renderPlantLogsSub()
         end
 
-    elseif activeFeature == "dirt_farm" then
-        if HUB.dirt_farm and type(HUB.dirt_farm.render) == "function" then
-            HUB.dirt_farm.render(HUB)
-        else
-            ImGui.Text("Modul Dirt Farm belum dimuat.")
-            if autoBtn(loadingModFlag.dirt_farm and "Memuat..." or " Muat Modul Dirt Farm ") then
-                triggerLazyLoad("dirt_farm", "imgui_hub/mod_dirt_farm.lua")
-            end
+    else
+        -- Render otomatis untuk semua fitur dinamis dari manifest (Dirt Farm, Build Soil, Buy Pack, + fitur baru!)
+        local foundFeat = nil
+        for _, feat in ipairs(getDynamicFeatures()) do
+            if feat.id == activeFeature then foundFeat = feat; break end
         end
-
-    elseif activeFeature == "build_soil" then
-        if HUB.build_soil and type(HUB.build_soil.render) == "function" then
-            HUB.build_soil.render(HUB)
-        else
-            ImGui.Text("Modul Build Soil belum dimuat.")
-            if autoBtn(loadingModFlag.build_soil and "Memuat..." or " Muat Modul Build Soil ") then
-                triggerLazyLoad("build_soil", "imgui_hub/mod_soil_builder.lua")
+        if foundFeat then
+            local mod = foundFeat.mod or (HUB and HUB[foundFeat.id])
+            if mod and type(mod.render) == "function" then
+                mod.render(HUB)
+            else
+                ImGui.Text("Modul " .. tostring(foundFeat.label or foundFeat.id) .. " belum dimuat.")
+                if foundFeat.path and autoBtn(loadingModFlag[foundFeat.id] and "Memuat..." or (" Muat Modul " .. tostring(foundFeat.label) .. " ")) then
+                    triggerLazyLoad(foundFeat.id, foundFeat.path)
+                end
             end
-        end
-
-    elseif activeFeature == "buy_pack" then
-        if HUB.buy_pack and type(HUB.buy_pack.render) == "function" then
-            HUB.buy_pack.render(HUB)
         else
-            ImGui.Text("Modul Buy Pack belum dimuat.")
-            if autoBtn(loadingModFlag.buy_pack and "Memuat..." or " Muat Modul Buy Pack ") then
-                triggerLazyLoad("buy_pack", "imgui_hub/mod_buy_pack.lua")
-            end
+            renderDashboardPanel()
         end
     end
 end
@@ -2058,15 +2060,28 @@ local function handleSendPacket(pktType, pktStr)
             end
         end
     end
+    -- Dispatch opsional ke modul fitur dinamis yang menyediakan handleSendPacket
+    if HUB then
+        for _, feat in ipairs(getDynamicFeatures()) do
+            local m = feat.mod or HUB[feat.id]
+            if m and type(m.handleSendPacket) == "function" then
+                local ok, blocked = pcall(m.handleSendPacket, pktType, pktStr)
+                if ok and blocked == true then return true end
+            end
+        end
+    end
     return false
 end
 
 local function handleSendPacketRaw(pkt)
     if type(pkt) ~= "table" or not HUB then return false end
     if tonumber(pkt.type) == 11 then
-        -- Anti-Take untuk Auto Buy Pack saat sedang drop item
-        if HUB.buy_pack and HUB.buy_pack.STATE and HUB.buy_pack.STATE.anti_take_active then
-            return true
+        -- Anti-Take untuk modul apapun yang mengaktifkan anti_take_active (misal Auto Buy Pack)
+        for _, feat in ipairs(getDynamicFeatures()) do
+            local m = feat.mod or HUB[feat.id]
+            if m and m.STATE and m.STATE.anti_take_active then
+                return true
+            end
         end
         -- Ignore Gems untuk Auto Plant
         if HUB.plant and HUB.plant.CFG and HUB.plant.CFG.ignore_gems then
@@ -2086,13 +2101,24 @@ local function handleSendPacketRaw(pkt)
             end
         end
     end
+    for _, feat in ipairs(getDynamicFeatures()) do
+        local m = feat.mod or HUB[feat.id]
+        if m and type(m.handleSendPacketRaw) == "function" then
+            local ok, blocked = pcall(m.handleSendPacketRaw, pkt)
+            if ok and blocked == true then return true end
+        end
+    end
     return false
 end
 
 local function handleVariant(var)
-    if HUB and HUB.buy_pack and type(HUB.buy_pack.handleVariant) == "function" then
-        local ok, blocked = pcall(HUB.buy_pack.handleVariant, var)
-        if ok and blocked == true then return true end
+    if not HUB then return false end
+    for _, feat in ipairs(getDynamicFeatures()) do
+        local m = feat.mod or HUB[feat.id]
+        if m and type(m.handleVariant) == "function" then
+            local ok, blocked = pcall(m.handleVariant, var)
+            if ok and blocked == true then return true end
+        end
     end
     return false
 end
