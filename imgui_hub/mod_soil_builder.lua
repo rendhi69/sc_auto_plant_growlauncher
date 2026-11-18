@@ -842,6 +842,22 @@ local function uiSection(title, skipTopSep)
     if title and title ~= "" then ImGui.Text(title) end
 end
 
+local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+    local k = uiKit()
+    if k and k.sectionWithKetik and k.openInputDialog then
+        k.sectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+        return
+    end
+    uiSection(title, skipTopSep)
+end
+
+local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
+    local k = uiKit()
+    if k and k.openInputDialog then
+        k.openInputDialog(id, title, fields, submitLbl, onSubmit)
+    end
+end
+
 local function uiEnableBtn(isOn, id)
     local k = uiKit()
     if k and k.enableBtn then return k.enableBtn(isOn, id) end
@@ -972,7 +988,27 @@ local function renderWorldsSub()
         ImGui.EndTable()
     end
 
-    uiSection("Tambah World Soil Baru")
+    uiSectionWithKetik("Tambah World Soil Baru", "sb_ktk_w", function()
+        local wPre, dPre = tostring(addWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
+        if not wPre then wPre = tostring(addWorldBuf or ""); dPre = "" end
+        uiOpenDialog("boren_in_sb_w", "Tambah World Build Soil", {
+            { id = "f_world", label = "Nama World", default = wPre,        maxLen = 32 },
+            { id = "f_door",  label = "Door ID",    default = dPre,        maxLen = 32 },
+            { id = "f_blk",   label = "Block ID",   default = addBlockBuf, maxLen = 12 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = trimStr(vals.f_world or ""):upper()
+            local dn = trimStr(vals.f_door or ""):upper()
+            local bid = math.floor(tonumber(vals.f_blk) or tonumber(SB.CFG.default_block) or 8772)
+            if bid <= 0 then bid = 8772 end
+            addBlockBuf = tostring(bid)
+            if wn ~= "" then
+                local p = { name = wn, door = dn, block_id = bid, status = "Ready" }
+                table.insert(SB.STATE.rows, p); addWorldBuf = ""; SB.saveData()
+                addLogUI("World Soil ditambah: " .. formatRowLine(p))
+                uiNotice = "Tersimpan: " .. wn .. " (ID " .. tostring(bid) .. ")"
+            end
+        end)
+    end)
     if ImGui.BeginTable("BorenSoilAddW", 2) then
         ImGui.TableSetupColumn("World:DoorID")
         ImGui.TableSetupColumn("Block ID")
@@ -1111,7 +1147,21 @@ local function renderStorageSub()
         ImGui.EndTable()
     end
 
-    uiSection("Tambah Storage Baru")
+    uiSectionWithKetik("Tambah Storage Baru", "sb_ktk_st", function()
+        uiOpenDialog("boren_in_sb_st", "Tambah Storage Build Soil", {
+            { id = "f_world", label = "World Storage", default = addStorageBuf,     maxLen = 32 },
+            { id = "f_door",  label = "Door ID",       default = addStorageDoorBuf, maxLen = 32 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = trimStr(vals.f_world or ""):upper()
+            local dn = trimStr(vals.f_door or ""):upper()
+            if wn ~= "" then
+                local stL = getStorageList()
+                table.insert(stL, { name = wn, door = dn })
+                setStorageList(stL); addStorageBuf = ""; addStorageDoorBuf = ""
+                uiNotice = "Tersimpan storage: " .. wn
+            end
+        end)
+    end)
     if ImGui.BeginTable("BorenSoilAddSt", 2) then
         ImGui.TableSetupColumn("World Storage")
         ImGui.TableSetupColumn("Door ID")

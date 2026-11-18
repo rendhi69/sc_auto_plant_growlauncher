@@ -1813,6 +1813,22 @@ local function uiSection(title, skipTopSep)
     if title and title ~= "" then ImGui.Text(title) end
 end
 
+local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+    local k = uiKit()
+    if k and k.sectionWithKetik and k.openInputDialog then
+        k.sectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+        return
+    end
+    uiSection(title, skipTopSep)
+end
+
+local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
+    local k = uiKit()
+    if k and k.openInputDialog then
+        k.openInputDialog(id, title, fields, submitLbl, onSubmit)
+    end
+end
+
 local function uiEnableBtn(isOn, id)
     local k = uiKit()
     if k and k.enableBtn then return k.enableBtn(isOn, id) end
@@ -1943,7 +1959,21 @@ local function renderWorldsSub()
         ImGui.EndTable()
     end
 
-    uiSection("Tambah World DF Baru")
+    uiSectionWithKetik("Tambah World DF Baru", "df_ktk_w", function()
+        uiOpenDialog("boren_in_df_w", "Tambah World Dirt Farm", {
+            { id = "f_world", label = "Nama World", default = addWorldBuf, maxLen = 32 },
+            { id = "f_door",  label = "Door ID",    default = addDoorBuf,  maxLen = 32 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = trimStr(vals.f_world or ""):upper()
+            local dn = trimStr(vals.f_door or ""):upper()
+            if wn ~= "" then
+                table.insert(DF.STATE.rows, { name = wn, door = dn, status = "Ready" })
+                addWorldBuf = ""; addDoorBuf = ""; DF.saveData()
+                addLogUI("World DF ditambah: " .. wn)
+                uiNotice = "Tersimpan: " .. wn
+            end
+        end)
+    end)
     if ImGui.BeginTable("BorenDFAddW", 2) then
         ImGui.TableSetupColumn("World Name")
         ImGui.TableSetupColumn("Door ID")
@@ -2148,7 +2178,21 @@ local function renderStorageSub()
         ImGui.EndTable()
     end
 
-    uiSection("Tambah Storage Baru")
+    uiSectionWithKetik("Tambah Storage Baru", "df_ktk_st", function()
+        uiOpenDialog("boren_in_df_st", "Tambah Storage Dirt Farm", {
+            { id = "f_world", label = "World Storage", default = addStorageBuf,     maxLen = 32 },
+            { id = "f_door",  label = "Door ID",       default = addStorageDoorBuf, maxLen = 32 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = trimStr(vals.f_world or ""):upper()
+            local dn = trimStr(vals.f_door or ""):upper()
+            if wn ~= "" then
+                local stL = getStorageList()
+                table.insert(stL, { name = wn, door = dn })
+                setStorageList(stL); addStorageBuf = ""; addStorageDoorBuf = ""
+                uiNotice = "Tersimpan storage: " .. wn
+            end
+        end)
+    end)
     if ImGui.BeginTable("BorenDFAddSt", 2) then
         ImGui.TableSetupColumn("World Storage")
         ImGui.TableSetupColumn("Door ID")
@@ -2312,7 +2356,23 @@ local function cyclePreset(presets, curId, delta)
 end
 
 local function renderLockDoorSub()
-    uiSection("Pengaturan Lock, Door ID (0,0) & Penghalang Kiri", true)
+    uiSectionWithKetik("Pengaturan Lock, Door ID (0,0) & Penghalang Kiri", "df_ktk_ld", function()
+        uiOpenDialog("boren_in_df_ld", "Setting Door ID & Penghalang", {
+            { id = "f_did",  label = "Item ID Door",       default = tostring(DF.CFG.id_door_itemid),      maxLen = 10 },
+            { id = "f_txt",  label = "Teks Door ID",       default = tostring(DF.CFG.door_id),             maxLen = 24 },
+            { id = "f_lbl",  label = "Label Door",         default = tostring(DF.CFG.door_label),          maxLen = 32 },
+            { id = "f_bid",  label = "Item ID Penghalang", default = tostring(DF.CFG.blocker_door_itemid), maxLen = 10 },
+        }, "Simpan", function(vals)
+            local did = math.floor(tonumber(vals.f_did) or DF.CFG.id_door_itemid)
+            local bid = math.floor(tonumber(vals.f_bid) or DF.CFG.blocker_door_itemid)
+            if did > 0 then DF.CFG.id_door_itemid = did; numBufs["df_id_door"] = tostring(did) end
+            if bid > 0 then DF.CFG.blocker_door_itemid = bid; numBufs["df_blk_id"] = tostring(bid) end
+            DF.CFG.door_id = trimStr(vals.f_txt or DF.CFG.door_id)
+            DF.CFG.door_label = trimStr(vals.f_lbl or DF.CFG.door_label)
+            DF.saveData()
+            uiNotice = "Tersimpan Door ID & Penghalang!"
+        end)
+    end, true)
     uiNote(uiNotice)
 
     if ImGui.BeginTable("BorenDFLockOpts", 2) then

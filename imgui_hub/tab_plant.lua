@@ -26,19 +26,29 @@ local selectedStorageIdx = 0
 local lastFrameCount = -1
 local uiNotice = ""
 
--- Kompatibel semua versi binding ImGui.InputText Android (boolean,string / string,boolean / Android IME)
+-- Kompatibel semua versi binding ImGui.InputText Android (3-arg / 2-arg / null-byte strip / Android IME)
+local function cleanInputStr(v)
+    return tostring(v or ""):gsub("%z.*", "")
+end
+
 local function safeInputText(id, curVal, maxLen)
-    local s = tostring(curVal or "")
+    local s = cleanInputStr(curVal)
     local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
-    if not ok then return false, s end
+    if not ok then
+        ok, r1, r2 = pcall(ImGui.InputText, id, s)
+        if not ok then return false, s end
+    end
     if type(r1) == "boolean" and type(r2) == "string" then
-        if r1 or r2 ~= s then return true, r2 end
+        local c = cleanInputStr(r2)
+        if r1 or c ~= s then return true, c end
         return false, s
     elseif type(r1) == "string" then
-        if (r2 == true) or r1 ~= s then return true, r1 end
+        local c = cleanInputStr(r1)
+        if (r2 == true) or c ~= s then return true, c end
         return false, s
-    elseif type(r2) == "string" and r2 ~= s then
-        return true, r2
+    elseif type(r2) == "string" then
+        local c = cleanInputStr(r2)
+        if c ~= s then return true, c end
     end
     return false, s
 end
@@ -504,9 +514,73 @@ local function renderActionBar(tableId, availW, buttons)
     return clickedIdx
 end
 
+-- ============================================================================
+-- NATIVE ANDROID DIALOG INPUT (100% BEBAS BUG KEYBOARD / CONSOLE IMGUI HP!)
+-- ============================================================================
+local activeNativeDialogs = {} -- [dialogId] = callback(fieldsTable)
+
+local function sanitizeDialogVal(s)
+    return tostring(s or ""):gsub("[\r\n|]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function openNativeInputDialog(dialogId, title, fields, submitLabel, onSubmit)
+    activeNativeDialogs[dialogId] = onSubmit
+    local lines = {
+        "set_default_color|`o",
+        "add_label_with_icon|big|`cBOREN STORE - " .. sanitizeDialogVal(title) .. "|left|3802|",
+        "add_spacer|small|",
+    }
+    for _, f in ipairs(fields or {}) do
+        local fid = tostring(f.id or "f")
+        local flb = sanitizeDialogVal(f.label or fid)
+        local fdv = sanitizeDialogVal(f.default or "")
+        local fln = tonumber(f.maxLen) or 48
+        lines[#lines + 1] = string.format("add_text_input|%s|%s:|%s|%d|", fid, flb, fdv, fln)
+    end
+    lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_smalltext|`7Tips: Ketik langsung di keyboard HP lalu tekan tombol simpan di bawah.|"
+    lines[#lines + 1] = "end_dialog|" .. dialogId .. "|Batal|" .. sanitizeDialogVal(submitLabel or "Simpan") .. "|"
+    local dText = table.concat(lines, "\n")
+
+    -- Sembunyikan ImGui sebentar agar dialog native HP tidak ketutupan, nanti otomatis buka lagi saat submit/batal
+    windowOpen = false
+
+    local function sendNow()
+        if growtopia and growtopia.sendDialog then
+            pcall(growtopia.sendDialog, dText)
+        elseif sendVariant then
+            pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        end
+    end
+    if runCoroutine then
+        pcall(runCoroutine, sendNow)
+    else
+        sendNow()
+    end
+end
+
+local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+    if not skipTopSep then
+        uiGap(6)
+        if ImGui and ImGui.Separator then pcall(ImGui.Separator) end
+    end
+    uiGap(4)
+    coloredText(getBorenPal().textCyan, title)
+    if onKetikClick then
+        ImGui.SameLine()
+        ImGui.Text("  ")
+        ImGui.SameLine()
+        if styledBtn(" Ketik (Keyboard HP) ##" .. tostring(btnId or "ktk"), nil, true, false) then
+            onKetikClick()
+        end
+    end
+    uiGap(3)
+end
+
 local UI_KIT = {
     gap                = uiGap,
     section            = uiSection,
+    sectionWithKetik   = uiSectionWithKetik,
     toggleBtn          = toggleBtn,
     enableBtn          = enableBtn,
     tabBtn             = tabBtn,
@@ -514,6 +588,7 @@ local UI_KIT = {
     getPal             = getBorenPal,
     readClipboardLines = readClipboardLines,
     renderActionBar    = renderActionBar,
+    openInputDialog    = openNativeInputDialog,
 }
 
 -- ============================================================================
@@ -614,7 +689,33 @@ local function renderPlantWorldsSub()
     end
 
     -- 3. FORM TAMBAH WORLD
-    uiSection("Tambah World Baru")
+    uiSectionWithKetik("Tambah World Baru", "pl_ktk_w", function()
+        local wPre, dPre = tostring(addWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
+        if not wPre then wPre = tostring(addWorldBuf or ""); dPre = "" end
+        openNativeInputDialog("boren_in_plant_w", "Tambah World Plant", {
+            { id = "f_world",  label = "Nama World", default = wPre,         maxLen = 32 },
+            { id = "f_door",   label = "Door ID",    default = dPre,         maxLen = 32 },
+            { id = "f_seed",   label = "Seed ID",    default = addSeedBuf,   maxLen = 12 },
+            { id = "f_splice", label = "Splice ID",  default = addSpliceBuf, maxLen = 12 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = tostring(vals.f_world or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+            local dn = tostring(vals.f_door or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+            local sd = math.floor(tonumber(vals.f_seed) or 4585)
+            local sp = math.floor(tonumber(vals.f_splice) or 0)
+            if sd <= 0 then sd = 4585 end
+            if sp < 0 then sp = 0 end
+            addSeedBuf = tostring(sd)
+            addSpliceBuf = tostring(sp)
+            if wn ~= "" then
+                local parsed = { name = wn, door = dn, seed_id = sd, splice_id = sp, status = "Ready" }
+                table.insert(E.STATE.rows, parsed)
+                addWorldBuf = ""
+                E.saveData()
+                logUI(E, "[+] World ditambah: " .. E.formatRowLine(parsed))
+                setNotice("Tersimpan: " .. parsed.name .. " (Seed " .. tostring(sd) .. ", Splice " .. tostring(sp) .. ")")
+            end
+        end)
+    end)
     if ImGui.BeginTable("BorenPlantAddRow", 3) then
         ImGui.TableSetupColumn("World:DoorID")
         ImGui.TableSetupColumn("Seed ID")
@@ -809,7 +910,23 @@ local function renderPlantStorageSub()
         ImGui.EndTable()
     end
 
-    uiSection("Tambah Storage Baru")
+    uiSectionWithKetik("Tambah Storage Baru", "pl_ktk_st", function()
+        openNativeInputDialog("boren_in_plant_st", "Tambah Storage Seed", {
+            { id = "f_world", label = "World Storage", default = addStorageBuf,     maxLen = 32 },
+            { id = "f_door",  label = "Door ID",       default = addStorageDoorBuf, maxLen = 32 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = tostring(vals.f_world or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+            local dn = tostring(vals.f_door or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+            if wn ~= "" then
+                local stList = E.getStorageList and E.getStorageList() or {}
+                table.insert(stList, { name = wn, door = dn })
+                E.setStorageList(stList)
+                addStorageBuf = ""; addStorageDoorBuf = ""
+                logUI(E, "[Storage +] " .. wn .. (dn ~= "" and (":" .. dn) or ""))
+                setNotice("Tersimpan storage: " .. wn)
+            end
+        end)
+    end)
     if ImGui.BeginTable("BorenPlantAddSt", 2) then
         ImGui.TableSetupColumn("World Storage")
         ImGui.TableSetupColumn("Door ID")
@@ -1756,6 +1873,8 @@ end
 -- ============================================================================
 -- MAIN IMGUI RENDER LOOP
 -- ============================================================================
+local wasItemActive = false
+
 local function renderFrame()
     if not ImGui or not HUB then return end
 
@@ -1772,6 +1891,7 @@ local function renderFrame()
     local condOnce   = (ImGui.Cond and ImGui.Cond.Once) or 2
 
     if not windowOpen then
+        wasItemActive = false
         if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
         local miniW, miniH = 260, 96
         if ImGui.SetNextWindowPos and ImVec2 then
@@ -1807,7 +1927,7 @@ local function renderFrame()
             pinnedX, pinnedY = cx, cy
             pcall(ImGui.SetNextWindowPos, ImVec2(cx, cy), condAlways)
             needCenterPos = false
-        elseif isPinned and pinnedX and pinnedY then
+        elseif isPinned and (not wasItemActive) and pinnedX and pinnedY then
             pcall(ImGui.SetNextWindowPos, ImVec2(pinnedX, pinnedY), condAlways)
         end
     end
@@ -1854,19 +1974,57 @@ local function renderFrame()
             pcall(ImGui.Columns, 1)
         end
         drawSwitchEffect(sideW)
+
+        if ImGui.IsAnyItemActive then
+            local okA, actv = pcall(ImGui.IsAnyItemActive)
+            wasItemActive = (okA and actv == true)
+        else
+            wasItemActive = false
+        end
     end
     ImGui.End()
     popBorenTheme(cCnt, vCnt)
 end
 
 -- ============================================================================
--- HOOKS (/hub COMMAND + ANTI GEMS + ONDRAWIMGUI)
+-- HOOKS (DIALOG NATIVE INPUT + /hub /reload /add /st COMMANDS + ANTI GEMS)
 -- ============================================================================
+local function parseDialogReturnFields(pktStr)
+    local fields = {}
+    for line in tostring(pktStr or ""):gmatch("[^\r\n]+") do
+        local k, v = line:match("^([^|]+)|(.*)$")
+        if k and k ~= "" then
+            fields[k] = tostring(v or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        end
+    end
+    return fields
+end
+
 local function handleSendPacket(pktType, pktStr)
     if type(pktStr) == "string" then
+        -- 1. Tangkap hasil ketikan dari Native Dialog Popup (Ketik Keyboard HP)
+        if pktStr:find("action|dialog_return", 1, true) then
+            local dlgName = pktStr:match("dialog_name|([^\r\n|]+)")
+            if dlgName and activeNativeDialogs[dlgName] then
+                local cb = activeNativeDialogs[dlgName]
+                activeNativeDialogs[dlgName] = nil
+                local fields = parseDialogReturnFields(pktStr)
+                local btn = tostring(fields.buttonClicked or ""):lower()
+                if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
+                    pcall(cb, fields)
+                end
+                -- Otomatis tampilkan kembali BOREN STORE setelah selesai mengetik!
+                windowOpen = true
+                switchAnimStart = nowSec()
+                return true
+            end
+        end
+
+        -- 2. Tangkap perintah chat (/hub, /reload, /add, /st, /df, /soil)
         local txt = pktStr:match("text|([^\n\r]+)")
         if txt then
-            local cmd = txt:lower():gsub("^%s+", ""):gsub("%s+$", "")
+            local trimmed = txt:gsub("^%s+", ""):gsub("%s+$", "")
+            local cmd = trimmed:lower()
             if cmd == "/hub" then
                 windowOpen = not windowOpen
                 if LogToConsole then
@@ -1875,6 +2033,27 @@ local function handleSendPacket(pktType, pktStr)
                 return true
             elseif cmd == "/reload" then
                 triggerHotReloadAll()
+                return true
+            elseif cmd:sub(1, 5) == "/add " and HUB and HUB.plant then
+                local arg = trimmed:sub(6):gsub("^%s+", "")
+                local p = HUB.plant.parseRowLine and HUB.plant.parseRowLine(arg)
+                if p then
+                    table.insert(HUB.plant.STATE.rows, p)
+                    HUB.plant.saveData()
+                    setNotice("Ditambah via chat: " .. p.name)
+                    if LogToConsole then pcall(LogToConsole, "`e[BOREN STORE] `2World Plant ditambah: `w" .. p.name) end
+                end
+                return true
+            elseif cmd:sub(1, 4) == "/st " and HUB and HUB.plant then
+                local arg = trimmed:sub(5):gsub("^%s+", "")
+                local p = HUB.plant.parseStorageLine and HUB.plant.parseStorageLine(arg)
+                if p then
+                    local st = HUB.plant.getStorageList and HUB.plant.getStorageList() or {}
+                    table.insert(st, p)
+                    HUB.plant.setStorageList(st)
+                    setNotice("Storage ditambah via chat: " .. p.name)
+                    if LogToConsole then pcall(LogToConsole, "`e[BOREN STORE] `2Storage ditambah: `w" .. p.name) end
+                end
                 return true
             end
         end

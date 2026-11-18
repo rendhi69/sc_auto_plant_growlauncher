@@ -538,6 +538,22 @@ local function uiSection(title, skipTopSep)
     if title and title ~= "" then ImGui.Text(title) end
 end
 
+local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+    local k = uiKit()
+    if k and k.sectionWithKetik and k.openInputDialog then
+        k.sectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+        return
+    end
+    uiSection(title, skipTopSep)
+end
+
+local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
+    local k = uiKit()
+    if k and k.openInputDialog then
+        k.openInputDialog(id, title, fields, submitLbl, onSubmit)
+    end
+end
+
 local function uiEnableBtn(isOn, id)
     local k = uiKit()
     if k and k.enableBtn then return k.enableBtn(isOn, id) end
@@ -685,7 +701,24 @@ local function renderMainSub()
         ImGui.EndTable()
     end
 
-    uiSection("Konfigurasi Pack & World Drop")
+    uiSectionWithKetik("Konfigurasi Pack & World Drop", "bp_ktk_cfg", function()
+        local swR = tostring(BP.CFG.save_world or ""):gsub("|", ":")
+        local swN, swD = swR:match("^([^:]+):(.*)$")
+        if not swN then swN = swR; swD = "" end
+        uiOpenDialog("boren_in_bp_cfg", "Konfigurasi Buy Pack", {
+            { id = "f_pid",   label = "Pack ID (Debug)", default = BP.CFG.pack_id, maxLen = 48 },
+            { id = "f_world", label = "World Save Drop", default = swN,            maxLen = 32 },
+            { id = "f_door",  label = "Door ID",         default = swD,            maxLen = 32 },
+        }, "Simpan", function(vals)
+            local pid = trimStr(vals.f_pid or "")
+            local wn  = trimStr(vals.f_world or ""):upper()
+            local dn  = trimStr(vals.f_door or ""):upper()
+            if pid ~= "" then BP.CFG.pack_id = pid end
+            if wn ~= "" then BP.CFG.save_world = (dn ~= "") and (wn .. ":" .. dn) or wn end
+            BP.saveData()
+            uiNotice = "Tersimpan: " .. tostring(BP.CFG.pack_id) .. " -> " .. tostring(BP.CFG.save_world)
+        end)
+    end)
     ImGui.Text("Pack ID (Debug Name):")
     ImGui.PushItemWidth(math.max(160, w - 12))
     local chP, nP = safeInputText("##bp_pid", BP.CFG.pack_id, 128)
@@ -754,7 +787,13 @@ end
 
 local function renderSearchSub()
     local w = availX()
-    uiSection("Cari Pack (Database GitHub: " .. tostring(#BP.STATE.pack_db) .. " pack)", true)
+    uiSectionWithKetik("Cari Pack (Database GitHub: " .. tostring(#BP.STATE.pack_db) .. " pack)", "bp_ktk_src", function()
+        uiOpenDialog("boren_in_bp_src", "Cari Nama / ID Pack", {
+            { id = "f_q", label = "Kata Kunci Pack", default = searchBuf, maxLen = 40 },
+        }, "Cari", function(vals)
+            searchBuf = trimStr(vals.f_q or "")
+        end)
+    end, true)
     ImGui.PushItemWidth(math.max(160, w - 12))
     local ch, nv = safeInputText("##bp_search", searchBuf, 128)
     ImGui.PopItemWidth()
