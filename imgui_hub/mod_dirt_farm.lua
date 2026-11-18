@@ -1278,7 +1278,50 @@ local function inspectKitBackpack(kit)
     return missing, excess, table.concat(summary, ", ")
 end
 
--- Drop kelebihan item saat di Storage hingga tersisa TEPAT keepAmt (1) di backpack
+-- Cari petak aman di area paling atas world storage (Y=1..2, gaya Lucifer)
+local function findTopStorageDropTile(preferX)
+    local baseX = math.max(2, math.min(97, math.floor(tonumber(preferX) or 50)))
+    local function isFreeAir(tx, ty)
+        if tx < 1 or tx > 98 or ty < 1 or ty > 5 then return false end
+        if not isTileSafeToStand(tx, ty) then return false end
+        local t = getTileSafe(tx, ty)
+        if not t then return true end
+        local fg = tonumber(t.fg) or 0
+        return (fg == 0 or t.collidable ~= true)
+    end
+    for _, ty in ipairs({ 1, 2, 3 }) do
+        for dx = 0, 48 do
+            for _, sign in ipairs({ 1, -1 }) do
+                if dx > 0 or sign == 1 then
+                    local tx = baseX + (dx * sign)
+                    if tx >= 2 and tx <= 97 and isFreeAir(tx, ty) and (isFreeAir(tx + 1, ty) or isFreeAir(tx - 1, ty)) then
+                        return tx, ty
+                    end
+                end
+            end
+        end
+    end
+    return baseX, 1
+end
+
+local function moveToTopStorageDropArea(shiftOffset)
+    if editToggle then pcall(editToggle, "ModFly", true) end
+    local px, py = getPlayerPos()
+    local prefX = (px and px >= 2 and px <= 97) and px or 50
+    if shiftOffset and shiftOffset ~= 0 then
+        prefX = math.max(2, math.min(97, prefX + shiftOffset))
+    end
+    if (not shiftOffset or shiftOffset == 0) and py and py >= 1 and py <= 2 then
+        return px, py
+    end
+    local dx, dy = findTopStorageDropTile(prefX)
+    DF.STATE.status_text = string.format("Terbang Drop Atas (%d,%d)...", dx, dy)
+    moveSafeTo(dx, dy)
+    safeSleep(220)
+    return dx, dy
+end
+
+-- Drop kelebihan item di area paling atas Storage (Y=1..2, gaya Lucifer) hingga tersisa TEPAT keepAmt (1)
 local function dropExcessItemAtStorage(itemID, keepAmt, label)
     itemID = math.floor(tonumber(itemID) or 0)
     keepAmt = math.max(0, math.floor(tonumber(keepAmt) or 1))
@@ -1291,8 +1334,12 @@ local function dropExcessItemAtStorage(itemID, keepAmt, label)
     if editToggle then
         pcall(editToggle, "Auto Collect", false)
         pcall(editToggle, "Anti Collect", true)
+        pcall(editToggle, "ModFly", true)
     end
     safeSleep(180)
+
+    -- Terbang ke baris paling atas storage (Y=1..2) SEBELUM mulai drop!
+    moveToTopStorageDropArea(0)
 
     for attempt = 1, 3 do
         if not isActive() then return false end
@@ -1300,21 +1347,17 @@ local function dropExcessItemAtStorage(itemID, keepAmt, label)
         if cur <= keepAmt then return true end
         local excess = cur - keepAmt
 
-        -- Geser sedikit pada percobaan ulang bila tile drop penuh
+        -- Bila tile atas penuh pada percobaan ulang, geser menyamping tetap di baris atas (Y=1..2)
         if attempt > 1 then
-            local px, py = getPlayerPos()
-            if px and py then
-                local dir = (attempt == 2) and 1 or -1
-                local nx = math.max(1, math.min(98, px + dir))
-                if isTileSafeToStand(nx, py) then moveSafeTo(nx, py); safeSleep(150) end
-            end
+            local shift = (attempt == 2) and 2 or -2
+            moveToTopStorageDropArea(shift)
         end
 
         DF.STATE.pending_drop_id  = itemID
         DF.STATE.pending_drop_amt = excess
         DF.STATE.drop_confirmed   = false
-        DF.STATE.status_text = string.format("Drop %s (%d)...", tostring(label or itemID), excess)
-        addLog(string.format("[Storage Drop] Drop kelebihan %s (ID %d): %d (sisakan %d)...",
+        DF.STATE.status_text = string.format("Drop Atas %s (%d)...", tostring(label or itemID), excess)
+        addLog(string.format("[Storage Drop Atas] Drop kelebihan %s (ID %d): %d (sisakan %d) di Y=1..2...",
             tostring(label or itemID), itemID, excess, keepAmt))
 
         if growtopia and growtopia.confirmDropItem then
