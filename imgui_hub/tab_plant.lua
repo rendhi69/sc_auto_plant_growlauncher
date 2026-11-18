@@ -1893,7 +1893,7 @@ local function renderFrame()
     if not windowOpen then
         wasItemActive = false
         if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
-        local miniW, miniH = 260, 96
+        local miniW, miniH = 230, 128
         if ImGui.SetNextWindowPos and ImVec2 then
             local mcx, mcy = getCenteredWindowPos(miniW, miniH)
             pcall(ImGui.SetNextWindowPos, ImVec2(mcx, mcy), condOnce)
@@ -1904,9 +1904,9 @@ local function renderFrame()
         if ImGui.Begin("BOREN STORE##boren_mini") then
             if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
             drawWindowNeonChrome()
-            uiGap(2)
+            uiGap(4)
             local avM = safeAvailX()
-            if centeredBtn("Buka BOREN STORE##open_boren", math.max(190, avM - 8), avM, true) then
+            if centeredBtn("Open Menu##open_boren", math.max(150, avM - 10), avM, true) then
                 windowOpen = true
                 switchAnimStart = nowSec()
             end
