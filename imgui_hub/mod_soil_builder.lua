@@ -424,30 +424,44 @@ local function clearUnreachableMap()
     unreachableMap = {}
 end
 
+-- Deteksi bit TILEFLAG_WATER (0x0400 = 1024) kompatibel Lua 5.1/5.4 tanpa operator bitwise
+local function tileHasWater(t)
+    if not t then return false end
+    if t.water == true or t.hasWater == true then return true end
+    local fl = tonumber(t.flag or t.flags) or 0
+    return (math.floor(fl / 1024) % 2) == 1
+end
+
 local function isProtectedLockOrBlocker(tx, ty, forWater)
     -- Deklarasi forward (diimplementasikan lengkap di bawah)
 end
 
-local function isTileStandable(tx, ty)
+local function isTilePassable(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
     if isProtectedLockOrBlocker(tx, ty, false) then return false end
-    local key = tx .. "," .. ty
-    if unreachableMap[key] then return false end
+    if unreachableMap[tx .. "," .. ty] then return false end
     local t = getTileSafe(tx, ty)
     if not t then return false end
     local fg = tonumber(t.fg) or 0
-    if fg == 6 or fg == 12 or fg == 102 or fg == (tonumber(SB.CFG.platform_id) or 102) then
-        return true
-    end
-    if t.collidable == true or fg == 2 or fg == 4 or fg == 8 or fg == 10 then
-        return false
-    end
-    -- Untuk petak kosong (fg == 0), hanya standable jika ada tumpuan solid/platform di bawahnya (ty + 1)
+    local coltype = tonumber(t.coltype) or 0
+    local platID = tonumber(SB.CFG.platform_id) or 102
+    if fg == 6 or fg == 12 or fg == 102 or fg == platID or coltype == 2 then return true end
+    if t.collidable == true or coltype == 1 or fg == 2 or fg == 4 or fg == 8 or fg == 10 then return false end
+    return true
+end
+
+local function isTileStandable(tx, ty)
+    if not isTilePassable(tx, ty) then return false end
+    local t = getTileSafe(tx, ty)
+    local fg = tonumber(t and t.fg) or 0
     if fg == 0 then
+        if tileHasWater(t) or ty == 53 then return true end
+        local platID = tonumber(SB.CFG.platform_id) or 102
         local tDown = getTileSafe(tx, ty + 1)
         if tDown then
             local dfg = tonumber(tDown.fg) or 0
-            if dfg ~= 0 and (dfg == 102 or dfg == 2 or dfg == 4 or dfg == 8 or dfg == 10 or dfg == (tonumber(SB.CFG.platform_id) or 102) or tDown.collidable == true) then
+            local dcol = tonumber(tDown.coltype) or 0
+            if dfg ~= 0 and (tDown.collidable == true or dcol > 0 or dfg == 102 or dfg == platID or dfg == 2 or dfg == 4 or dfg == 8 or dfg == 10 or dfg == 8772 or dfg == (tonumber(SB.CFG.default_block) or 8772)) then
                 return true
             end
         end
@@ -456,7 +470,7 @@ local function isTileStandable(tx, ty)
     return true
 end
 
-local function moveSafeTo(tx, ty)
+local function moveSafeTo(tx, ty, skipStandCheck)
     if not SB.STATE.running then return false end
     tx = math.max(0, math.min(99, math.floor(tx or 0)))
     ty = math.max(0, math.min(53, math.floor(ty or 0)))
@@ -465,13 +479,20 @@ local function moveSafeTo(tx, ty)
 
     local cx, cy = getPlayerPos()
     if cx == tx and cy == ty then return true end
+    if not skipStandCheck then
+        local canGo = SB.CFG.use_modfly and isTilePassable(tx, ty) or isTileStandable(tx, ty)
+        if not canGo then
+            unreachableMap[key] = true
+            return false
+        end
+    end
     local pFn = FindPath or findPath
     if not pFn then return false end
     if SB.CFG.use_modfly and editToggle then pcall(editToggle, "ModFly", true) end
 
     local dist = math.max(math.abs(cx - tx), math.abs(cy - ty))
-    local okCall, pathRes = pcall(pFn, tx, ty)
-    if not okCall or pathRes == false then
+    local okCall = pcall(pFn, tx, ty)
+    if not okCall then
         unreachableMap[key] = true
         return false
     end
@@ -488,13 +509,7 @@ local function moveSafeTo(tx, ty)
         end
         if nx == lastX and ny == lastY then
             stuck = stuck + 1
-            if stuck == 4 then
-                local okRetry, retryRes = pcall(pFn, tx, ty)
-                if not okRetry or retryRes == false then
-                    unreachableMap[key] = true
-                    break
-                end
-            elseif stuck >= 8 then
+            if stuck >= 6 then
                 unreachableMap[key] = true
                 break
             end
@@ -519,17 +534,20 @@ local function moveAdjacentForWater(tx, ty, prefDir)
         { tx + dir, ty - 1 },
         { tx + dir, ty + 1 },
     }
+    local tries = 0
     for _, c in ipairs(cands) do
         local cx, cy = c[1], c[2]
         if not isProtectedLockOrBlocker(cx, cy, true) and not unreachableMap[cx .. "," .. cy] and isTileStandable(cx, cy) then
             local px, py = getPlayerPos()
             if px == cx and py == cy then return true end
+            tries = tries + 1
             if moveSafeTo(cx, cy) then
                 local nx, ny = getPlayerPos()
                 if math.abs(nx - tx) <= 2 and math.abs(ny - ty) <= 2 and not (nx == tx and ny == ty) then
                     return true
                 end
             end
+            if tries >= 2 then break end
         end
     end
     local px, py = getPlayerPos()
@@ -629,7 +647,7 @@ local function restockItem(farmRow, itemID)
             forEachWorldObject(function(oid, uid, rx, ry)
                 if not SB.STATE.running or getInvCount(itemID) >= 180 then return end
                 if oid == itemID then
-                    moveSafeTo(math.floor((rx + 10) / 32), math.floor((ry + 10) / 32))
+                    moveSafeTo(math.floor((rx + 10) / 32), math.floor((ry + 10) / 32), true)
                     if sendPacketRaw then pcall(sendPacketRaw, false, { type = 11, value = uid, x = rx, y = ry }) end
                     safeSleep(160)
                 end
@@ -644,32 +662,45 @@ local function restockItem(farmRow, itemID)
 end
 
 local LOCK_IDS = {
-    [202]  = true, -- Small Lock
-    [204]  = true, -- Big Lock
-    [206]  = true, -- Huge Lock
-    [242]  = true, -- World Lock
-    [1796] = true, -- Diamond Lock
-    [4994] = true, -- Builder's Lock
-    [7188] = true, -- Blue Gem Lock
-    [226]  = true, -- Signal Jammer
+    [202]   = true, -- Small Lock
+    [204]   = true, -- Big Lock
+    [206]   = true, -- Huge Lock
+    [242]   = true, -- World Lock
+    [1796]  = true, -- Diamond Lock
+    [2950]  = true, -- Custom/Special Lock
+    [4428]  = true, -- Emerald Lock
+    [4802]  = true, -- Royal Lock
+    [4994]  = true, -- Builder's Lock
+    [5814]  = true, -- Robot Lock
+    [7188]  = true, -- Blue Gem Lock
+    [9640]  = true, -- My First World Lock
+    [10410] = true, -- Special World Lock
+    [226]   = true, -- Signal Jammer
+    [228]   = true, -- Punch Jammer
+    [1278]  = true, -- Zombie Jammer
 }
 
 local BLOCKER_DOOR_IDS = {
     [6]    = true, -- Main Door (White Door)
     [12]   = true, -- Wooden Door
-    [658]  = true, -- Dungeon Door
+    [30]   = true, -- Dungeon Door
+    [60]   = true, -- Portcullis
+    [224]  = true, -- House Entrance
+    [544]  = true, -- Orange Portal
+    [546]  = true, -- Blue Portal
+    [658]  = true, -- Dungeon Door alt
     [762]  = true, -- Castle Door
     [858]  = true, -- Screen Door
     [1042] = true, -- Steel Door
     [1276] = true, -- VIP Entrance
-    [2810] = true, -- House Entrance (Penghalang)
-    [2812] = true, -- Portcullis (Penghalang)
+    [2810] = true, -- Air Vent (Penghalang)
+    [2812] = true, -- Portcullis alt
     [3402] = true, -- Security Camera
     [3804] = true, -- Forcefield
     [5980] = true, -- Entrance
 }
 
-local protectedAreaMap = {} -- ["x,y"] = true (area Main Door ±2, semua Lock ±1, dan semua Penghalang/Door ±1)
+local protectedAreaMap = {} -- ["x,y"] = true (area Main Door ±2, semua Lock ±1..±10, dan semua Penghalang/Door ±1)
 
 local function markProtectedRect(cx, cy, rx, ry)
     for y = math.max(0, cy - ry), math.min(53, cy + ry) do
@@ -690,17 +721,14 @@ local function scanProtectedAreas()
         if fg == 0 then return end
 
         if fg == 6 then
-            -- Main Door + seluruh cluster lock/penghalang/moat ±2 di sekitarnya
             markProtectedRect(tx, ty, 2, 2)
         elseif LOCK_IDS[fg] then
-            -- Berikan radius proteksi sesuai jangkauan lock
             local rad = 1
-            if fg == 204 then rad = 5 end      -- Big Lock
-            if fg == 206 then rad = 10 end     -- Huge Lock
-            if fg == 242 or fg == 1796 or fg == 4994 or fg == 7188 then rad = 2 end -- WL / DL / Builder's / BGL
+            if fg == 204 then rad = 5 end
+            if fg == 206 then rad = 10 end
+            if fg == 242 or fg == 1796 or fg == 4428 or fg == 4802 or fg == 4994 or fg == 7188 or fg == 9640 then rad = 2 end
             markProtectedRect(tx, ty, rad, rad)
         elseif BLOCKER_DOOR_IDS[fg] then
-            -- Semua Door & Penghalang + 1 tile sekelilingnya
             markProtectedRect(tx, ty, 1, 1)
         end
     end
@@ -728,7 +756,6 @@ isProtectedLockOrBlocker = function(tx, ty, forWater)
     local fg = tonumber(t.fg) or 0
     if fg ~= 0 and (LOCK_IDS[fg] or BLOCKER_DOOR_IDS[fg] or fg == 8) then return true end
 
-    -- Hindari juga petak yang berada dalam perlindungan lock
     local par = tonumber(t.parent) or 0
     if par > 0 then
         if forWater then return true end
@@ -742,7 +769,6 @@ isProtectedLockOrBlocker = function(tx, ty, forWater)
     end
 
     if forWater then
-        -- Cek cepat 4 arah tetangga kalau-kalau ada Lock/Penghalang baru terpasang
         local dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
         for _, d in ipairs(dirs) do
             local nt = getTileSafe(tx + d[1], ty + d[2])
@@ -759,14 +785,6 @@ local function isEmptyTile(tx, ty)
     if isProtectedLockOrBlocker(tx, ty, false) then return false end
     local t = getTileSafe(tx, ty)
     return t and (tonumber(t.fg) or 0) == 0
-end
-
--- Deteksi bit TILEFLAG_WATER (0x0400 = 1024) kompatibel Lua 5.1/5.4 tanpa operator bitwise
-local function tileHasWater(t)
-    if not t then return false end
-    if t.water == true or t.hasWater == true then return true end
-    local fl = tonumber(t.flag or t.flags) or 0
-    return (math.floor(fl / 1024) % 2) == 1
 end
 
 -- VALIDASI KETAT PUT WATER 1x PER TILE (Anti-Spam, Anti-Ambil Balik & Hindari Area Lock/Penghalang!)
@@ -881,6 +899,7 @@ local function putWaterCorners(row)
                             return false
                         end
                     end
+                    addLog(string.format("[Water] Target (%d,%d) flag=%d", col.x, y, tonumber(t.flag or t.flags) or 0))
                     local okPlaced = placeWaterOnceSafe(col.x, y, waterID, col.dir)
                     if not okPlaced then
                         unreachableMap[key] = true
@@ -911,17 +930,24 @@ local function processSoilWorld(row)
 
     local pDelay = tonumber(SB.CFG.place_delay) or 180
     local goingRight = true
+    local loggedSoil = false
 
     -- Bangun baris genap Y = 2, 4, 6, ..., 52 pada rentang X = 2..97
     for buildY = 2, 52, 2 do
         if not SB.STATE.running then return false end
         local standY = math.max(0, buildY - 1)
-        local hasEmpty = false
+        local firstEmptyX = nil
         for x = 2, 97 do
-            if isEmptyTile(x, buildY) then hasEmpty = true; break end
+            if isEmptyTile(x, buildY) and isTilePassable(x, standY) then
+                firstEmptyX = x; break
+            end
         end
 
-        if hasEmpty then
+        if firstEmptyX then
+            if not loggedSoil then
+                loggedSoil = true
+                addLog(string.format("[Soil] Mulai pasang block ID %d (mulai %d,%d)", blockID, firstEmptyX, buildY))
+            end
             row.status = "Build Y=" .. tostring(buildY)
             SB.STATE.status_text = row.name .. " Y=" .. tostring(buildY)
             if SB.CFG.place_mode == "3zigzag" then
@@ -935,7 +961,7 @@ local function processSoilWorld(row)
                     for _, bx in ipairs(xs) do
                         if bx >= 2 and bx <= 97 and isEmptyTile(bx, buildY) then table.insert(spots, bx) end
                     end
-                    if #spots > 0 then
+                    if #spots > 0 and isTilePassable(standX, standY) then
                         if getInvCount(blockID) <= 0 then
                             if not restockItem(row, blockID) then SB.saveData(); return false end
                         end
@@ -957,7 +983,7 @@ local function processSoilWorld(row)
                 for bx = x1, x2, st do
                     if not SB.STATE.running then return false end
                     if not ensureSBOnline(row) then return false end
-                    if isEmptyTile(bx, buildY) then
+                    if isEmptyTile(bx, buildY) and isTilePassable(bx, standY) then
                         if getInvCount(blockID) <= 0 then
                             if not restockItem(row, blockID) then SB.saveData(); return false end
                         end
@@ -975,14 +1001,20 @@ local function processSoilWorld(row)
     -- Opsional: Pasang Platform di X=1 & X=98
     if SB.CFG.place_platform then
         local platID = tonumber(SB.CFG.platform_id) or 102
+        local loggedPlat = false
         for _, px in ipairs({ 1, 98 }) do
             for py = 2, 52, 2 do
                 if not SB.STATE.running then return false end
-                if isEmptyTile(px, py) then
+                local sy = math.max(0, py - 1)
+                if isEmptyTile(px, py) and isTilePassable(px, sy) then
+                    if not loggedPlat then
+                        loggedPlat = true
+                        addLog(string.format("[Platform] Pasang ID %d (mulai %d,%d)", platID, px, py))
+                    end
                     if getInvCount(platID) <= 0 then
                         if not restockItem(row, platID) then SB.saveData(); return false end
                     end
-                    if moveSafeTo(px, math.max(0, py - 1)) then
+                    if moveSafeTo(px, sy) then
                         placePacket(px, py, platID)
                         safeSleep(pDelay)
                     end
