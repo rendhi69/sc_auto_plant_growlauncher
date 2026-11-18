@@ -139,6 +139,7 @@ function BOOT.start(baseRawUrl)
             github_repo   = "https://github.com/rendhi69/sc_auto_plant_growlauncher",
             raw_loader    = BASE_RAW_URL .. "loader_hub_imgui.lua",
             raw_debugpack = "https://raw.githubusercontent.com/rendhi69/data-_id_item/main/debugpack.txt",
+            raw_item_db   = "https://raw.githubusercontent.com/rendhi69/data-_id_item/main/item_database.txt",
         },
     }
 
