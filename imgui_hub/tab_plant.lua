@@ -1903,13 +1903,18 @@ local function renderLeftFeatureSidebar(colW)
     if styledBtn("Plant", btnW, activeFeature == "plant", false) then
         selectFeature("plant")
     end
+    local dbFeat = nil
     for _, feat in ipairs(getDynamicFeatures()) do
-        if styledBtn(tostring(feat.label or feat.id), btnW, activeFeature == feat.id, false) then
-            selectFeature(feat.id)
+        if feat.id == "database_id" then
+            dbFeat = feat
+        else
+            if styledBtn(tostring(feat.label or feat.id), btnW, activeFeature == feat.id, false) then
+                selectFeature(feat.id)
+            end
         end
     end
 
-    -- Dorong kontrol jendela (Pin & Hide UI) ke bagian paling bawah sidebar, terpisah dari fitur
+    -- Dorong blok utilitas bawah (Database ID di atas Pin, lalu Pin & Hide UI) ke bagian bawah sidebar
     local rowH = 38
     local _, ly1, _, ly2 = getLastItemRect()
     if ly1 and ly2 and (ly2 - ly1) >= 18 then
@@ -1950,14 +1955,22 @@ local function renderLeftFeatureSidebar(colW)
         end
     end
 
-    local bottomBlockH = (rowH * 2) + 22
-    local pushDown = 20
+    local bottomRows = dbFeat and 3 or 2
+    local bottomBlockH = (rowH * bottomRows) + 22
+    local pushDown = 14
     if availY and availY > bottomBlockH then
-        pushDown = math.max(20, math.min(320, math.floor(availY - bottomBlockH)))
+        pushDown = math.max(14, math.min(320, math.floor(availY - bottomBlockH)))
     end
     uiGap(pushDown)
     drawSidebarDivider(btnW)
     uiGap(6)
+
+    -- Database ID tepat di atas tombol Pin
+    if dbFeat then
+        if styledBtn(tostring(dbFeat.label or "Database ID"), btnW, activeFeature == dbFeat.id, false) then
+            selectFeature(dbFeat.id)
+        end
+    end
 
     -- Tombol Pin (Hitam + Neon: ON = terkunci tidak bergeser, OFF = bebas digeser)
     local pinPushed = 0
