@@ -409,10 +409,12 @@ end
 
 local function syncInventoryCache()
     local map = {}
-    forEachInvItem(function(id, amt)
+    local seen = forEachInvItem(function(id, amt)
         map[id] = (map[id] or 0) + (amt or 0)
     end)
-    Engine.STATE.inv_cache = map
+    if seen > 0 then
+        Engine.STATE.inv_cache = map
+    end
 end
 
 local function getInvCount(itemID)
@@ -757,20 +759,16 @@ local function parseStorageEntries()
     return list
 end
 
-local function collectFloatingSeeds(targetID, targetAmount)
-    targetID = tonumber(targetID) or 0
-    if targetID <= 0 then return 0 end
+local function forEachWorldObject(fn)
     local getObjsFn = getObjectList or getObjects or getWorldObjects
     if not getObjsFn then return 0 end
-
     local ok, objs = pcall(getObjsFn)
     if not ok or not objs then return 0 end
     local container = objs
     pcall(function() if type(objs) == "table" and objs.objects then container = objs.objects end end)
 
-    local collected = 0
-    local function handleObj(obj)
-        if not obj or not Engine.STATE.running or getInvCount(targetID) >= targetAmount then return end
+    local function dispatch(obj)
+        if not obj then return end
         local oid, uid, amt, rx, ry = nil, nil, 1, nil, nil
         pcall(function() oid = tonumber(obj.itemid or obj.itemId or obj.item_id) end)
         pcall(function() uid = tonumber(obj.id or obj.oid or obj.netid) end)
@@ -780,37 +778,125 @@ local function collectFloatingSeeds(targetID, targetAmount)
         end)
         if not rx then pcall(function() rx = tonumber(obj.posX or obj.x) end) end
         if not ry then pcall(function() ry = tonumber(obj.posY or obj.y) end) end
-        if oid == targetID and uid and rx and ry then
-            local ox = math.floor((rx + 10) / 32)
-            local oy = math.floor((ry + 10) / 32)
-            moveSafeTo(ox, oy)
-            safeSleep(100)
-            if sendPacketRaw then
-                pcall(sendPacketRaw, false, { type = 11, value = uid, x = rx, y = ry })
-            end
-            safeSleep(160)
-            collected = collected + amt
-            syncInventoryCache()
+        if oid and oid > 0 and uid and rx and ry then
+            fn(oid, uid, amt, rx, ry)
         end
     end
 
     local seen = 0
     pcall(function()
-        for _, obj in pairs(container) do seen = seen + 1; handleObj(obj) end
+        for _, obj in pairs(container) do seen = seen + 1; dispatch(obj) end
     end)
     if seen == 0 then
         local okLen, n = pcall(function() return #container end)
         if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
         local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 1000
+        local misses = 0
         for i = 0, maxI do
             local okI, obj = pcall(function() return container[i] end)
-            if okI and obj then handleObj(obj) end
+            if okI and obj then
+                misses = 0; seen = seen + 1; dispatch(obj)
+            else
+                misses = misses + 1
+                if misses >= 60 and i > 5 then break end
+            end
+        end
+    end
+    return seen
+end
+
+local function countFloatingItem(targetID)
+    targetID = tonumber(targetID) or 0
+    if targetID <= 0 then return 0 end
+    local total = 0
+    forEachWorldObject(function(oid, _, amt)
+        if oid == targetID then total = total + (tonumber(amt) or 1) end
+    end)
+    return total
+end
+
+local function collectFloatingSeeds(targetID, targetAmount)
+    targetID = tonumber(targetID) or 0
+    if targetID <= 0 then return 0 end
+    targetAmount = tonumber(targetAmount) or 200
+
+    local collected = 0
+    for pass = 1, 2 do
+        if not Engine.STATE.running or getInvCount(targetID) >= targetAmount then break end
+        local targets = {}
+        forEachWorldObject(function(oid, uid, amt, rx, ry)
+            if oid == targetID then
+                table.insert(targets, { uid = uid, amt = amt, rx = rx, ry = ry })
+            end
+        end)
+        if #targets == 0 then break end
+
+        for _, t in ipairs(targets) do
+            if not Engine.STATE.running or getInvCount(targetID) >= targetAmount then break end
+            local beforeCnt = getInvCount(targetID)
+            local ox = math.floor((t.rx + 10) / 32)
+            local oy = math.floor((t.ry + 10) / 32)
+            moveSafeTo(ox, oy)
+            safeSleep(120)
+            if sendPacketRaw then
+                pcall(sendPacketRaw, false, { type = 11, value = t.uid, x = t.rx, y = t.ry })
+            end
+            safeSleep(220)
+            syncInventoryCache()
+            if getInvCount(targetID) <= beforeCnt and sendPacketRaw and Engine.STATE.running then
+                pcall(sendPacketRaw, false, { type = 11, value = t.uid, x = t.rx, y = t.ry })
+                safeSleep(260)
+                syncInventoryCache()
+            end
+            collected = collected + (tonumber(t.amt) or 1)
         end
     end
     return collected
 end
 
+-- Tunggu sinkronisasi paket inventori dari server (maks 2.4 detik) setelah ambil seed di storage
+local function waitForInventorySyncAfterCollect(s1, s2, floorDropped1, floorDropped2)
+    local isSplice = (s1 > 0 and s2 > 0 and s1 ~= s2)
+    for _ = 1, 12 do
+        if not Engine.STATE.running then return false end
+        syncInventoryCache()
+        local bp1 = getInvCount(s1)
+        local bp2 = isSplice and getInvCount(s2) or 999
+        if bp1 > 0 and (not isSplice or bp2 > 0) then
+            safeSleep(250)
+            syncInventoryCache()
+            return true
+        end
+        safeSleep(200)
+    end
+
+    -- Fallback lag berat: jika seed fisik di lantai storage BENAR-BENAR hilang terambil tapi getInventory() lambat sync
+    if (floorDropped1 or 0) > 0 and getInvCount(s1) <= 0 then
+        safeSleep(800)
+        syncInventoryCache()
+        if getInvCount(s1) <= 0 then
+            Engine.STATE.inv_cache[s1] = math.min(200, floorDropped1)
+            addLog(string.format("[Storage] Sinkronisasi tas tertunda, terdeteksi +%d seed (ID %d) terambil dari lantai.",
+                Engine.STATE.inv_cache[s1], s1))
+        end
+    end
+    if isSplice and (floorDropped2 or 0) > 0 and getInvCount(s2) <= 0 then
+        safeSleep(600)
+        syncInventoryCache()
+        if getInvCount(s2) <= 0 then
+            Engine.STATE.inv_cache[s2] = math.min(200, floorDropped2)
+        end
+    end
+
+    return hasEnoughSeedInBackpack(s1, s2)
+end
+
 local function restockFromStorage(row, s1, s2)
+    -- Cek tas dulu! Jika masih ada seed sisa di tas (misal 200 seed), JANGAN berhenti — tanam dulu!
+    if hasEnoughSeedInBackpack(s1, s2) then
+        return true
+    end
+
     local storages = parseStorageEntries()
     if #storages == 0 then
         addLog("[Peringatan] Seed Storage kosong! Isi kolom Seed Storage terlebih dahulu.")
@@ -831,12 +917,23 @@ local function restockFromStorage(row, s1, s2)
                 pcall(editToggle, "Auto Collect", true)
                 pcall(editToggle, "Anti Collect", false)
             end
+
+            local floorBefore1 = countFloatingItem(s1)
+            local floorBefore2 = isSplice and countFloatingItem(s2) or 0
+
             collectFloatingSeeds(s1, 200)
             if isSplice then collectFloatingSeeds(s2, 200) end
-            syncInventoryCache()
 
-            if hasEnoughSeedInBackpack(s1, s2) then
-                addLog(string.format("[Storage] Stok terpenuhi. Kembali ke %s...", row.name))
+            local floorAfter1 = countFloatingItem(s1)
+            local floorAfter2 = isSplice and countFloatingItem(s2) or 0
+            local dropped1 = math.max(0, floorBefore1 - floorAfter1)
+            local dropped2 = math.max(0, floorBefore2 - floorAfter2)
+
+            if waitForInventorySyncAfterCollect(s1, s2, dropped1, dropped2) then
+                local bp1 = getInvCount(s1)
+                local bp2 = isSplice and getInvCount(s2) or 0
+                addLog(string.format("[Storage] Seed di tas: %d%s. Kembali tanam ke %s...",
+                    bp1, isSplice and (" & " .. tostring(bp2)) or "", row.name))
                 if warpToWorld(row.name, row.door) then
                     safeSleep(500)
                     scanForeignLocksInWorld()
@@ -849,7 +946,20 @@ local function restockFromStorage(row, s1, s2)
         end
     end
 
-    addLog("[Peringatan] Stok seed di semua storage habis!")
+    -- Pengecekan akhir sebelum benar-benar berhenti: JANGAN pernah stop bila di tas ternyata ada seed!
+    safeSleep(450)
+    syncInventoryCache()
+    if hasEnoughSeedInBackpack(s1, s2) then
+        addLog(string.format("[Storage] Sisa seed di tas terdeteksi (%d). Kembali tanam ke %s dulu...",
+            getInvCount(s1), row.name))
+        if warpToWorld(row.name, row.door) then
+            safeSleep(500)
+            scanForeignLocksInWorld()
+            return true
+        end
+    end
+
+    addLog("[Peringatan] Stok seed di tas (0) & semua storage habis!")
     row.status = "No Seed"
     return false
 end
@@ -868,6 +978,9 @@ local function sendPlantPacket(tx, ty, itemID)
     local ok = pcall(sendPacketRaw, false, {
         type = 3, value = itemID, px = tx, py = ty, x = px, y = py, state = state,
     })
+    if ok and Engine.STATE.inv_cache and (Engine.STATE.inv_cache[itemID] or 0) > 0 then
+        Engine.STATE.inv_cache[itemID] = math.max(0, Engine.STATE.inv_cache[itemID] - 1)
+    end
     return ok
 end
 
