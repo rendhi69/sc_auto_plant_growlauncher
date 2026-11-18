@@ -1522,28 +1522,155 @@ local function triggerLazyLoad(modKey, relPath)
     else doLoad() end
 end
 
+local isPinned        = true    -- Default ON: kunci posisi jendela agar tidak bergeser saat disentuh
+local pinnedX         = nil
+local pinnedY         = nil
+local lastWinX        = nil
+local lastWinY        = nil
+local needCenterPos   = true    -- Posisikan tepat di tengah layar saat pertama kali dimuat
+local switchAnimStart = 0
+local SWITCH_ANIM_DUR = 0.26
+
+local function getCenteredWindowPos(winW, winH)
+    local dispW, dispH = 1280, 540
+    if ImGui and ImGui.GetMainViewport then
+        local okV, vp = pcall(ImGui.GetMainViewport)
+        if okV and vp then
+            local okS, sw, sh = pcall(function() return vp.Size.x, vp.Size.y end)
+            if okS and type(sw) == "number" and sw >= 400 and type(sh) == "number" and sh >= 300 then
+                dispW, dispH = sw, sh
+            end
+        end
+    elseif ImGui and ImGui.GetIO then
+        local okI, ioObj = pcall(ImGui.GetIO)
+        if okI and ioObj then
+            local okS, sw, sh = pcall(function() return ioObj.DisplaySize.x, ioObj.DisplaySize.y end)
+            if okS and type(sw) == "number" and sw >= 400 and type(sh) == "number" and sh >= 300 then
+                dispW, dispH = sw, sh
+            end
+        end
+    end
+    local cx = math.max(12, math.floor((dispW - winW) * 0.5))
+    local cy = math.max(12, math.floor((dispH - winH) * 0.5))
+    return cx, cy
+end
+
+local function selectFeature(name)
+    if activeFeature ~= name then
+        activeFeature = name
+        switchAnimStart = nowSec()
+    end
+end
+
+local function getSwitchProgress()
+    local elapsed = nowSec() - (switchAnimStart or 0)
+    if elapsed < 0 or elapsed >= SWITCH_ANIM_DUR then return 1.0 end
+    return elapsed / SWITCH_ANIM_DUR
+end
+
+-- Efek transisi halus saat perpindahan fitur (sapuan neon Cyan -> Ungu + kilau lembut 0.26 detik)
+local function drawSwitchEffect(sideW)
+    local p = getSwitchProgress()
+    if p >= 1.0 then return end
+    if not (ImGui and ImVec2 and ImGui.GetWindowPos and ImGui.GetWindowSize) then return end
+    local fg = getFGDrawList()
+    if not fg then return end
+
+    local okP, wp = pcall(ImGui.GetWindowPos)
+    local okS, ws = pcall(ImGui.GetWindowSize)
+    if not (okP and okS and wp and ws) then return end
+    local okC, wx, wy, ww, wh = pcall(function() return wp.x, wp.y, ws.x, ws.y end)
+    if not (okC and type(wx) == "number" and ww > sideW + 40 and wh > 60) then return end
+
+    local ease = 1.0 - (1.0 - p) * (1.0 - p) * (1.0 - p)
+    local lineAlpha = math.max(0, math.min(255, math.floor((1.0 - p) * 245)))
+    local glowAlpha = math.max(0, math.min(255, math.floor((1.0 - p) * 44)))
+
+    local rx1 = wx + sideW + 4
+    local rx2 = wx + ww - 4
+    local ry1 = wy + 28
+    local sweepX2 = rx1 + (rx2 - rx1) * ease
+
+    local cCyan   = colU32(0, 224, 255, lineAlpha)
+    local cPurple = colU32(176, 48, 255, lineAlpha)
+    local gCyan   = colU32(0, 208, 255, glowAlpha)
+    local gPurple = colU32(160, 44, 255, glowAlpha)
+    local gZero   = colU32(7, 9, 16, 0)
+
+    if fg.AddRectFilledMultiColor then
+        pcall(function()
+            -- Garis sapuan neon bergerak cepat melintasi bagian atas panel kanan
+            fg:AddRectFilledMultiColor(
+                ImVec2(rx1, ry1), ImVec2(sweepX2, ry1 + 3.0),
+                cCyan, cPurple, cPurple, cCyan
+            )
+            -- Kilau vertikal lembut yang langsung memudar
+            fg:AddRectFilledMultiColor(
+                ImVec2(rx1, ry1 + 3.0), ImVec2(rx2, math.min(wy + wh - 4, ry1 + 42)),
+                gCyan, gPurple, gZero, gZero
+            )
+        end)
+    elseif fg.AddRectFilled then
+        pcall(function()
+            fg:AddRectFilled(ImVec2(rx1, ry1), ImVec2(sweepX2, ry1 + 3.0), cCyan)
+        end)
+    end
+end
+
 local function renderLeftFeatureSidebar(colW)
     local btnW = math.max(90, colW - 18)
     local P = getBorenPal()
     centeredText("MENU", btnW, P.textCyan)
     safeSpacing()
     if styledBtn("Dashboard", btnW, activeFeature == "dashboard", false) then
-        activeFeature = "dashboard"
+        selectFeature("dashboard")
     end
     if styledBtn("Plant", btnW, activeFeature == "plant", false) then
-        activeFeature = "plant"
+        selectFeature("plant")
     end
     if styledBtn("Dirt Farm", btnW, activeFeature == "dirt_farm", false) then
-        activeFeature = "dirt_farm"
+        selectFeature("dirt_farm")
     end
     if styledBtn("Build Soil", btnW, activeFeature == "build_soil", false) then
-        activeFeature = "build_soil"
+        selectFeature("build_soil")
     end
     if styledBtn("Buy Pack", btnW, activeFeature == "buy_pack", false) then
-        activeFeature = "buy_pack"
+        selectFeature("buy_pack")
     end
 
-    ImGui.Text("")
+    uiGap(10)
+    -- Tombol Pin (Hitam + Neon: ON = terkunci tidak bergeser, OFF = bebas digeser)
+    local pinPushed = 0
+    if detectPushColorMode() ~= "none" and ImGui and ImGui.Col then
+        local C = ImGui.Col
+        local function pc(idx, col)
+            if pushOneColor(idx, col) then pinPushed = pinPushed + 1 end
+        end
+        if isPinned then
+            pc(C.Button,        P.onBtn)
+            pc(C.ButtonHovered, P.onBtnHover)
+            pc(C.ButtonActive,  P.onBtnActive)
+            pc(C.Border,        P.onBorder)
+            pc(C.Text,          P.onText)
+        else
+            pc(C.Button,        P.offBtn)
+            pc(C.ButtonHovered, P.offBtnHover)
+            pc(C.ButtonActive,  P.offBtnActive)
+            pc(C.Border,        P.offBorder)
+            pc(C.Text,          P.offText)
+        end
+    end
+    if fullBtn(isPinned and "Pin: ON##sb_pin" or "Pin: OFF##sb_pin", btnW) then
+        isPinned = not isPinned
+        if isPinned and lastWinX and lastWinY then
+            pinnedX, pinnedY = lastWinX, lastWinY
+        end
+        setNotice(isPinned and "Jendela dikunci (Pin ON)." or "Jendela bebas digeser (Pin OFF).")
+    end
+    if pinPushed > 0 and ImGui and ImGui.PopStyleColor then
+        pcall(ImGui.PopStyleColor, pinPushed)
+    end
+
     if styledBtn("Hide UI", btnW, false, true) then
         windowOpen = false
     end
@@ -1553,6 +1680,14 @@ end
 -- PANEL KANAN: SUB-MENU ATAS + KONTEN KATEGORI AKTIF
 -- ============================================================================
 local function renderRightPanel()
+    -- Micro slide-in halus saat baru pindah fitur (6px -> 0px dalam 0.26 detik)
+    local sp = getSwitchProgress()
+    if sp < 1.0 then
+        local ease = 1.0 - (1.0 - sp) * (1.0 - sp) * (1.0 - sp)
+        local slideY = math.floor((1.0 - ease) * 7)
+        if slideY >= 1 then uiGap(slideY) end
+    end
+
     if activeFeature == "dashboard" then
         renderDashboardPanel()
 
@@ -1633,20 +1768,27 @@ local function renderFrame()
     end
 
     local cCnt, vCnt = pushBorenTheme()
+    local condAlways = (ImGui.Cond and ImGui.Cond.Always) or 1
+    local condOnce   = (ImGui.Cond and ImGui.Cond.Once) or 2
 
     if not windowOpen then
         if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
+        local miniW, miniH = 260, 96
         if ImGui.SetNextWindowPos and ImVec2 then
-            pcall(ImGui.SetNextWindowPos, ImVec2(24, 150), (ImGui.Cond and ImGui.Cond.Once) or 2)
+            local mcx, mcy = getCenteredWindowPos(miniW, miniH)
+            pcall(ImGui.SetNextWindowPos, ImVec2(mcx, mcy), condOnce)
         end
         if ImGui.SetNextWindowSize and ImVec2 then
-            pcall(ImGui.SetNextWindowSize, ImVec2(300, 155), (ImGui.Cond and ImGui.Cond.Always) or 1)
+            pcall(ImGui.SetNextWindowSize, ImVec2(miniW, miniH), condAlways)
         end
         if ImGui.Begin("BOREN STORE##boren_mini") then
             if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
             drawWindowNeonChrome()
-            if styledBtn("  Buka BOREN STORE  ", nil, true, false) then
+            uiGap(2)
+            local avM = safeAvailX()
+            if centeredBtn("Buka BOREN STORE##open_boren", math.max(190, avM - 8), avM, true) then
                 windowOpen = true
+                switchAnimStart = nowSec()
             end
         end
         ImGui.End()
@@ -1654,13 +1796,34 @@ local function renderFrame()
         return
     end
 
+    local initW, initH = 760, 450
     if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
     if ImGui.SetNextWindowSize and ImVec2 then
-        pcall(ImGui.SetNextWindowSize, ImVec2(780, 470), (ImGui.Cond and ImGui.Cond.Once) or 2)
+        pcall(ImGui.SetNextWindowSize, ImVec2(initW, initH), condOnce)
+    end
+    if ImGui.SetNextWindowPos and ImVec2 then
+        if needCenterPos then
+            local cx, cy = getCenteredWindowPos(initW, initH)
+            pinnedX, pinnedY = cx, cy
+            pcall(ImGui.SetNextWindowPos, ImVec2(cx, cy), condAlways)
+            needCenterPos = false
+        elseif isPinned and pinnedX and pinnedY then
+            pcall(ImGui.SetNextWindowPos, ImVec2(pinnedX, pinnedY), condAlways)
+        end
     end
 
     if ImGui.Begin("BOREN STORE##boren_main") then
         if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
+        if ImGui.GetWindowPos then
+            local okP, wp = pcall(ImGui.GetWindowPos)
+            if okP and wp then
+                local okXY, wx, wy = pcall(function() return wp.x, wp.y end)
+                if okXY and type(wx) == "number" and type(wy) == "number" then
+                    lastWinX, lastWinY = wx, wy
+                    if not pinnedX then pinnedX, pinnedY = wx, wy end
+                end
+            end
+        end
         drawWindowNeonChrome()
         local winW = safeWinW()
         local sideW = math.max(130, math.floor(winW * 0.20))
@@ -1690,6 +1853,7 @@ local function renderFrame()
         if usedCols then
             pcall(ImGui.Columns, 1)
         end
+        drawSwitchEffect(sideW)
     end
     ImGui.End()
     popBorenTheme(cCnt, vCnt)
@@ -1761,6 +1925,8 @@ UI.onVariant       = handleVariant
 function UI.init(hubCtx)
     HUB = hubCtx
     if HUB then HUB.ui_kit = UI_KIT end
+    needCenterPos = true
+    switchAnimStart = nowSec()
     _G.__BOREN_HUB_UI = UI
     OnDrawImGui = renderFrame
     onDrawImGui = renderFrame
