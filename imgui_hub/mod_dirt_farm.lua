@@ -581,7 +581,8 @@ local function findMainDoor()
         if ok and tiles then
             for _, t in pairs(tiles) do
                 if t and tonumber(t.fg) == ITEM.MAIN_DOOR then
-                    return tonumber(t.x), tonumber(t.y)
+                    local tx, ty = tonumber(t.x), tonumber(t.y)
+                    if tx and ty then return tx, ty end
                 end
             end
         end
@@ -1829,13 +1830,86 @@ local function resolveDoorItemName(id)
     return "Item #" .. tostring(id)
 end
 
--- Stage 0: Setup Security Lengkap (Penghalang Kiri, Jammer, WL Public, SL Private, & Door ID di (0,0))
+-- Stage 0: Break Dirt/Cave BG Moat sekitar White Door -> Pasang Cluster Security -> 2-Step SL Re-apply Lock
 local function setupWorldSecurity(row, doorX, doorY)
     if not doorX or not doorY then return true end
     local needAny = DF.CFG.use_blocker_door or DF.CFG.auto_place_jammer or DF.CFG.auto_lock_wl or DF.CFG.auto_place_sl or DF.CFG.use_id_door
     if not needAny then return true end
 
     row.status = "Setup Lock/Door"
+    DF.STATE.status_text = row.name .. " Break Moat"
+
+    local blkID = math.max(1, tonumber(DF.CFG.blocker_door_itemid) or 2810)
+
+    local function isKeptClusterTile(tx, ty)
+        if tx == doorX and (ty == doorY or ty == doorY + 1) then return true end -- White Door & Bedrock
+        local t = getTileSafe(tx, ty)
+        local fg = tonumber(t and t.fg) or 0
+        if tx == doorX - 1 and ty == doorY and (fg == blkID or DOOR_NAME_MAP[fg]) then return true end
+        if tx == doorX - 1 and ty == doorY - 1 and fg == ITEM.JAMMER then return true end
+        if tx == doorX + 1 and ty == doorY and fg == ITEM.WORLD_LOCK then return true end
+        if tx == doorX and ty == doorY - 1 and fg == ITEM.SMALL_LOCK then return true end
+        return false
+    end
+
+    -- 0A. WAJIB BREAK DIRT & CAVE BG DI SEKELILING CLUSTER LOCK (Moat 1-tile Empty Air: fg=0 & bg=0)
+    -- Termasuk kiri/kanan Bedrock (doorX±1, doorY+1), atas WL (doorX+1, doorY-1), dan ring luar ±2!
+    -- Tanpa break ini dulu, Small Lock (Ignore Empty Air + Re-apply) akan bocor ke dirt bawah & bentuknya kacau!
+    local function clearSecurityMoat()
+        addLog(string.format("[Lock/Door] Break dirt & Cave BG area Moat sekitar Main Door (%d,%d)...", doorX, doorY))
+        for pass = 1, 2 do
+            local brokeAny = false
+            for my = doorY - 2, doorY + 2 do
+                for mx = doorX - 2, doorX + 2 do
+                    if not DF.STATE.running then return end
+                    local isOuterRing    = (math.abs(mx - doorX) == 2 or math.abs(my - doorY) == 2)
+                    local isLeftBedrock  = (mx == doorX - 1 and my == doorY + 1)
+                    local isRightAboveWL = (mx == doorX + 1 and my == doorY - 1)
+                    local isRightBelowWL = (mx == doorX + 1 and my == doorY + 1)
+                    if (isOuterRing or isLeftBedrock or isRightAboveWL or isRightBelowWL)
+                        and mx >= 0 and mx <= 99 and my >= 0 and my <= 53
+                        and (not isKeptClusterTile(mx, my))
+                    then
+                        local t = getTileSafe(mx, my)
+                        local fg = tonumber(t and t.fg) or 0
+                        local bg = tonumber(t and t.bg) or 0
+                        local needFg = (fg ~= 0 and isTileClearableByBot(t))
+                        local needBg = (bg ~= 0)
+                        if needFg or needBg then
+                            brokeAny = true
+                            local prefDir = (mx <= doorX) and -1 or 1
+                            breakTileCompletely(mx, my, needFg, needBg, prefDir, true)
+                        end
+                    end
+                end
+            end
+            if not brokeAny then break end
+            safeSleep(120)
+        end
+    end
+
+    clearSecurityMoat()
+
+    -- 0B. Bersihkan FG & Cave BG pada slot cluster yang belum terisi item target
+    local clusterSlots = {
+        { x = doorX - 1, y = doorY,     id = blkID,           dir = -1, enabled = DF.CFG.use_blocker_door },
+        { x = doorX - 1, y = doorY - 1, id = ITEM.JAMMER,     dir = -1, enabled = DF.CFG.auto_place_jammer },
+        { x = doorX + 1, y = doorY,     id = ITEM.WORLD_LOCK, dir =  1, enabled = DF.CFG.auto_lock_wl },
+        { x = doorX,     y = doorY - 1, id = ITEM.SMALL_LOCK, dir =  1, enabled = DF.CFG.auto_place_sl },
+    }
+    for _, sl in ipairs(clusterSlots) do
+        if sl.enabled and sl.x >= 0 and sl.x <= 99 and sl.y >= 0 and sl.y <= 53 then
+            local t = getTileSafe(sl.x, sl.y)
+            if t and tonumber(t.fg) ~= sl.id then
+                local needFg = ((tonumber(t.fg) or 0) ~= 0 and isTileClearableByBot(t))
+                local needBg = ((tonumber(t.bg) or 0) ~= 0)
+                if needFg or needBg then
+                    breakTileCompletely(sl.x, sl.y, needFg, needBg, sl.dir, true)
+                end
+            end
+        end
+    end
+
     DF.STATE.status_text = row.name .. " Lock/Door"
 
     local function ensureAndPlace(tx, ty, itemID, prefDir, label)
@@ -1855,8 +1929,8 @@ local function setupWorldSecurity(row, doorX, doorY)
             t = getTileSafe(tx, ty)
             if t and tonumber(t.fg) == itemID then return true end
         end
-        if t and (tonumber(t.fg) or 0) ~= 0 and isTileClearableByBot(t) then
-            breakTileCompletely(tx, ty, true, true, prefDir, true)
+        if t and (((tonumber(t.fg) or 0) ~= 0 and isTileClearableByBot(t)) or (tonumber(t.bg) or 0) ~= 0) then
+            breakTileCompletely(tx, ty, (tonumber(t.fg) or 0) ~= 0, (tonumber(t.bg) or 0) ~= 0, prefDir, true)
         end
         local okP = placeTileAt(tx, ty, itemID, prefDir)
         if okP then addLog(string.format("[Lock/Door] %s (ID %d) terpasang di (%d,%d)", label, itemID, tx, ty)) end
@@ -1865,7 +1939,6 @@ local function setupWorldSecurity(row, doorX, doorY)
 
     -- 1. Penghalang Kiri (Blocker) di (doorX - 1, doorY)
     if DF.CFG.use_blocker_door and doorX - 1 >= 0 then
-        local blkID = math.max(1, tonumber(DF.CFG.blocker_door_itemid) or 2810)
         ensureAndPlace(doorX - 1, doorY, blkID, -1, "Penghalang " .. resolveDoorItemName(blkID))
     end
 
@@ -1881,31 +1954,52 @@ local function setupWorldSecurity(row, doorX, doorY)
 
     -- 3. World Lock (242) di (doorX + 1, doorY) + Set Public bila wl_public ON
     if DF.CFG.auto_lock_wl and doorX + 1 <= 99 then
-        local hadWL = (tonumber((getTileSafe(doorX + 1, doorY) or {}).fg) == ITEM.WORLD_LOCK)
-        if ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock") and (not hadWL) and DF.CFG.wl_public and sendPacket then
-            safeSleep(250)
+        if ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock") and DF.CFG.wl_public and sendPacket then
+            moveAdjacentSafe(doorX + 1, doorY, 1)
+            safeSleep(220)
             rawAction(doorX + 1, doorY, ITEM.WRENCH)
-            safeSleep(350)
+            safeSleep(380)
             pcall(sendPacket, 2, string.format(
                 "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
                 doorX + 1, doorY
             ))
             safeSleep(450)
+            addLog("[Lock/Door] World Lock (242) diset Public.")
         end
     end
 
-    -- 4. Small Lock (202) di atas White Door (doorX, doorY - 1) + Private & Ignore Air
+    -- 4. Small Lock (202) di atas White Door (doorX, doorY - 1) + 2-Step Apply (Save Ignore Air -> Re-apply Lock!)
     if DF.CFG.auto_place_sl and doorY - 1 >= 0 then
-        local hadSL = (tonumber((getTileSafe(doorX, doorY - 1) or {}).fg) == ITEM.SMALL_LOCK)
-        if ensureAndPlace(doorX, doorY - 1, ITEM.SMALL_LOCK, 1, "Small Lock") and (not hadSL) and sendPacket then
-            safeSleep(250)
+        -- Pastikan petak tepat di atas SL (doorX, doorY - 2) benar-benar kosong (fg=0 & bg=0)
+        if doorY - 2 >= 0 then
+            local tTop = getTileSafe(doorX, doorY - 2)
+            if tTop and ((tonumber(tTop.fg) or 0) ~= 0 or (tonumber(tTop.bg) or 0) ~= 0) then
+                breakTileCompletely(doorX, doorY - 2, true, true, 1, true)
+            end
+        end
+        if ensureAndPlace(doorX, doorY - 1, ITEM.SMALL_LOCK, 1, "Small Lock") and sendPacket then
+            local standY = math.max(0, doorY - 2)
+            moveSafeTo(doorX, standY)
+            safeSleep(220)
+
+            -- Step 1: Simpan Private (0) + Ignore Empty Air (1) terlebih dahulu!
             rawAction(doorX, doorY - 1, ITEM.WRENCH)
-            safeSleep(350)
+            safeSleep(380)
             pcall(sendPacket, 2, string.format(
-                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\ncheckbox_public|0\ncheckbox_ignore|1\n",
+                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|0\ncheckbox_ignore|1\ncheckbox_ignore_air|1\n",
                 doorX, doorY - 1
             ))
-            safeSleep(450)
+            safeSleep(480)
+
+            -- Step 2: Wrench lagi & tekan Re-apply Lock (recalcLock) dengan Ignore Empty Air = ON!
+            rawAction(doorX, doorY - 1, ITEM.WRENCH)
+            safeSleep(380)
+            pcall(sendPacket, 2, string.format(
+                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\nbuttonClicked|recalcLock\ncheckbox_public|0\ncheckbox_ignore|1\ncheckbox_ignore_air|1\n",
+                doorX, doorY - 1
+            ))
+            safeSleep(550)
+            addLog("[Lock/Door] Small Lock (202) Private + Ignore Air + Re-apply Lock selesai rapi!")
         end
     end
 
