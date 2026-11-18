@@ -216,6 +216,17 @@ local function getBorenPal()
         mutedBtn        = mkCol(14, 18,  34, 255),
         mutedBtnHover   = mkCol(46, 24,  78, 255),
 
+        -- Tombol Toggle ON (Hijau Emerald Kontras Tinggi) & OFF (Merah Crimson Kontras Tinggi)
+        onBtn           = mkCol(18, 154,  78, 255),
+        onBtnHover      = mkCol(26, 188,  96, 255),
+        onBtnActive     = mkCol(14, 130,  66, 255),
+        onBorder        = mkCol(82, 255, 162, 255),
+
+        offBtn          = mkCol(164, 30,  52, 255),
+        offBtnHover     = mkCol(202, 42,  68, 255),
+        offBtnActive    = mkCol(136, 22,  42, 255),
+        offBorder       = mkCol(255, 102, 126, 255),
+
         -- Header, Tabel, Separator, Scrollbar (Solid & Neon)
         header          = mkCol(28, 36,  86, 255),
         headerHover     = mkCol(14, 112, 188, 255),
@@ -374,6 +385,80 @@ local function autoBtn(label)
     return ok and (res == true)
 end
 
+-- Spasi vertikal konsisten antar form/bagian agar tidak dempet
+local function uiGap(px)
+    local h = tonumber(px) or 6
+    if ImGui and ImGui.Dummy and ImVec2 then
+        if pcall(ImGui.Dummy, ImVec2(0, h)) then return end
+    end
+    if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
+end
+
+-- Judul bagian berwarna Cyan + jarak rapi
+local function uiSection(title, skipTopSep)
+    if not skipTopSep then
+        uiGap(6)
+        if ImGui and ImGui.Separator then pcall(ImGui.Separator) end
+    end
+    uiGap(4)
+    if title and title ~= "" then
+        coloredText(getBorenPal().textCyan, title)
+        uiGap(3)
+    end
+end
+
+-- Tombol Toggle ON (Hijau Emerald) / OFF (Merah Crimson) dengan proporsi pas & tulisan jelas terbaca
+local function toggleBtn(isOn, id, onLabel, offLabel)
+    local pushed = 0
+    if detectPushColorMode() ~= "none" and ImGui and ImGui.Col then
+        local C = ImGui.Col
+        local P = getBorenPal()
+        local function pc(idx, col)
+            if pushOneColor(idx, col) then pushed = pushed + 1 end
+        end
+        if isOn then
+            pc(C.Button,        P.onBtn)
+            pc(C.ButtonHovered, P.onBtnHover)
+            pc(C.ButtonActive,  P.onBtnActive)
+            pc(C.Border,        P.onBorder)
+            pc(C.Text,          P.textCol)
+        else
+            pc(C.Button,        P.offBtn)
+            pc(C.ButtonHovered, P.offBtnHover)
+            pc(C.ButtonActive,  P.offBtnActive)
+            pc(C.Border,        P.offBorder)
+            pc(C.Text,          P.textCol)
+        end
+    end
+    local txt = isOn and (onLabel or "ON") or (offLabel or "OFF")
+    local lbl = " " .. txt .. " ##" .. tostring(id or "tg")
+    local clicked = autoBtn(lbl)
+    if pushed > 0 and ImGui and ImGui.PopStyleColor then
+        pcall(ImGui.PopStyleColor, pushed)
+    end
+    return clicked
+end
+
+-- Tombol Enable Utama Fitur (proporsi pas ke tulisan, warna kontras Hijau=AKTIF / Merah=MATI)
+local function enableBtn(isOn, id, onLabel, offLabel)
+    return toggleBtn(isOn, id, onLabel or "ON - AKTIF", offLabel or "OFF - MATI")
+end
+
+-- Tombol Sub-Tab Aktif (Aksen Ungu Neon + Border Cyan)
+local function tabBtn(label, isActive)
+    return styledBtn(" " .. tostring(label) .. " ", nil, isActive == true, false)
+end
+
+local UI_KIT = {
+    gap        = uiGap,
+    section    = uiSection,
+    toggleBtn  = toggleBtn,
+    enableBtn  = enableBtn,
+    tabBtn     = tabBtn,
+    coloredText = coloredText,
+    getPal     = getBorenPal,
+}
+
 -- ============================================================================
 -- PLANT SUB-TAB 1: LIST WORLD (AUTOMATION + TABEL LIST WORLD + TAMBAH/SAVE)
 -- ============================================================================
@@ -385,36 +470,41 @@ local function renderPlantWorldsSub()
     end
 
     local availW = safeAvailX()
+    local P = getBorenPal()
 
-    -- Automation Bar: Enable | Loop | Remove Inaccessible | Status
-    ImGui.Text("Enable:")
+    -- 1. KONTROL UTAMA BOT
+    uiSection("Kontrol Auto Plant", true)
+    ImGui.Text("Status Bot:")
     ImGui.SameLine()
-    if autoBtn(E.STATE.enabled and "  ON  ##en" or "  OFF  ##en") then
+    if enableBtn(E.STATE.enabled, "en") then
         if E.STATE.enabled then E.stop() else E.start() end
     end
 
     ImGui.SameLine()
-    ImGui.Text(" | Loop:")
+    ImGui.Text("   Loop:")
     ImGui.SameLine()
-    if autoBtn(E.CFG.loop_enabled and "  ON  ##lp" or "  OFF  ##lp") then
+    if toggleBtn(E.CFG.loop_enabled, "lp") then
         E.CFG.loop_enabled = not E.CFG.loop_enabled
         E.saveData()
     end
 
     ImGui.SameLine()
-    if autoBtn("Remove Inaccessible") then
+    if autoBtn(" Remove Inaccessible ") then
         local removed = E.removeInaccessible()
         setNotice("Dihapus " .. tostring(removed) .. " world inaccessible.")
     end
 
+    uiGap(4)
     local storages = E.getStorageList and E.getStorageList() or {}
-    ImGui.Text(string.format("Status: %s | Storage: %d | World: %d",
-        tostring(E.STATE.status_text or "Idle"), #storages, #E.STATE.rows))
+    coloredText(E.STATE.enabled and P.textActive or P.textMuted,
+        string.format("Status: %s   |   Storage: %d   |   World: %d",
+            tostring(E.STATE.status_text or "Idle"), #storages, #E.STATE.rows))
     if uiNotice ~= "" then
-        ImGui.Text("Info: " .. uiNotice)
+        coloredText(P.textPurple, "Info: " .. uiNotice)
     end
 
-    ImGui.Separator()
+    -- 2. DAFTAR WORLD
+    uiSection("Daftar World (" .. tostring(#E.STATE.rows) .. ")")
 
     -- Tabel List World (5 Kolom)
     if ImGui.BeginTable("BorenPlantTable", 5) then
@@ -461,10 +551,8 @@ local function renderPlantWorldsSub()
         ImGui.EndTable()
     end
 
-    ImGui.Separator()
-
-    -- Form Penambahan & Save World: dipisah jadi [World:DoorID] [Seed ID] [Splice ID] agar gampang ketik!
-    ImGui.Text("Tambah World:")
+    -- 3. FORM TAMBAH WORLD
+    uiSection("Tambah World Baru")
     if ImGui.BeginTable("BorenPlantAddRow", 3) then
         ImGui.TableSetupColumn("World:DoorID")
         ImGui.TableSetupColumn("Seed ID")
@@ -492,6 +580,7 @@ local function renderPlantWorldsSub()
 
         ImGui.EndTable()
     end
+    uiGap(4)
 
     if autoBtn(" + Add World ") then
         local rawW = tostring(addWorldBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -628,9 +717,10 @@ local function renderPlantStorageSub()
     local availW = safeAvailX()
     local storages = E.getStorageList and E.getStorageList() or {}
 
-    ImGui.Text("Daftar World Storage Seed (" .. tostring(#storages) .. "):")
+    uiSection("Daftar World Storage Seed (" .. tostring(#storages) .. ")", true)
     if uiNotice ~= "" then
-        ImGui.Text("Info: " .. uiNotice)
+        coloredText(getBorenPal().textPurple, "Info: " .. uiNotice)
+        uiGap(3)
     end
 
     if ImGui.BeginTable("BorenStorageTable", 2) then
@@ -659,9 +749,7 @@ local function renderPlantStorageSub()
         ImGui.EndTable()
     end
 
-    ImGui.Separator()
-
-    ImGui.Text("Tambah Storage:")
+    uiSection("Tambah Storage Baru")
     if ImGui.BeginTable("BorenPlantAddSt", 2) then
         ImGui.TableSetupColumn("World Storage")
         ImGui.TableSetupColumn("Door ID")
@@ -680,6 +768,7 @@ local function renderPlantStorageSub()
         if chStD then addStorageDoorBuf = newStD end
         ImGui.EndTable()
     end
+    uiGap(4)
 
     if autoBtn(" + Add Storage ") then
         local wStr = tostring(addStorageBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -820,8 +909,7 @@ local function renderPlantSettingsSub()
     local E = HUB.plant
     if not E then return end
 
-    ImGui.Text("Pengaturan Auto Plant")
-    ImGui.Separator()
+    uiSection("Pengaturan Auto Plant", true)
 
     if ImGui.BeginTable("BorenPlantSetOpts", 2) then
         renderOptRow("Mode Tanam", function()
@@ -832,13 +920,13 @@ local function renderPlantSettingsSub()
             end
         end)
         renderOptRow("ModFly (Terbang)", function()
-            if autoBtn(E.CFG.use_modfly and "  ON  ##mf" or "  OFF  ##mf") then
+            if toggleBtn(E.CFG.use_modfly, "mf") then
                 E.CFG.use_modfly = not E.CFG.use_modfly
                 E.saveData()
             end
         end)
         renderOptRow("Abaikan Gems", function()
-            if autoBtn(E.CFG.ignore_gems and "  ON  ##ig" or "  OFF  ##ig") then
+            if toggleBtn(E.CFG.ignore_gems, "ig") then
                 E.CFG.ignore_gems = not E.CFG.ignore_gems
                 E.saveData()
             end
@@ -861,8 +949,10 @@ local function renderPlantSettingsSub()
         ImGui.EndTable()
     end
 
+    uiGap(6)
     ImGui.Separator()
-    ImGui.TextWrapped("Tip: Ketik /hub di chat game untuk sembunyikan / tampilkan jendela ini kapan saja.")
+    uiGap(4)
+    coloredText(getBorenPal().textMuted, "Tip: Ketik /hub di chat game untuk sembunyikan / tampilkan jendela ini kapan saja.")
 end
 
 -- ============================================================================
@@ -870,6 +960,7 @@ end
 -- ============================================================================
 local function renderPlantLogsSub()
     local logs = HUB.logs or {}
+    uiGap(3)
     if autoBtn(" Clear Logs ") then
         HUB.logs = {}
         if HUB.plant then HUB.plant.STATE.logs = {} end
@@ -881,9 +972,11 @@ local function renderPlantLogsSub()
             setNotice("Logs disalin ke clipboard!")
         end
     end
+    uiGap(4)
     ImGui.Separator()
+    uiGap(4)
     if #logs == 0 then
-        ImGui.Text("Belum ada log aktivitas.")
+        coloredText(getBorenPal().textMuted, "Belum ada log aktivitas.")
     else
         for i = 1, math.min(20, #logs) do
             ImGui.TextWrapped(tostring(logs[i]))
@@ -1613,6 +1706,7 @@ UI.onVariant       = handleVariant
 
 function UI.init(hubCtx)
     HUB = hubCtx
+    if HUB then HUB.ui_kit = UI_KIT end
     _G.__BOREN_HUB_UI = UI
     OnDrawImGui = renderFrame
     onDrawImGui = renderFrame

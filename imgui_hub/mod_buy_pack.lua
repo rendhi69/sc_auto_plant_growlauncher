@@ -521,6 +521,51 @@ local function autoBtn(label)
     return ok and (res == true)
 end
 
+local function uiKit()
+    return HUB_REF and HUB_REF.ui_kit or nil
+end
+
+local function uiGap(px)
+    local k = uiKit()
+    if k and k.gap then k.gap(px); return end
+    if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
+end
+
+local function uiSection(title, skipTopSep)
+    local k = uiKit()
+    if k and k.section then k.section(title, skipTopSep); return end
+    if not skipTopSep then ImGui.Separator() end
+    if title and title ~= "" then ImGui.Text(title) end
+end
+
+local function uiEnableBtn(isOn, id)
+    local k = uiKit()
+    if k and k.enableBtn then return k.enableBtn(isOn, id) end
+    return autoBtn((isOn and " ON - AKTIF ##" or " OFF - MATI ##") .. tostring(id))
+end
+
+local function uiToggleBtn(isOn, id, onLbl, offLbl)
+    local k = uiKit()
+    if k and k.toggleBtn then return k.toggleBtn(isOn, id, onLbl, offLbl) end
+    return autoBtn(" " .. (isOn and (onLbl or "ON") or (offLbl or "OFF")) .. " ##" .. tostring(id))
+end
+
+local function uiTabBtn(label, isActive)
+    local k = uiKit()
+    if k and k.tabBtn then return k.tabBtn(label, isActive) end
+    return autoBtn(isActive and ("[ " .. label .. " ]") or label)
+end
+
+local function uiNote(msg)
+    if not msg or msg == "" then return end
+    local k = uiKit()
+    if k and k.coloredText and k.getPal then
+        k.coloredText(k.getPal().textPurple, "Info: " .. tostring(msg))
+    else
+        ImGui.Text("Info: " .. tostring(msg))
+    end
+end
+
 local function availX()
     if ImGui and ImGui.GetContentRegionAvail then
         local ok, av = pcall(ImGui.GetContentRegionAvail)
@@ -580,17 +625,17 @@ end
 
 local function renderMainSub()
     local w = availX()
-    ImGui.Text("Enable:"); ImGui.SameLine()
-    if autoBtn(BP.STATE.enabled and "  ON  ##bp_en" or "  OFF  ##bp_en") then
+    uiSection("Kontrol Buy Pack", true)
+    ImGui.Text("Status Bot:"); ImGui.SameLine()
+    if uiEnableBtn(BP.STATE.enabled, "bp_en") then
         if BP.STATE.enabled then BP.stop() else BP.start() end
     end
-    ImGui.SameLine()
-    ImGui.Text(string.format(" | Gems: %d | Beli: %d | %s",
+    uiGap(4)
+    ImGui.Text(string.format("Gems: %d   |   Beli: %d   |   Status: %s",
         getGemsSafe(), tonumber(BP.STATE.bought_count) or 0, tostring(BP.STATE.status_text)))
+    uiNote(uiNotice)
 
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
-    ImGui.Separator()
-
+    uiSection("Info & Target Pack")
     if ImGui.BeginTable("BorenPackMainOpts", 2) then
         renderOptRow("Pack Aktif", function()
             ImGui.Text(tostring(BP.CFG.pack_name) .. " (" .. tostring(BP.CFG.pack_id) .. ")")
@@ -613,12 +658,14 @@ local function renderMainSub()
         ImGui.EndTable()
     end
 
+    uiSection("Konfigurasi Pack & World Drop")
     ImGui.Text("Pack ID (Debug Name):")
     ImGui.PushItemWidth(math.max(160, w - 12))
     local chP, nP = safeInputText("##bp_pid", BP.CFG.pack_id, 128)
     ImGui.PopItemWidth()
     if chP then BP.CFG.pack_id = nP; BP.saveData() end
 
+    uiGap(5)
     ImGui.Text("World Save Drop:")
     local swRaw = tostring(BP.CFG.save_world or ""):gsub("|", ":")
     local swName, swDoor = swRaw:match("^([^:]+):(.*)$")
@@ -649,6 +696,7 @@ local function renderMainSub()
         end
         ImGui.EndTable()
     end
+    uiGap(5)
 
     if autoBtn(" + World Ini ##bp") then
         local curW = getCurrentWorldSafe()
@@ -665,11 +713,12 @@ end
 
 local function renderSearchSub()
     local w = availX()
-    ImGui.Text("Cari Pack (Database GitHub: " .. tostring(#BP.STATE.pack_db) .. " pack):")
+    uiSection("Cari Pack (Database GitHub: " .. tostring(#BP.STATE.pack_db) .. " pack)", true)
     ImGui.PushItemWidth(math.max(160, w - 12))
     local ch, nv = safeInputText("##bp_search", searchBuf, 128)
     ImGui.PopItemWidth()
     if ch then searchBuf = nv end
+    uiGap(5)
 
     local q = trimStr(searchBuf):lower()
 
@@ -710,16 +759,16 @@ local function renderSearchSub()
         end
         ImGui.EndTable()
     end
+    uiGap(4)
     ImGui.Text("Menampilkan maks 15 hasil. Ketik kata kunci untuk menyaring.")
 end
 
 local function renderSettingsSub()
-    ImGui.Text("Pengaturan Buy Pack")
-    ImGui.Separator()
+    uiSection("Pengaturan Buy Pack", true)
 
     if ImGui.BeginTable("BorenPackSetOpts", 2) then
         renderOptRow("Auto Drop Anti-Take", function()
-            if autoBtn(BP.CFG.auto_drop and "  ON  ##bpad" or "  OFF  ##bpad") then
+            if uiToggleBtn(BP.CFG.auto_drop, "bpad") then
                 BP.CFG.auto_drop = not BP.CFG.auto_drop; BP.saveData()
             end
         end)
@@ -738,8 +787,11 @@ local function renderSettingsSub()
 end
 
 local function renderLogsSub()
+    uiGap(3)
     if autoBtn(" Clear Logs ##bp") then BP.STATE.logs = {} end
+    uiGap(4)
     ImGui.Separator()
+    uiGap(4)
     if #BP.STATE.logs == 0 then ImGui.Text("Belum ada log Buy Pack.")
     else
         for i = 1, math.min(20, #BP.STATE.logs) do ImGui.TextWrapped(tostring(BP.STATE.logs[i])) end
@@ -747,13 +799,14 @@ local function renderLogsSub()
 end
 
 function BP.render(hub)
-    if autoBtn(activeSub == "main" and "[ Buy & Drop ]" or "Buy & Drop") then activeSub = "main" end
+    if uiTabBtn("Buy & Drop", activeSub == "main") then activeSub = "main" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "search" and "[ Cari Pack ]" or "Cari Pack") then activeSub = "search" end
+    if uiTabBtn("Cari Pack", activeSub == "search") then activeSub = "search" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "settings" and "[ Settings ]" or "Settings") then activeSub = "settings" end
+    if uiTabBtn("Settings", activeSub == "settings") then activeSub = "settings" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "logs" and "[ Logs ]" or "Logs") then activeSub = "logs" end
+    if uiTabBtn("Logs", activeSub == "logs") then activeSub = "logs" end
+    uiGap(4)
     ImGui.Separator()
 
     if activeSub == "main" then renderMainSub()

@@ -825,6 +825,51 @@ local function autoBtn(label)
     return ok and (res == true)
 end
 
+local function uiKit()
+    return HUB_REF and HUB_REF.ui_kit or nil
+end
+
+local function uiGap(px)
+    local k = uiKit()
+    if k and k.gap then k.gap(px); return end
+    if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
+end
+
+local function uiSection(title, skipTopSep)
+    local k = uiKit()
+    if k and k.section then k.section(title, skipTopSep); return end
+    if not skipTopSep then ImGui.Separator() end
+    if title and title ~= "" then ImGui.Text(title) end
+end
+
+local function uiEnableBtn(isOn, id)
+    local k = uiKit()
+    if k and k.enableBtn then return k.enableBtn(isOn, id) end
+    return autoBtn((isOn and " ON - AKTIF ##" or " OFF - MATI ##") .. tostring(id))
+end
+
+local function uiToggleBtn(isOn, id, onLbl, offLbl)
+    local k = uiKit()
+    if k and k.toggleBtn then return k.toggleBtn(isOn, id, onLbl, offLbl) end
+    return autoBtn(" " .. (isOn and (onLbl or "ON") or (offLbl or "OFF")) .. " ##" .. tostring(id))
+end
+
+local function uiTabBtn(label, isActive)
+    local k = uiKit()
+    if k and k.tabBtn then return k.tabBtn(label, isActive) end
+    return autoBtn(isActive and ("[ " .. label .. " ]") or label)
+end
+
+local function uiNote(msg)
+    if not msg or msg == "" then return end
+    local k = uiKit()
+    if k and k.coloredText and k.getPal then
+        k.coloredText(k.getPal().textPurple, "Info: " .. tostring(msg))
+    else
+        ImGui.Text("Info: " .. tostring(msg))
+    end
+end
+
 local function availX()
     if ImGui and ImGui.GetContentRegionAvail then
         local ok, av = pcall(ImGui.GetContentRegionAvail)
@@ -839,16 +884,17 @@ end
 
 local function renderWorldsSub()
     local w = availX()
-    ImGui.Text("Enable:"); ImGui.SameLine()
-    if autoBtn(SB.STATE.enabled and "  ON  ##sb_en" or "  OFF  ##sb_en") then
+    uiSection("Kontrol Build Soil", true)
+    ImGui.Text("Status Bot:"); ImGui.SameLine()
+    if uiEnableBtn(SB.STATE.enabled, "sb_en") then
         if SB.STATE.enabled then SB.stop() else SB.start() end
     end
-    ImGui.SameLine(); ImGui.Text(" | Loop:"); ImGui.SameLine()
-    if autoBtn(SB.CFG.loop_enabled and "  ON  ##sb_lp" or "  OFF  ##sb_lp") then
+    ImGui.SameLine(); ImGui.Text("   Loop:"); ImGui.SameLine()
+    if uiToggleBtn(SB.CFG.loop_enabled, "sb_lp") then
         SB.CFG.loop_enabled = not SB.CFG.loop_enabled; SB.saveData()
     end
     ImGui.SameLine()
-    if autoBtn("Remove Inaccessible##sb") then
+    if autoBtn(" Remove Inaccessible ##sb") then
         local kept, rem = {}, 0
         for _, r in ipairs(SB.STATE.rows) do
             if tostring(r.status):lower():find("inaccessible", 1, true) then rem = rem + 1
@@ -858,11 +904,12 @@ local function renderWorldsSub()
         uiNotice = "Dihapus " .. tostring(rem) .. " world inaccessible."
     end
 
-    ImGui.Text(string.format("Status: %s | World: %d | Storage: %d",
+    uiGap(4)
+    ImGui.Text(string.format("Status: %s   |   World: %d   |   Storage: %d",
         tostring(SB.STATE.status_text), #SB.STATE.rows, #getStorageList()))
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
+    uiNote(uiNotice)
 
-    ImGui.Separator()
+    uiSection("Daftar World Soil (" .. tostring(#SB.STATE.rows) .. ")")
 
     if ImGui.BeginTable("BorenSoilTable", 4) then
         ImGui.TableSetupColumn("Name")
@@ -893,8 +940,7 @@ local function renderWorldsSub()
         ImGui.EndTable()
     end
 
-    ImGui.Separator()
-    ImGui.Text("Tambah World Soil:")
+    uiSection("Tambah World Soil Baru")
     if ImGui.BeginTable("BorenSoilAddW", 2) then
         ImGui.TableSetupColumn("World:DoorID")
         ImGui.TableSetupColumn("Block ID")
@@ -913,6 +959,7 @@ local function renderWorldsSub()
         if chB then addBlockBuf = nvB:gsub("[^0-9]", "") end
         ImGui.EndTable()
     end
+    uiGap(4)
 
     if autoBtn(" + Add World ##sb") then
         local rawW = trimStr(addWorldBuf)
@@ -965,6 +1012,7 @@ local function renderWorldsSub()
     ImGui.SameLine()
     if autoBtn(" Save ##sb") then SB.saveData(); uiNotice = "Tersimpan " .. tostring(#SB.STATE.rows) .. " world!" end
 
+    uiGap(4)
     if autoBtn(" Import ##sb") then
         local clip = ""
         if ImGui.GetClipboardText then local ok, c = pcall(ImGui.GetClipboardText); if ok and type(c) == "string" then clip = c end end
@@ -991,8 +1039,8 @@ end
 local function renderStorageSub()
     local w = availX()
     local storages = getStorageList()
-    ImGui.Text("Storage Block Soil / Platform (" .. tostring(#storages) .. "):")
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
+    uiSection("Storage Block Soil / Platform (" .. tostring(#storages) .. ")", true)
+    uiNote(uiNotice)
 
     if ImGui.BeginTable("BorenSoilStorTable", 2) then
         ImGui.TableSetupColumn("Storage World")
@@ -1016,8 +1064,7 @@ local function renderStorageSub()
         ImGui.EndTable()
     end
 
-    ImGui.Separator()
-    ImGui.Text("Tambah Storage:")
+    uiSection("Tambah Storage Baru")
     if ImGui.BeginTable("BorenSoilAddSt", 2) then
         ImGui.TableSetupColumn("World Storage")
         ImGui.TableSetupColumn("Door ID")
@@ -1036,6 +1083,7 @@ local function renderStorageSub()
         if chStD then addStorageDoorBuf = nvStD end
         ImGui.EndTable()
     end
+    uiGap(4)
 
     if autoBtn(" + Add Storage ##sb") then
         local wStr = trimStr(addStorageBuf)
@@ -1103,8 +1151,7 @@ local function renderOptRow(label, controlFn)
 end
 
 local function renderSettingsSub()
-    ImGui.Text("Pengaturan Build Soil")
-    ImGui.Separator()
+    uiSection("Pengaturan Build Soil", true)
 
     if ImGui.BeginTable("BorenSoilSetOpts", 2) then
         renderOptRow("Mode Pasang", function()
@@ -1114,27 +1161,27 @@ local function renderSettingsSub()
             end
         end)
         renderOptRow("Pasang Platform (102)", function()
-            if autoBtn(SB.CFG.place_platform and "  ON  ##sbp" or "  OFF  ##sbp") then
+            if uiToggleBtn(SB.CFG.place_platform, "sbp") then
                 SB.CFG.place_platform = not SB.CFG.place_platform; SB.saveData()
             end
         end)
         renderOptRow("Pasang Water Pojok (822)", function()
-            if autoBtn(SB.CFG.enable_water and "  ON  ##sbw" or "  OFF  ##sbw") then
+            if uiToggleBtn(SB.CFG.enable_water, "sbw") then
                 SB.CFG.enable_water = not SB.CFG.enable_water; SB.saveData()
             end
         end)
         renderOptRow("Water Pojok Kiri (X=0)", function()
-            if autoBtn(SB.CFG.water_left and "  ON  ##sbwl" or "  OFF  ##sbwl") then
+            if uiToggleBtn(SB.CFG.water_left, "sbwl") then
                 SB.CFG.water_left = not SB.CFG.water_left; SB.saveData()
             end
         end)
         renderOptRow("Water Pojok Kanan (X=99)", function()
-            if autoBtn(SB.CFG.water_right and "  ON  ##sbwr" or "  OFF  ##sbwr") then
+            if uiToggleBtn(SB.CFG.water_right, "sbwr") then
                 SB.CFG.water_right = not SB.CFG.water_right; SB.saveData()
             end
         end)
         renderOptRow("ModFly", function()
-            if autoBtn(SB.CFG.use_modfly and "  ON  ##sbmf" or "  OFF  ##sbmf") then
+            if uiToggleBtn(SB.CFG.use_modfly, "sbmf") then
                 SB.CFG.use_modfly = not SB.CFG.use_modfly; SB.saveData()
             end
         end)
@@ -1153,8 +1200,11 @@ local function renderSettingsSub()
 end
 
 local function renderLogsSub()
+    uiGap(3)
     if autoBtn(" Clear Logs ##sb") then SB.STATE.logs = {} end
+    uiGap(4)
     ImGui.Separator()
+    uiGap(4)
     if #SB.STATE.logs == 0 then ImGui.Text("Belum ada log Build Soil.")
     else
         for i = 1, math.min(20, #SB.STATE.logs) do ImGui.TextWrapped(tostring(SB.STATE.logs[i])) end
@@ -1162,13 +1212,14 @@ local function renderLogsSub()
 end
 
 function SB.render(hub)
-    if autoBtn(activeSub == "worlds" and "[ List World ]" or "List World") then activeSub = "worlds" end
+    if uiTabBtn("List World", activeSub == "worlds") then activeSub = "worlds" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "storage" and "[ List Storage ]" or "List Storage") then activeSub = "storage" end
+    if uiTabBtn("List Storage", activeSub == "storage") then activeSub = "storage" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "settings" and "[ Settings ]" or "Settings") then activeSub = "settings" end
+    if uiTabBtn("Settings", activeSub == "settings") then activeSub = "settings" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "logs" and "[ Logs ]" or "Logs") then activeSub = "logs" end
+    if uiTabBtn("Logs", activeSub == "logs") then activeSub = "logs" end
+    uiGap(4)
     ImGui.Separator()
 
     if activeSub == "worlds" then renderWorldsSub()

@@ -1789,11 +1789,56 @@ DF._test = {
 }
 
 -- ============================================================================
--- 6. UI RENDERER (List World | Find World | List Storage | Settings | Logs)
+-- 6. UI RENDERER (List World | Find World | Lock & Door | Storage | Settings | Logs)
 -- ============================================================================
 local function autoBtn(label)
     local ok, res = pcall(ImGui.Button, label)
     return ok and (res == true)
+end
+
+local function uiKit()
+    return HUB_REF and HUB_REF.ui_kit or nil
+end
+
+local function uiGap(px)
+    local k = uiKit()
+    if k and k.gap then k.gap(px); return end
+    if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
+end
+
+local function uiSection(title, skipTopSep)
+    local k = uiKit()
+    if k and k.section then k.section(title, skipTopSep); return end
+    if not skipTopSep then ImGui.Separator() end
+    if title and title ~= "" then ImGui.Text(title) end
+end
+
+local function uiEnableBtn(isOn, id)
+    local k = uiKit()
+    if k and k.enableBtn then return k.enableBtn(isOn, id) end
+    return autoBtn((isOn and " ON - AKTIF ##" or " OFF - MATI ##") .. tostring(id))
+end
+
+local function uiToggleBtn(isOn, id, onLbl, offLbl)
+    local k = uiKit()
+    if k and k.toggleBtn then return k.toggleBtn(isOn, id, onLbl, offLbl) end
+    return autoBtn(" " .. (isOn and (onLbl or "ON") or (offLbl or "OFF")) .. " ##" .. tostring(id))
+end
+
+local function uiTabBtn(label, isActive)
+    local k = uiKit()
+    if k and k.tabBtn then return k.tabBtn(label, isActive) end
+    return autoBtn(isActive and ("[ " .. label .. " ]") or label)
+end
+
+local function uiNote(msg)
+    if not msg or msg == "" then return end
+    local k = uiKit()
+    if k and k.coloredText and k.getPal then
+        k.coloredText(k.getPal().textPurple, "Info: " .. tostring(msg))
+    else
+        ImGui.Text("Info: " .. tostring(msg))
+    end
 end
 
 local function availX()
@@ -1810,16 +1855,17 @@ end
 
 local function renderWorldsSub()
     local w = availX()
-    ImGui.Text("Enable:"); ImGui.SameLine()
-    if autoBtn(DF.STATE.enabled and "  ON  ##df_en" or "  OFF  ##df_en") then
+    uiSection("Kontrol Dirt Farm", true)
+    ImGui.Text("Status Bot:"); ImGui.SameLine()
+    if uiEnableBtn(DF.STATE.enabled, "df_en") then
         if DF.STATE.enabled then DF.stop() else DF.start() end
     end
-    ImGui.SameLine(); ImGui.Text(" | Loop:"); ImGui.SameLine()
-    if autoBtn(DF.CFG.loop_enabled and "  ON  ##df_lp" or "  OFF  ##df_lp") then
+    ImGui.SameLine(); ImGui.Text("   Loop:"); ImGui.SameLine()
+    if uiToggleBtn(DF.CFG.loop_enabled, "df_lp") then
         DF.CFG.loop_enabled = not DF.CFG.loop_enabled; DF.saveData()
     end
     ImGui.SameLine()
-    if autoBtn("Remove Inaccessible##df") then
+    if autoBtn(" Remove Inaccessible ##df") then
         local kept, rem = {}, 0
         for _, r in ipairs(DF.STATE.rows) do
             if tostring(r.status):lower():find("inaccessible", 1, true) then rem = rem + 1
@@ -1829,14 +1875,15 @@ local function renderWorldsSub()
         uiNotice = "Dihapus " .. tostring(rem) .. " world inaccessible."
     end
 
+    uiGap(4)
     local modeLabel = DF.CFG.find_world_mode and "Find World" or "Manual List"
     local brkLabel  = DF.CFG.break_3_mode and "3-Tile" or "1-Tile"
     local bgLabel   = DF.CFG.break_cave_bg and "BG:ON" or "BG:OFF"
-    ImGui.Text(string.format("Status: %s | Mode: %s | %s | %s",
+    ImGui.Text(string.format("Status: %s   |   Mode: %s   |   %s   |   %s",
         tostring(DF.STATE.status_text), modeLabel, brkLabel, bgLabel))
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
+    uiNote(uiNotice)
 
-    ImGui.Separator()
+    uiSection("Daftar World DF (" .. tostring(#DF.STATE.rows) .. ")")
 
     if ImGui.BeginTable("BorenDFTable", 3) then
         ImGui.TableSetupColumn("World Name")
@@ -1864,8 +1911,7 @@ local function renderWorldsSub()
         ImGui.EndTable()
     end
 
-    ImGui.Separator()
-    ImGui.Text("Tambah World DF:")
+    uiSection("Tambah World DF Baru")
     if ImGui.BeginTable("BorenDFAddW", 2) then
         ImGui.TableSetupColumn("World Name")
         ImGui.TableSetupColumn("Door ID")
@@ -1884,6 +1930,7 @@ local function renderWorldsSub()
         if chD then addDoorBuf = nvD end
         ImGui.EndTable()
     end
+    uiGap(4)
 
     if autoBtn(" + Add World ##df") then
         local wStr = trimStr(addWorldBuf)
@@ -1923,6 +1970,7 @@ local function renderWorldsSub()
     ImGui.SameLine()
     if autoBtn(" Save ##df") then DF.saveData(); uiNotice = "Tersimpan " .. tostring(#DF.STATE.rows) .. " world!" end
 
+    uiGap(4)
     if autoBtn(" Import ##df") then
         local clip = ""
         if ImGui.GetClipboardText then local ok, c = pcall(ImGui.GetClipboardText); if ok and type(c) == "string" then clip = c end end
@@ -1992,13 +2040,12 @@ local function renderOptRow(label, controlFn)
 end
 
 local function renderFindWorldSub()
-    ImGui.Text("Auto Find World Kosong (Bebas Lock & Player)")
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
-    ImGui.Separator()
+    uiSection("Auto Find World Kosong (Bebas Lock & Player)", true)
+    uiNote(uiNotice)
 
     if ImGui.BeginTable("BorenDFFindOpts", 2) then
         renderOptRow("Auto Find saat Start", function()
-            if autoBtn(DF.CFG.find_world_mode and "  ON  ##dffm" or "  OFF  ##dffm") then
+            if uiToggleBtn(DF.CFG.find_world_mode, "dffm") then
                 DF.CFG.find_world_mode = not DF.CFG.find_world_mode; DF.saveData()
             end
         end)
@@ -2008,7 +2055,7 @@ local function renderFindWorldSub()
             end)
         end)
         renderOptRow("Campur Angka (0-9)", function()
-            if autoBtn(DF.CFG.find_use_num and "  ON  ##dffn" or "  OFF  ##dffn") then
+            if uiToggleBtn(DF.CFG.find_use_num, "dffn") then
                 DF.CFG.find_use_num = not DF.CFG.find_use_num; DF.saveData()
             end
         end)
@@ -2018,19 +2065,19 @@ local function renderFindWorldSub()
             end)
         end)
         renderOptRow("Auto World Lock (242)", function()
-            if autoBtn(DF.CFG.auto_lock_wl and "  ON  ##dfwl" or "  OFF  ##dfwl") then
+            if uiToggleBtn(DF.CFG.auto_lock_wl, "dfwl") then
                 DF.CFG.auto_lock_wl = not DF.CFG.auto_lock_wl; DF.saveData()
             end
         end)
         renderOptRow("Auto Jammer (226)", function()
-            if autoBtn(DF.CFG.auto_place_jammer and "  ON  ##dfjm" or "  OFF  ##dfjm") then
+            if uiToggleBtn(DF.CFG.auto_place_jammer, "dfjm") then
                 DF.CFG.auto_place_jammer = not DF.CFG.auto_place_jammer; DF.saveData()
             end
         end)
         ImGui.EndTable()
     end
 
-    ImGui.Separator()
+    uiSection("Aksi Pencarian")
     if autoBtn(DF.STATE.finding_one and " Sedang Mencari... ##dff1" or " Cari 1 World Kosong Sekarang ##dff1") then
         if not DF.STATE.finding_one then
             uiNotice = "Mencari world kosong..."
@@ -2042,14 +2089,15 @@ local function renderFindWorldSub()
         DF.STATE.finding_one = false
         uiNotice = "Pencarian dihentikan."
     end
-    ImGui.Text("Total ditemukan sesi ini: " .. tostring(DF.STATE.found_count) .. " | Status: " .. tostring(DF.STATE.status_text))
+    uiGap(4)
+    ImGui.Text("Total ditemukan sesi ini: " .. tostring(DF.STATE.found_count) .. "   |   Status: " .. tostring(DF.STATE.status_text))
 end
 
 local function renderStorageSub()
     local w = availX()
     local storages = getStorageList()
-    ImGui.Text("Storage Platform / Tool (" .. tostring(#storages) .. "):")
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
+    uiSection("Storage Platform / Tool (" .. tostring(#storages) .. ")", true)
+    uiNote(uiNotice)
 
     if ImGui.BeginTable("BorenDFStorTable", 2) then
         ImGui.TableSetupColumn("Storage World")
@@ -2073,8 +2121,7 @@ local function renderStorageSub()
         ImGui.EndTable()
     end
 
-    ImGui.Separator()
-    ImGui.Text("Tambah Storage:")
+    uiSection("Tambah Storage Baru")
     if ImGui.BeginTable("BorenDFAddSt", 2) then
         ImGui.TableSetupColumn("World Storage")
         ImGui.TableSetupColumn("Door ID")
@@ -2093,6 +2140,7 @@ local function renderStorageSub()
         if chStD then addStorageDoorBuf = nvStD end
         ImGui.EndTable()
     end
+    uiGap(4)
 
     if autoBtn(" + Add Storage ##df") then
         local wStr = trimStr(addStorageBuf)
@@ -2115,67 +2163,66 @@ local function renderStorageSub()
 end
 
 local function renderSettingsSub()
-    ImGui.Text("Pengaturan Dirt Farm (Break & Build)")
-    ImGui.Separator()
+    uiSection("Pengaturan Dirt Farm (Break & Build)", true)
 
     if ImGui.BeginTable("BorenDFSetOpts", 2) then
         renderOptRow("Break 3 Tile", function()
-            if autoBtn(DF.CFG.break_3_mode and "  ON (3-Tile)  ##dfb3" or "  OFF (1-Tile)  ##dfb3") then
+            if uiToggleBtn(DF.CFG.break_3_mode, "dfb3", "ON (3-Tile)", "OFF (1-Tile)") then
                 DF.CFG.break_3_mode = not DF.CFG.break_3_mode; DF.saveData()
             end
         end)
         renderOptRow("Break Cave BG (14)", function()
-            if autoBtn(DF.CFG.break_cave_bg and "  ON  ##dfbg" or "  OFF  ##dfbg") then
+            if uiToggleBtn(DF.CFG.break_cave_bg, "dfbg") then
                 DF.CFG.break_cave_bg = not DF.CFG.break_cave_bg; DF.saveData()
             end
         end)
         renderOptRow("Break Lava & Tambal", function()
-            if autoBtn(DF.CFG.break_lava and "  ON  ##dflv" or "  OFF  ##dflv") then
+            if uiToggleBtn(DF.CFG.break_lava, "dflv") then
                 DF.CFG.break_lava = not DF.CFG.break_lava; DF.saveData()
             end
         end)
         renderOptRow("Break Rock Platform", function()
-            if autoBtn(DF.CFG.break_rock and "  ON  ##dfrk" or "  OFF  ##dfrk") then
+            if uiToggleBtn(DF.CFG.break_rock, "dfrk") then
                 DF.CFG.break_rock = not DF.CFG.break_rock; DF.saveData()
             end
         end)
         renderOptRow("Clear Sisi Pinggir", function()
-            if autoBtn(DF.CFG.clear_side and "  ON  ##dfc1" or "  OFF  ##dfc1") then
+            if uiToggleBtn(DF.CFG.clear_side, "dfc1") then
                 DF.CFG.clear_side = not DF.CFG.clear_side; DF.saveData()
             end
         end)
         renderOptRow("Clear Lorong Baris", function()
-            if autoBtn(DF.CFG.clear_rows and "  ON  ##dfc2" or "  OFF  ##dfc2") then
+            if uiToggleBtn(DF.CFG.clear_rows, "dfc2") then
                 DF.CFG.clear_rows = not DF.CFG.clear_rows; DF.saveData()
             end
         end)
         renderOptRow("Bangun Dirt Atas", function()
-            if autoBtn(DF.CFG.build_upper_dirt and "  ON  ##dfud" or "  OFF  ##dfud") then
+            if uiToggleBtn(DF.CFG.build_upper_dirt, "dfud") then
                 DF.CFG.build_upper_dirt = not DF.CFG.build_upper_dirt; DF.saveData()
             end
         end)
         renderOptRow("Auto Farm Dirt", function()
-            if autoBtn(DF.CFG.auto_farm_dirt and "  ON  ##dfaf" or "  OFF  ##dfaf") then
+            if uiToggleBtn(DF.CFG.auto_farm_dirt, "dfaf") then
                 DF.CFG.auto_farm_dirt = not DF.CFG.auto_farm_dirt; DF.saveData()
             end
         end)
         renderOptRow("Pasang Platform (102)", function()
-            if autoBtn(DF.CFG.place_platform and "  ON  ##dfc3" or "  OFF  ##dfc3") then
+            if uiToggleBtn(DF.CFG.place_platform, "dfc3") then
                 DF.CFG.place_platform = not DF.CFG.place_platform; DF.saveData()
             end
         end)
         renderOptRow("Auto Collect Drops", function()
-            if autoBtn(DF.CFG.auto_collect and "  ON  ##dfac" or "  OFF  ##dfac") then
+            if uiToggleBtn(DF.CFG.auto_collect, "dfac") then
                 DF.CFG.auto_collect = not DF.CFG.auto_collect; DF.saveData()
             end
         end)
         renderOptRow("Auto Trash Sampah", function()
-            if autoBtn(DF.CFG.auto_trash and "  ON  ##dfc4" or "  OFF  ##dfc4") then
+            if uiToggleBtn(DF.CFG.auto_trash, "dfc4") then
                 DF.CFG.auto_trash = not DF.CFG.auto_trash; DF.saveData()
             end
         end)
         renderOptRow("ModFly", function()
-            if autoBtn(DF.CFG.use_modfly and "  ON  ##dfc5" or "  OFF  ##dfc5") then
+            if uiToggleBtn(DF.CFG.use_modfly, "dfc5") then
                 DF.CFG.use_modfly = not DF.CFG.use_modfly; DF.saveData()
             end
         end)
@@ -2210,33 +2257,32 @@ local function cyclePreset(presets, curId, delta)
 end
 
 local function renderLockDoorSub()
-    ImGui.Text("Pengaturan Lock, Door ID (0,0) & Penghalang Kiri")
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
-    ImGui.Separator()
+    uiSection("Pengaturan Lock, Door ID (0,0) & Penghalang Kiri", true)
+    uiNote(uiNotice)
 
     if ImGui.BeginTable("BorenDFLockOpts", 2) then
         renderOptRow("World Lock (242)", function()
-            if autoBtn(DF.CFG.auto_lock_wl and "  ON  ##dfl_wl" or "  OFF  ##dfl_wl") then
+            if uiToggleBtn(DF.CFG.auto_lock_wl, "dfl_wl") then
                 DF.CFG.auto_lock_wl = not DF.CFG.auto_lock_wl; DF.saveData()
             end
-            ImGui.SameLine(); ImGui.Text("Public:"); ImGui.SameLine()
-            if autoBtn(DF.CFG.wl_public and " ON ##dfl_wp" or " OFF ##dfl_wp") then
+            ImGui.SameLine(); ImGui.Text("  Public:"); ImGui.SameLine()
+            if uiToggleBtn(DF.CFG.wl_public, "dfl_wp") then
                 DF.CFG.wl_public = not DF.CFG.wl_public; DF.saveData()
             end
         end)
         renderOptRow("Small Lock (202)", function()
-            if autoBtn(DF.CFG.auto_place_sl and "  ON  ##dfl_sl" or "  OFF  ##dfl_sl") then
+            if uiToggleBtn(DF.CFG.auto_place_sl, "dfl_sl") then
                 DF.CFG.auto_place_sl = not DF.CFG.auto_place_sl; DF.saveData()
             end
         end)
         renderOptRow("Signal Jammer (226)", function()
-            if autoBtn(DF.CFG.auto_place_jammer and "  ON  ##dfl_jm" or "  OFF  ##dfl_jm") then
+            if uiToggleBtn(DF.CFG.auto_place_jammer, "dfl_jm") then
                 DF.CFG.auto_place_jammer = not DF.CFG.auto_place_jammer; DF.saveData()
             end
         end)
 
         renderOptRow("Pasang Door ID (0,0)", function()
-            if autoBtn(DF.CFG.use_id_door and "  ON  ##dfl_ud" or "  OFF  ##dfl_ud") then
+            if uiToggleBtn(DF.CFG.use_id_door, "dfl_ud") then
                 DF.CFG.use_id_door = not DF.CFG.use_id_door; DF.saveData()
             end
         end)
@@ -2271,7 +2317,7 @@ local function renderLockDoorSub()
         end)
 
         renderOptRow("Pasang Penghalang", function()
-            if autoBtn(DF.CFG.use_blocker_door and "  ON  ##dfl_ub" or "  OFF  ##dfl_ub") then
+            if uiToggleBtn(DF.CFG.use_blocker_door, "dfl_ub") then
                 DF.CFG.use_blocker_door = not DF.CFG.use_blocker_door; DF.saveData()
             end
         end)
@@ -2295,13 +2341,18 @@ local function renderLockDoorSub()
         ImGui.EndTable()
     end
 
+    uiGap(6)
     ImGui.Separator()
+    uiGap(4)
     ImGui.TextWrapped("Preset Door: Door (12), Dungeon (30), Portal (544), House (224), Air Vent (2810). Preset Penghalang: Air Vent (2810), Door (12), Dungeon (30), Portcullis (60), House (224), Screen (858), Portal (544). Bisa ketik ID custom langsung di kotak.")
 end
 
 local function renderLogsSub()
+    uiGap(3)
     if autoBtn(" Clear Logs ##df") then DF.STATE.logs = {} end
+    uiGap(4)
     ImGui.Separator()
+    uiGap(4)
     if #DF.STATE.logs == 0 then ImGui.Text("Belum ada log Dirt Farm.")
     else
         for i = 1, math.min(20, #DF.STATE.logs) do ImGui.TextWrapped(tostring(DF.STATE.logs[i])) end
@@ -2309,17 +2360,18 @@ local function renderLogsSub()
 end
 
 function DF.render(hub)
-    if autoBtn(activeSub == "worlds" and "[ List World ]" or "List World") then activeSub = "worlds" end
+    if uiTabBtn("List World", activeSub == "worlds") then activeSub = "worlds" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "find" and "[ Find World ]" or "Find World") then activeSub = "find" end
+    if uiTabBtn("Find World", activeSub == "find") then activeSub = "find" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "lockdoor" and "[ Lock & Door ]" or "Lock & Door") then activeSub = "lockdoor" end
+    if uiTabBtn("Lock & Door", activeSub == "lockdoor") then activeSub = "lockdoor" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "storage" and "[ Storage ]" or "Storage") then activeSub = "storage" end
+    if uiTabBtn("Storage", activeSub == "storage") then activeSub = "storage" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "settings" and "[ Settings ]" or "Settings") then activeSub = "settings" end
+    if uiTabBtn("Settings", activeSub == "settings") then activeSub = "settings" end
     ImGui.SameLine()
-    if autoBtn(activeSub == "logs" and "[ Logs ]" or "Logs") then activeSub = "logs" end
+    if uiTabBtn("Logs", activeSub == "logs") then activeSub = "logs" end
+    uiGap(4)
     ImGui.Separator()
 
     if activeSub == "worlds" then renderWorldsSub()
