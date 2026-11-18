@@ -418,15 +418,39 @@ local function applyCheats()
     pcall(editToggle, "No Lava", true)
 end
 
+local unreachableMap = {}
+
+local function clearUnreachableMap()
+    unreachableMap = {}
+end
+
+local function isProtectedLockOrBlocker(tx, ty, forWater)
+    -- Deklarasi forward (diimplementasikan lengkap di bawah)
+end
+
 local function isTileStandable(tx, ty)
     if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    if isProtectedLockOrBlocker(tx, ty, false) then return false end
+    local key = tx .. "," .. ty
+    if unreachableMap[key] then return false end
     local t = getTileSafe(tx, ty)
     if not t then return false end
     local fg = tonumber(t.fg) or 0
-    if fg == 0 or fg == 6 or fg == 12 or fg == 102 or fg == (tonumber(SB.CFG.platform_id) or 102) then
+    if fg == 6 or fg == 12 or fg == 102 or fg == (tonumber(SB.CFG.platform_id) or 102) then
         return true
     end
     if t.collidable == true or fg == 2 or fg == 4 or fg == 8 or fg == 10 then
+        return false
+    end
+    -- Untuk petak kosong (fg == 0), hanya standable jika ada tumpuan solid/platform di bawahnya (ty + 1)
+    if fg == 0 then
+        local tDown = getTileSafe(tx, ty + 1)
+        if tDown then
+            local dfg = tonumber(tDown.fg) or 0
+            if dfg ~= 0 and (dfg == 102 or dfg == 2 or dfg == 4 or dfg == 8 or dfg == 10 or dfg == (tonumber(SB.CFG.platform_id) or 102) or tDown.collidable == true) then
+                return true
+            end
+        end
         return false
     end
     return true
@@ -436,6 +460,9 @@ local function moveSafeTo(tx, ty)
     if not SB.STATE.running then return false end
     tx = math.max(0, math.min(99, math.floor(tx or 0)))
     ty = math.max(0, math.min(53, math.floor(ty or 0)))
+    local key = tx .. "," .. ty
+    if unreachableMap[key] then return false end
+
     local cx, cy = getPlayerPos()
     if cx == tx and cy == ty then return true end
     local pFn = FindPath or findPath
@@ -443,11 +470,16 @@ local function moveSafeTo(tx, ty)
     if SB.CFG.use_modfly and editToggle then pcall(editToggle, "ModFly", true) end
 
     local dist = math.max(math.abs(cx - tx), math.abs(cy - ty))
-    pcall(pFn, tx, ty)
-    local maxW = (dist <= 3) and math.max(160, (tonumber(SB.CFG.step_delay) or 110) * 3) or math.max(3000, math.min(20000, dist * 220))
+    local okCall, pathRes = pcall(pFn, tx, ty)
+    if not okCall or pathRes == false then
+        unreachableMap[key] = true
+        return false
+    end
+
+    local maxW = (dist <= 3) and math.max(160, (tonumber(SB.CFG.step_delay) or 110) * 3) or math.max(1000, math.min(8000, dist * 160))
     local waited, lastX, lastY, stuck = 0, cx, cy, 0
     while waited < maxW and SB.STATE.running do
-        local sl = (dist <= 3) and 25 or 65
+        local sl = (dist <= 3) and 25 or 50
         safeSleep(sl); waited = waited + sl
         local nx, ny = getPlayerPos()
         if nx == tx and ny == ty then
@@ -456,14 +488,26 @@ local function moveSafeTo(tx, ty)
         end
         if nx == lastX and ny == lastY then
             stuck = stuck + 1
-            if stuck == 18 then pcall(pFn, tx, ty)
-            elseif stuck >= 35 then break end
+            if stuck == 4 then
+                local okRetry, retryRes = pcall(pFn, tx, ty)
+                if not okRetry or retryRes == false then
+                    unreachableMap[key] = true
+                    break
+                end
+            elseif stuck >= 8 then
+                unreachableMap[key] = true
+                break
+            end
         else
             stuck = 0; lastX, lastY = nx, ny
         end
     end
     local fx, fy = getPlayerPos()
-    return (math.abs(fx - tx) <= 1 and math.abs(fy - ty) <= 1)
+    local arrived = (math.abs(fx - tx) <= 1 and math.abs(fy - ty) <= 1)
+    if not arrived then
+        unreachableMap[key] = true
+    end
+    return arrived
 end
 
 local function moveAdjacentForWater(tx, ty, prefDir)
@@ -476,10 +520,11 @@ local function moveAdjacentForWater(tx, ty, prefDir)
         { tx + dir, ty + 1 },
     }
     for _, c in ipairs(cands) do
-        if isTileStandable(c[1], c[2]) then
+        local cx, cy = c[1], c[2]
+        if not isProtectedLockOrBlocker(cx, cy, true) and not unreachableMap[cx .. "," .. cy] and isTileStandable(cx, cy) then
             local px, py = getPlayerPos()
-            if px == c[1] and py == c[2] then return true end
-            if moveSafeTo(c[1], c[2]) then
+            if px == cx and py == cy then return true end
+            if moveSafeTo(cx, cy) then
                 local nx, ny = getPlayerPos()
                 if math.abs(nx - tx) <= 2 and math.abs(ny - ty) <= 2 and not (nx == tx and ny == ty) then
                     return true
@@ -488,7 +533,11 @@ local function moveAdjacentForWater(tx, ty, prefDir)
         end
     end
     local px, py = getPlayerPos()
-    return (math.abs(px - tx) <= 2 and math.abs(py - ty) <= 2 and not (px == tx and py == ty))
+    local okReach = (math.abs(px - tx) <= 2 and math.abs(py - ty) <= 2 and not (px == tx and py == ty))
+    if not okReach then
+        unreachableMap[tx .. "," .. ty] = true
+    end
+    return okReach
 end
 
 local function setConnWarping(flag)
@@ -607,7 +656,6 @@ local LOCK_IDS = {
 
 local BLOCKER_DOOR_IDS = {
     [6]    = true, -- Main Door (White Door)
-    [8]    = true, -- Bedrock
     [12]   = true, -- Wooden Door
     [658]  = true, -- Dungeon Door
     [762]  = true, -- Castle Door
@@ -634,17 +682,10 @@ end
 -- Pindai seluruh area Lock, Penghalang, Jammer, Main Door, & Door ID (0,0) agar tidak pernah di-spam water/soil!
 local function scanProtectedAreas()
     protectedAreaMap = {}
-    local tiles = nil
-    if getTiles then
-        local ok, res = pcall(getTiles)
-        if ok and res then tiles = res end
-    end
+    clearUnreachableMap()
 
-    local function inspectTile(t, fx, fy)
-        if not t then return end
-        local tx = tonumber(t.x) or fx
-        local ty = tonumber(t.y) or fy
-        if not tx or not ty then return end
+    local function inspectTile(t, tx, ty)
+        if not t or not tx or not ty then return end
         local fg = tonumber(t.fg) or 0
         if fg == 0 then return end
 
@@ -652,23 +693,21 @@ local function scanProtectedAreas()
             -- Main Door + seluruh cluster lock/penghalang/moat ±2 di sekitarnya
             markProtectedRect(tx, ty, 2, 2)
         elseif LOCK_IDS[fg] then
-            -- Semua jenis Lock & Jammer + 1 tile sekelilingnya
-            markProtectedRect(tx, ty, 1, 1)
+            -- Berikan radius proteksi sesuai jangkauan lock
+            local rad = 1
+            if fg == 204 then rad = 5 end      -- Big Lock
+            if fg == 206 then rad = 10 end     -- Huge Lock
+            if fg == 242 or fg == 1796 or fg == 4994 or fg == 7188 then rad = 2 end -- WL / DL / Builder's / BGL
+            markProtectedRect(tx, ty, rad, rad)
         elseif BLOCKER_DOOR_IDS[fg] then
-            -- Semua Door & Penghalang (termasuk Door ID di 0,0) + 1 tile sekelilingnya
+            -- Semua Door & Penghalang + 1 tile sekelilingnya
             markProtectedRect(tx, ty, 1, 1)
         end
     end
 
-    if tiles then
-        pcall(function()
-            for _, t in pairs(tiles) do inspectTile(t) end
-        end)
-    else
-        for y = 0, 53 do
-            for x = 0, 99 do
-                inspectTile(getTileSafe(x, y), x, y)
-            end
+    for y = 0, 53 do
+        for x = 0, 99 do
+            inspectTile(getTileSafe(x, y), x, y)
         end
     end
 
@@ -680,31 +719,35 @@ local function scanProtectedAreas()
 end
 
 -- Cek apakah petak masuk area Lock / Penghalang / Door yang WAJIB dihindari
-local function isProtectedLockOrBlocker(tx, ty, forWater)
-    if protectedAreaMap[tx .. "," .. ty] then return true end
+isProtectedLockOrBlocker = function(tx, ty, forWater)
+    if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return true end
+    local key = tx .. "," .. ty
+    if protectedAreaMap[key] then return true end
     local t = getTileSafe(tx, ty)
     if not t then return false end
     local fg = tonumber(t.fg) or 0
-    if fg ~= 0 and (LOCK_IDS[fg] or BLOCKER_DOOR_IDS[fg]) then return true end
+    if fg ~= 0 and (LOCK_IDS[fg] or BLOCKER_DOOR_IDS[fg] or fg == 8) then return true end
+
+    -- Hindari juga petak yang berada dalam perlindungan lock
+    local par = tonumber(t.parent) or 0
+    if par > 0 then
+        if forWater then return true end
+        local px = par % 100
+        local py = math.floor(par / 100)
+        local pt = getTileSafe(px, py)
+        local pfg = tonumber(pt and pt.fg) or 0
+        if pfg ~= 0 and (LOCK_IDS[pfg] or pfg == 242) then
+            return true
+        end
+    end
 
     if forWater then
-        -- Hindari juga petak yang dikunci langsung oleh area lock (SL/BL/HL) bila parent menunjuk ke lock non-WL
-        local par = tonumber(t.parent) or 0
-        if par > 0 then
-            local px = par % 100
-            local py = math.floor(par / 100)
-            local pt = getTileSafe(px, py)
-            local pfg = tonumber(pt and pt.fg) or 0
-            if pfg ~= 0 and pfg ~= 242 and LOCK_IDS[pfg] then
-                return true
-            end
-        end
         -- Cek cepat 4 arah tetangga kalau-kalau ada Lock/Penghalang baru terpasang
         local dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
         for _, d in ipairs(dirs) do
             local nt = getTileSafe(tx + d[1], ty + d[2])
             local nfg = tonumber(nt and nt.fg) or 0
-            if nfg ~= 0 and (LOCK_IDS[nfg] or BLOCKER_DOOR_IDS[nfg]) then
+            if nfg ~= 0 and (LOCK_IDS[nfg] or BLOCKER_DOOR_IDS[nfg] or nfg == 8) then
                 return true
             end
         end
@@ -735,6 +778,8 @@ local function placeWaterOnceSafe(tx, ty, waterID, prefDir)
     if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
     -- GUARD KERAS: Jangan pernah put water di area Penghalang, Door, Jammer, atau Lock!
     if isProtectedLockOrBlocker(tx, ty, true) then return true end
+    local key = tx .. "," .. ty
+    if unreachableMap[key] then return false end
     local t = getTileSafe(tx, ty)
     if not t then return false end
     -- Skip jika tile tidak kosong (ada block/bedrock/door) atau SUDAH ada air!
@@ -754,7 +799,10 @@ local function placeWaterOnceSafe(tx, ty, waterID, prefDir)
 
         local px, py = getPlayerPos()
         if math.abs(px - tx) > 2 or math.abs(py - ty) > 2 or (px == tx and py == ty) then
-            if not moveAdjacentForWater(tx, ty, prefDir) then return false end
+            if not moveAdjacentForWater(tx, ty, prefDir) then
+                unreachableMap[key] = true
+                return false
+            end
         end
 
         -- Cek ulang sesaat sebelum kirim paket agar tidak menimpa tile yang baru saja tersinkron basah
@@ -785,14 +833,24 @@ local function placeWaterOnceSafe(tx, ty, waterID, prefDir)
         return true
     end
 
+    -- Jika posisi tidak terjangkau (unreachable), hentikan langsung tanpa retry agar tidak spam path not found!
+    if unreachableMap[key] then return false end
+
     -- Sebelum 1x retry terakhir, pastikan benar-benar masih kering & reposisi ulang
     if not SB.STATE.running then return false end
-    moveAdjacentForWater(tx, ty, prefDir)
+    if not moveAdjacentForWater(tx, ty, prefDir) then
+        unreachableMap[key] = true
+        return false
+    end
     safeSleep(150)
     local tCheck = getTileSafe(tx, ty)
     if tCheck and tileHasWater(tCheck) then return true end
 
-    return attemptSingleWaterPut()
+    local okSecond = attemptSingleWaterPut()
+    if not okSecond then
+        unreachableMap[key] = true
+    end
+    return okSecond
 end
 
 -- Pasang Water Pojok Kiri (X=0) & Pojok Kanan (X=99) dari atas sampai bawah (Y=0..53), HINDARI area Lock & Penghalang!
@@ -812,7 +870,8 @@ local function putWaterCorners(row)
         for y = 0, 53 do
             if not SB.STATE.running then return false end
             if not ensureSBOnline(row) then return false end
-            if not isProtectedLockOrBlocker(col.x, y, true) then
+            local key = col.x .. "," .. y
+            if not unreachableMap[key] and not isProtectedLockOrBlocker(col.x, y, true) then
                 local t = getTileSafe(col.x, y)
                 if t and (tonumber(t.fg) or 0) == 0 and (not tileHasWater(t)) then
                     if getInvCount(waterID) <= 0 then
@@ -822,7 +881,10 @@ local function putWaterCorners(row)
                             return false
                         end
                     end
-                    placeWaterOnceSafe(col.x, y, waterID, col.dir)
+                    local okPlaced = placeWaterOnceSafe(col.x, y, waterID, col.dir)
+                    if not okPlaced then
+                        unreachableMap[key] = true
+                    end
                 end
             end
         end
@@ -992,6 +1054,11 @@ SB._test = {
     tileHasWater = tileHasWater,
     placeWaterOnceSafe = placeWaterOnceSafe,
     putWaterCorners = putWaterCorners,
+    scanProtectedAreas = scanProtectedAreas,
+    isProtectedLockOrBlocker = isProtectedLockOrBlocker,
+    isTileStandable = isTileStandable,
+    moveSafeTo = moveSafeTo,
+    clearUnreachableMap = clearUnreachableMap,
 }
 
 -- ============================================================================
