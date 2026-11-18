@@ -164,6 +164,7 @@ DF.STATE = {
     rows             = {},   -- { { name="W", door="D", status="Ready" }, ... }
     selected_idx     = 0,
     selected_st      = 0,
+    selected_sw      = 0,
     found_count      = 0,
     df_stash_spots   = {},   -- Petak drop sementara Dirt/Seed di DF agar tidak langsung terhisap balik saat break
     logs             = {},
@@ -175,6 +176,8 @@ local addWorldBuf = ""
 local addDoorBuf = ""
 local addStorageBuf = ""
 local addStorageDoorBuf = ""
+local addSaveBuf = ""
+local addSaveDoorBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
 local breakCollectCounter = 0
@@ -297,6 +300,28 @@ local function setStorageList(list)
         end
     end
     DF.CFG.storage_raw = table.concat(out, ",")
+    DF.saveData()
+end
+
+local function getSaveWorldList()
+    local list = {}
+    local raw = trimStr(DF.CFG.save_world)
+    if raw == "" then return list end
+    for tok in raw:gmatch("[^,\r\n;]+") do
+        local p = parseWorldLine(tok)
+        if p then table.insert(list, { name = p.name, door = p.door }) end
+    end
+    return list
+end
+
+local function setSaveWorldList(list)
+    local out = {}
+    for _, sw in ipairs(list or {}) do
+        if sw and sw.name and sw.name ~= "" then
+            table.insert(out, sw.door ~= "" and (sw.name .. ":" .. sw.door) or sw.name)
+        end
+    end
+    DF.CFG.save_world = table.concat(out, ",")
     DF.saveData()
 end
 
@@ -1914,33 +1939,31 @@ local function collectFloatingItemInDF(targetID, stopAtAmt)
     return getInvCount(targetID), foundAny
 end
 
--- Simpan sisa Dirt Block (2) & Dirt Seed (3) ke Save World bila diisi; bila kosong biarkan di Dirt Farm!
+-- Simpan sisa Dirt Block (2) & Dirt Seed (3) ke daftar Storage Seed / Save World bila diisi; bila kosong biarkan di Dirt Farm!
 local function saveLeftoverDirtToSaveWorld(farmRow)
-    local rawSave = trimStr(DF.CFG.save_world or "")
-    if rawSave == "" then
-        addLog("[DF] Save World kosong — sisa Dirt Block & Dirt Seed dibiarkan di Dirt Farm.")
-        return true
+    local allSaves = getSaveWorldList()
+    local saveList = {}
+    local farmName = cleanWorldName(farmRow.name)
+    for _, sw in ipairs(allSaves) do
+        if sw and sw.name ~= "" and cleanWorldName(sw.name) ~= farmName then
+            table.insert(saveList, sw)
+        end
     end
-
-    local parsed = parseWorldLine(rawSave)
-    if not parsed or parsed.name == "" then
-        addLog("[DF] Format Save World tidak valid — sisa Dirt dibiarkan di Dirt Farm.")
-        return true
-    end
-    local saveW, saveD = parsed.name, parsed.door
-    if cleanWorldName(saveW) == cleanWorldName(farmRow.name) then
+    if #saveList == 0 then
+        addLog("[DF] Storage Seed / Save World kosong — sisa Dirt Block & Dirt Seed dibiarkan di Dirt Farm.")
         return true
     end
 
     DF.STATE.df_stash_spots = {}
     farmRow.status = "Save Sisa Dirt..."
-    DF.STATE.status_text = "Save -> " .. saveW
+    local saveIdx = 1
 
     for trip = 1, 6 do
         if not DF.STATE.running then return false end
+        if saveIdx > #saveList then break end
 
         -- 1. Pastikan sedang di world DF untuk menyapu sisa Dirt Block & Dirt Seed di lantai/atas DF
-        if getCurrentWorldSafe() ~= cleanWorldName(farmRow.name) then
+        if getCurrentWorldSafe() ~= farmName then
             if not warpToWorld(farmRow.name, farmRow.door) then break end
             DF.STATE.in_storage = false
             DF.STATE.anti_take_active = false
@@ -1963,33 +1986,50 @@ local function saveLeftoverDirtToSaveWorld(farmRow)
             break
         end
 
-        -- 2. Warp ke Save World & drop SEMUA sisa Dirt Block + Dirt Seed (keepAmt = 0)!
-        addLog(string.format("[DF Save #%d] Menyimpan sisa Dirt=%d & Seed=%d ke %s...", trip, hasDirt, hasSeed, saveW))
-        DF.STATE.in_storage = true
-        activeTargetWorld = ""
-        if not warpToWorld(saveW, saveD) then
-            DF.STATE.in_storage = false
-            addLog("[DF Save] Gagal masuk Save World " .. saveW .. ", sisa Dirt dibiarkan di tas/DF.")
-            return false
+        -- 2. Warp ke Save World di daftar (otomatis pindah ke world berikut bila gagal masuk / penuh)
+        local droppedAll = false
+        while saveIdx <= #saveList and DF.STATE.running do
+            local target = saveList[saveIdx]
+            DF.STATE.status_text = "Save -> " .. target.name
+            addLog(string.format("[DF Save #%d] Menyimpan sisa Dirt=%d & Seed=%d ke %s...", trip, getInvCount(ITEM.DIRT), getInvCount(ITEM.DIRT_SEED), target.name))
+            DF.STATE.in_storage = true
+            activeTargetWorld = ""
+            if warpToWorld(target.name, target.door) then
+                safeSleep(600)
+                if getInvCount(ITEM.DIRT) > 0 then
+                    dropExcessItemAtStorage(ITEM.DIRT, 0, "Sisa Dirt Block")
+                end
+                if getInvCount(ITEM.DIRT_SEED) > 0 then
+                    dropExcessItemAtStorage(ITEM.DIRT_SEED, 0, "Sisa Dirt Seed")
+                end
+                DF.STATE.in_storage = false
+                if getInvCount(ITEM.DIRT) <= 0 and getInvCount(ITEM.DIRT_SEED) <= 0 then
+                    droppedAll = true
+                    break
+                else
+                    addLog("[DF Save] " .. target.name .. " penuh/gagal drop penuh — coba Save World berikutnya...")
+                    saveIdx = saveIdx + 1
+                end
+            else
+                DF.STATE.in_storage = false
+                addLog("[DF Save] Gagal masuk " .. target.name .. " — coba Save World berikutnya...")
+                saveIdx = saveIdx + 1
+            end
         end
-        safeSleep(600)
 
-        if getInvCount(ITEM.DIRT) > 0 then
-            dropExcessItemAtStorage(ITEM.DIRT, 0, "Sisa Dirt Block")
+        if not droppedAll then
+            addLog("[DF Save] Semua Storage Seed gagal dimasuki/penuh, sisa Dirt dibiarkan.")
+            break
         end
-        if getInvCount(ITEM.DIRT_SEED) > 0 then
-            dropExcessItemAtStorage(ITEM.DIRT_SEED, 0, "Sisa Dirt Seed")
-        end
-
-        DF.STATE.in_storage = false
         if not moreFloatingInDF then
             break
         end
     end
 
+    DF.STATE.in_storage = false
     DF.STATE.anti_take_active = false
     setAutoCollectActive(DF.CFG.auto_collect == true)
-    addLog("[DF Save] Sisa Dirt Block & Dirt Seed selesai disimpan ke " .. saveW .. "!")
+    addLog("[DF Save] Sisa Dirt Block & Dirt Seed selesai disimpan ke Storage Seed!")
     return true
 end
 
@@ -3181,41 +3221,118 @@ local function renderStorageSub()
         end
     end
 
-    -- SAVE WORLD SISA DIRT BLOCK & DIRT SEED (Kosong = Biarkan di Dirt Farm)
-    uiSectionWithKetik("Save World Sisa Dirt & Seed (Kosong = Biarkan di DF)", "df_ktk_sw", function()
-        uiOpenDialog("boren_in_df_sw", "Save World Sisa Dirt & Seed", {
-            { id = "f_sw", label = "World:DoorID", default = tostring(DF.CFG.save_world or ""), maxLen = 64 },
-        }, "Simpan", function(vals)
-            DF.CFG.save_world = trimStr(vals.f_sw or ""):upper()
-            DF.saveData()
-            uiNotice = (DF.CFG.save_world ~= "") and ("Save World diset: " .. DF.CFG.save_world) or "Save World dikosongkan (biarkan di DF)."
+    -- PEMISAH JELAS ANTARA WORLD TOOLS & STORAGE SEED / SISA DIRT
+    uiGap(16)
+    if ImGui and ImGui.Separator then ImGui.Separator() end
+    uiGap(8)
+
+    local saveWorlds = getSaveWorldList()
+    uiSection("Storage Seed & Sisa Dirt (" .. tostring(#saveWorlds) .. ")  [Kosong = Biarkan di DF]", true)
+
+    if ImGui.BeginTable("BorenDFSaveTable", 2) then
+        ImGui.TableSetupColumn("Save World")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableHeadersRow()
+        if #saveWorlds == 0 then
+            ImGui.TableNextRow()
+            ImGui.TableSetColumnIndex(0); ImGui.Text("(Kosong - Sisa dibiarkan di DF)")
+            ImGui.TableSetColumnIndex(1); ImGui.Text("-")
+        else
+            for i, sw in ipairs(saveWorlds) do
+                ImGui.TableNextRow()
+                ImGui.TableSetColumnIndex(0)
+                local sel = (DF.STATE.selected_sw == i)
+                if autoBtn((sel and "> " or "") .. sw.name .. "##dfsw" .. tostring(i)) then
+                    DF.STATE.selected_sw = sel and 0 or i
+                end
+                ImGui.TableSetColumnIndex(1); ImGui.Text(sw.door ~= "" and sw.door or "-")
+            end
+        end
+        ImGui.EndTable()
+    end
+
+    uiSectionWithKetik("Tambah Storage Seed / Save World", "df_ktk_sw", function()
+        uiOpenDialog("boren_in_df_sw", "Tambah Storage Seed & Sisa Dirt", {
+            { id = "f_world", label = "Save World", default = addSaveBuf,     maxLen = 32 },
+            { id = "f_door",  label = "Door ID",    default = addSaveDoorBuf, maxLen = 32 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = trimStr(vals.f_world or ""):upper()
+            local dn = trimStr(vals.f_door or ""):upper()
+            if wn ~= "" then
+                local swL = getSaveWorldList()
+                table.insert(swL, { name = wn, door = dn })
+                setSaveWorldList(swL); addSaveBuf = ""; addSaveDoorBuf = ""
+                uiNotice = "Tersimpan storage seed: " .. wn
+            end
         end)
     end)
-    ImGui.PushItemWidth(math.max(180, math.floor(w - 14)))
-    local chSw, nvSw = safeInputText("##df_save_w", DF.CFG.save_world, 128)
-    ImGui.PopItemWidth()
-    if chSw then DF.CFG.save_world = nvSw; DF.saveData() end
+    if ImGui.BeginTable("BorenDFAddSw", 2) then
+        ImGui.TableSetupColumn("Save World")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(110, math.floor(w * 0.46)))
+        local chSw, nvSw = safeInputText("##df_add_sw", addSaveBuf, 256)
+        ImGui.PopItemWidth()
+        if chSw then addSaveBuf = nvSw end
+
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(90, math.floor(w * 0.44)))
+        local chSwD, nvSwD = safeInputText("##df_add_swd", addSaveDoorBuf, 128)
+        ImGui.PopItemWidth()
+        if chSwD then addSaveDoorBuf = nvSwD end
+        ImGui.EndTable()
+    end
     uiGap(4)
+
     local actSw = uiActionBar("BorenDFSaveWActs", w, {
-        { label = "World Ini##dfsw_cur", style = "accent" },
+        { label = "+ Tambah##dfsw_add", style = "accent" },
+        { label = "World Ini##dfsw_cur" },
         { label = "Paste##dfsw_pst" },
-        { label = "Kosongkan##dfsw_clr", style = "muted" },
+        { label = "Hapus##dfsw_del",    style = "muted" },
     })
+
     if actSw == 1 then
-        local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then
-            DF.CFG.save_world = curW; DF.saveData()
-            uiNotice = "Save World diset: " .. curW
-        else uiNotice = "Masuk ke world dulu!" end
+        local wStr = trimStr(addSaveBuf)
+        local dStr = trimStr(addSaveDoorBuf)
+        local comb = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
+        local p = parseWorldLine(comb)
+        if p then
+            table.insert(saveWorlds, { name = p.name, door = p.door })
+            setSaveWorldList(saveWorlds); addSaveBuf = ""; addSaveDoorBuf = ""
+            uiNotice = "Tersimpan storage seed: " .. p.name
+        else uiNotice = "Isi Save World dulu!" end
     elseif actSw == 2 then
-        local lines = uiReadClipLines()
-        if #lines > 0 then
-            DF.CFG.save_world = trimStr(lines[1]):upper(); DF.saveData()
-            uiNotice = "Save World di-paste: " .. DF.CFG.save_world
-        else uiNotice = "Clipboard kosong!" end
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then addSaveBuf = curW; uiNotice = "Terisi " .. curW .. " (klik + Tambah)"
+        else uiNotice = "Masuk ke world dulu!" end
     elseif actSw == 3 then
-        DF.CFG.save_world = ""; DF.saveData()
-        uiNotice = "Save World kosong (sisa Dirt dibiarkan di DF)."
+        local lines = uiReadClipLines()
+        if #lines == 0 then
+            uiNotice = "Clipboard kosong!"
+        elseif #lines == 1 then
+            local norm = lines[1]:gsub("|", ":")
+            local wP, dP = norm:match("^([^:]+):(.*)$")
+            if wP then addSaveBuf = trimStr(wP); addSaveDoorBuf = trimStr(dP or "")
+            else addSaveBuf = lines[1]; addSaveDoorBuf = "" end
+            uiNotice = "Paste ke form storage seed. Klik + Tambah."
+        else
+            local n = 0
+            for _, ln in ipairs(lines) do
+                local p = parseWorldLine(ln)
+                if p then table.insert(saveWorlds, { name = p.name, door = p.door }); n = n + 1 end
+            end
+            if n > 0 then setSaveWorldList(saveWorlds); uiNotice = "Smart Paste: +" .. tostring(n) .. " storage seed (tersimpan)!"
+            else uiNotice = "Format clipboard tidak valid." end
+        end
+    elseif actSw == 4 then
+        local idx = DF.STATE.selected_sw
+        if idx < 1 or idx > #saveWorlds then idx = #saveWorlds end
+        if idx >= 1 and idx <= #saveWorlds then
+            table.remove(saveWorlds, idx); DF.STATE.selected_sw = 0; setSaveWorldList(saveWorlds)
+            uiNotice = (#saveWorlds == 0) and "Storage seed kosong (sisa dibiarkan di DF)." or "Storage seed dihapus."
+        end
     end
 end
 
