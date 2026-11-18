@@ -77,6 +77,177 @@ local function safeWinW()
     return 760
 end
 
+-- ============================================================================
+-- TEMA RESMI BOREN STORE (Midnight Obsidian + Neon Cyan #00CDFC + Violet #8B3DFF)
+-- ============================================================================
+local vec4Ok = nil
+local borenPal = nil
+
+local function canUseImVec4()
+    if vec4Ok ~= nil then return vec4Ok end
+    if ImVec4 then
+        local ok, v = pcall(ImVec4, 1.0, 1.0, 1.0, 1.0)
+        vec4Ok = (ok and v ~= nil)
+    else
+        vec4Ok = false
+    end
+    return vec4Ok
+end
+
+local function v4(r, g, b, a)
+    if canUseImVec4() then
+        local ok, c = pcall(ImVec4, r, g, b, a or 1.0)
+        if ok and c then return c end
+    end
+    return nil
+end
+
+local function getBorenPal()
+    if borenPal then return borenPal end
+    borenPal = {
+        -- Base Midnight Obsidian (sampled dari logo BOREN #04050A & #04163A)
+        windowBg        = v4(0.025, 0.032, 0.068, 0.89),
+        childBg         = v4(0.032, 0.044, 0.095, 0.78),
+        popupBg         = v4(0.035, 0.048, 0.110, 0.96),
+        border          = v4(0.040, 0.680, 0.960, 0.52),
+        borderShadow    = v4(0.350, 0.050, 0.970, 0.16),
+
+        -- Title Bar (Deep Indigo -> Electric Violet)
+        titleBg         = v4(0.035, 0.048, 0.125, 0.96),
+        titleBgActive   = v4(0.115, 0.068, 0.300, 0.98),
+        titleBgColl     = v4(0.035, 0.048, 0.125, 0.90),
+
+        -- Inputs & Frames
+        frameBg         = v4(0.055, 0.088, 0.185, 0.92),
+        frameBgHover    = v4(0.065, 0.195, 0.355, 0.95),
+        frameBgActive   = v4(0.215, 0.115, 0.480, 0.98),
+
+        -- Buttons (Default Cyber Navy -> Hover Cyan -> Click Purple)
+        btn             = v4(0.065, 0.105, 0.215, 0.92),
+        btnHover        = v4(0.045, 0.420, 0.690, 0.96),
+        btnActive       = v4(0.410, 0.140, 0.920, 1.00),
+
+        -- Active Menu / Tab Accent (Vivid BOREN Violet-Cyan)
+        accentBtn       = v4(0.350, 0.125, 0.860, 0.96),
+        accentBtnHover  = v4(0.455, 0.205, 0.960, 1.00),
+        accentBtnActive = v4(0.020, 0.660, 0.960, 1.00),
+        accentBorder    = v4(0.000, 0.804, 0.988, 0.92),
+
+        -- Muted Utility Button (Hide UI)
+        mutedBtn        = v4(0.050, 0.065, 0.135, 0.85),
+        mutedBtnHover   = v4(0.160, 0.095, 0.285, 0.92),
+
+        -- Headers, Tables, Separators, Scrollbars
+        header          = v4(0.110, 0.145, 0.340, 0.88),
+        headerHover     = v4(0.055, 0.430, 0.720, 0.94),
+        headerActive    = v4(0.380, 0.150, 0.890, 1.00),
+        separator       = v4(0.020, 0.720, 0.980, 0.38),
+        checkMark       = v4(0.000, 0.840, 1.000, 1.00),
+        sliderGrab      = v4(0.000, 0.780, 0.980, 1.00),
+        sliderGrabAct   = v4(0.560, 0.220, 1.000, 1.00),
+        scrollBg        = v4(0.025, 0.035, 0.075, 0.75),
+        scrollGrab      = v4(0.140, 0.260, 0.520, 0.85),
+        scrollGrabHov   = v4(0.040, 0.640, 0.940, 0.95),
+        scrollGrabAct   = v4(0.480, 0.180, 0.960, 1.00),
+        tableHeader     = v4(0.095, 0.085, 0.255, 0.96),
+        tableRow        = v4(0.035, 0.052, 0.115, 0.52),
+        tableRowAlt     = v4(0.050, 0.072, 0.155, 0.65),
+        tableBorderS    = v4(0.060, 0.520, 0.820, 0.50),
+        tableBorderL    = v4(0.140, 0.200, 0.420, 0.42),
+
+        -- Typography (Ice White #EDF7F8 + Neon Cyan #00CDFC + Violet + Emerald)
+        text            = v4(0.929, 0.969, 0.973, 1.00),
+        textMuted       = v4(0.565, 0.680, 0.825, 1.00),
+        textCyan        = v4(0.000, 0.835, 1.000, 1.00),
+        textPurple      = v4(0.745, 0.440, 1.000, 1.00),
+        textActive      = v4(0.240, 0.950, 0.660, 1.00),
+    }
+    return borenPal
+end
+
+local function pushBorenTheme()
+    local cCnt, vCnt = 0, 0
+    if not ImGui then return 0, 0 end
+    local C = ImGui.Col
+    local V = ImGui.StyleVar
+    local P = getBorenPal()
+
+    if ImGui.PushStyleColor and C and canUseImVec4() then
+        local function pc(idx, col)
+            if idx ~= nil and col ~= nil then
+                if pcall(ImGui.PushStyleColor, idx, col) then cCnt = cCnt + 1 end
+            end
+        end
+        pc(C.WindowBg,             P.windowBg)
+        pc(C.ChildBg,              P.childBg)
+        pc(C.PopupBg,              P.popupBg)
+        pc(C.Border,               P.border)
+        pc(C.BorderShadow,         P.borderShadow)
+        pc(C.TitleBg,              P.titleBg)
+        pc(C.TitleBgActive,        P.titleBgActive)
+        pc(C.TitleBgCollapsed,     P.titleBgColl)
+        pc(C.FrameBg,              P.frameBg)
+        pc(C.FrameBgHovered,       P.frameBgHover)
+        pc(C.FrameBgActive,        P.frameBgActive)
+        pc(C.Button,               P.btn)
+        pc(C.ButtonHovered,        P.btnHover)
+        pc(C.ButtonActive,         P.btnActive)
+        pc(C.Header,               P.header)
+        pc(C.HeaderHovered,        P.headerHover)
+        pc(C.HeaderActive,         P.headerActive)
+        pc(C.Separator,            P.separator)
+        pc(C.CheckMark,            P.checkMark)
+        pc(C.SliderGrab,           P.sliderGrab)
+        pc(C.SliderGrabActive,     P.sliderGrabAct)
+        pc(C.ScrollbarBg,          P.scrollBg)
+        pc(C.ScrollbarGrab,        P.scrollGrab)
+        pc(C.ScrollbarGrabHovered, P.scrollGrabHov)
+        pc(C.ScrollbarGrabActive,  P.scrollGrabAct)
+        pc(C.TableHeaderBg,        P.tableHeader)
+        pc(C.TableRowBg,           P.tableRow)
+        pc(C.TableRowBgAlt,        P.tableRowAlt)
+        pc(C.TableBorderStrong,    P.tableBorderS)
+        pc(C.TableBorderLight,     P.tableBorderL)
+        pc(C.Text,                 P.text)
+        pc(C.TextDisabled,         P.textMuted)
+    end
+
+    if ImGui.PushStyleVar and V then
+        local function pv(idx, val)
+            if idx ~= nil and val ~= nil then
+                if pcall(ImGui.PushStyleVar, idx, val) then vCnt = vCnt + 1 end
+            end
+        end
+        pv(V.WindowRounding,    8.0)
+        pv(V.FrameRounding,     6.0)
+        pv(V.ChildRounding,     6.0)
+        pv(V.PopupRounding,     6.0)
+        pv(V.GrabRounding,      5.0)
+        pv(V.ScrollbarRounding, 6.0)
+        pv(V.WindowBorderSize,  1.2)
+        pv(V.FrameBorderSize,   1.0)
+    end
+    return cCnt, vCnt
+end
+
+local function popBorenTheme(cCnt, vCnt)
+    if vCnt and vCnt > 0 and ImGui and ImGui.PopStyleVar then
+        pcall(ImGui.PopStyleVar, vCnt)
+    end
+    if cCnt and cCnt > 0 and ImGui and ImGui.PopStyleColor then
+        pcall(ImGui.PopStyleColor, cCnt)
+    end
+end
+
+local function coloredText(col, txt)
+    local s = tostring(txt or "")
+    if col and ImGui and ImGui.TextColored then
+        local ok = pcall(ImGui.TextColored, col, s)
+        if ok then return end
+    end
+    ImGui.Text(s)
+end
+
 -- Button lebar kustom + tinggi AUTO-FIT (y = 0) agar teks tidak terpotong di Android
 local function fullBtn(label, width)
     if width and width > 10 and ImVec2 then
@@ -85,6 +256,37 @@ local function fullBtn(label, width)
     end
     local ok, res = pcall(ImGui.Button, label)
     return ok and (res == true)
+end
+
+-- Button dengan warna aksen BOREN (aktif / highlight)
+local function styledBtn(label, width, isAccent, isMuted)
+    local pushed = 0
+    if (isAccent or isMuted) and ImGui and ImGui.PushStyleColor and ImGui.Col and canUseImVec4() then
+        local C = ImGui.Col
+        local P = getBorenPal()
+        local function pc(idx, col)
+            if idx ~= nil and col ~= nil and pcall(ImGui.PushStyleColor, idx, col) then
+                pushed = pushed + 1
+            end
+        end
+        if isAccent then
+            pc(C.Button,        P.accentBtn)
+            pc(C.ButtonHovered, P.accentBtnHover)
+            pc(C.ButtonActive,  P.accentBtnActive)
+            pc(C.Border,        P.accentBorder)
+        elseif isMuted then
+            pc(C.Button,        P.mutedBtn)
+            pc(C.ButtonHovered, P.mutedBtnHover)
+        end
+    end
+    local clicked = width and fullBtn(label, width) or (function()
+        local ok, res = pcall(ImGui.Button, label)
+        return ok and (res == true)
+    end)()
+    if pushed > 0 and ImGui and ImGui.PopStyleColor then
+        pcall(ImGui.PopStyleColor, pushed)
+    end
+    return clicked
 end
 
 -- Button ukuran otomatis mengikuti panjang & tinggi teks
@@ -796,8 +998,15 @@ local GH_RASTER = decodeRaster(
     GH_PAL
 )
 
-local TILE_BORDER_COL    = colU32(18, 42, 66, 255)
-local TILE_COPIED_BORDER = colU32(87, 242, 135, 255)
+local TILE_BORDER_DC     = colU32(0, 195, 248, 220)   -- Neon Cyan (#00C3F8)
+local TILE_BORDER_GH     = colU32(139, 61, 255, 220)  -- Electric Violet (#8B3DFF)
+local TILE_COPIED_BORDER = colU32(87, 242, 135, 255)  -- Neon Emerald (#57F287)
+
+local NEON_CYAN_U32      = colU32(0, 205, 252, 255)
+local NEON_PURPLE_U32    = colU32(168, 48, 255, 255)
+local GLOW_CYAN_BG_U32   = colU32(0, 185, 252, 42)
+local GLOW_PURPLE_BG_U32 = colU32(138, 36, 255, 46)
+local GLOW_DEEP_BG_U32   = colU32(4, 5, 12, 18)
 
 local function getFGDrawList()
     if not ImGui then return nil end
@@ -809,6 +1018,54 @@ local function getFGDrawList()
         if ok and dl then return dl end
     end
     return nil
+end
+
+local function getBGDrawList()
+    if not ImGui then return nil end
+    if type(ImGui.BG) == "table" or type(ImGui.BG) == "userdata" then
+        return ImGui.BG
+    end
+    return nil
+end
+
+-- Garis gradien neon Cyan -> Ungu (statis) di bagian atas window + ambient glow halus
+local function drawWindowNeonChrome()
+    if not (ImGui and ImVec2 and ImGui.GetWindowPos and ImGui.GetWindowSize) then return end
+    local okP, wp = pcall(ImGui.GetWindowPos)
+    local okS, ws = pcall(ImGui.GetWindowSize)
+    if not (okP and okS and wp and ws) then return end
+    local okC, wx, wy, ww, wh = pcall(function() return wp.x, wp.y, ws.x, ws.y end)
+    if not (okC and type(wx) == "number" and type(ww) == "number" and ww > 40 and wh > 40) then return end
+
+    local bg = getBGDrawList()
+    if bg and bg.AddRectFilledMultiColor then
+        pcall(function()
+            bg:AddRectFilledMultiColor(
+                ImVec2(wx - 2, wy - 2),
+                ImVec2(wx + ww + 2, wy + wh + 2),
+                GLOW_CYAN_BG_U32, GLOW_PURPLE_BG_U32, GLOW_DEEP_BG_U32, GLOW_DEEP_BG_U32
+            )
+        end)
+    end
+
+    local fg = getFGDrawList()
+    if fg then
+        local drawn = false
+        if fg.AddRectFilledMultiColor then
+            drawn = pcall(function()
+                fg:AddRectFilledMultiColor(
+                    ImVec2(wx + 2, wy),
+                    ImVec2(wx + ww - 2, wy + 2.5),
+                    NEON_CYAN_U32, NEON_PURPLE_U32, NEON_PURPLE_U32, NEON_CYAN_U32
+                )
+            end)
+        end
+        if not drawn and fg.AddRectFilled then
+            pcall(function()
+                fg:AddRectFilled(ImVec2(wx + 2, wy), ImVec2(wx + ww - 2, wy + 2.5), NEON_CYAN_U32)
+            end)
+        end
+    end
 end
 
 local function getLastItemRect()
@@ -877,7 +1134,7 @@ local function safeSpacing()
     if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
 end
 
-local function centeredText(txt, areaW)
+local function centeredText(txt, areaW, col)
     local s = tostring(txt or "")
     if ImGui and ImGui.GetCursorPosX and ImGui.SetCursorPosX then
         local okX, curX = pcall(ImGui.GetCursorPosX)
@@ -893,22 +1150,23 @@ local function centeredText(txt, areaW)
             pcall(ImGui.SetCursorPosX, curX + (areaW - tw) * 0.5)
         end
     end
-    ImGui.Text(s)
+    coloredText(col, s)
 end
 
-local function centeredBtn(lbl, btnW, areaW)
+local function centeredBtn(lbl, btnW, areaW, isAccent)
     if ImGui and ImGui.GetCursorPosX and ImGui.SetCursorPosX then
         local okX, curX = pcall(ImGui.GetCursorPosX)
         if okX and type(curX) == "number" and type(areaW) == "number" and areaW > btnW then
             pcall(ImGui.SetCursorPosX, curX + (areaW - btnW) * 0.5)
         end
     end
-    return fullBtn(lbl, btnW)
+    return styledBtn(lbl, btnW, isAccent, false)
 end
 
 local function renderDashboardPanel()
     local availW = safeAvailX()
     local tNow   = nowSec()
+    local P      = getBorenPal()
 
     local curWorld = "-"
     if getCurrentWorldName then
@@ -925,18 +1183,22 @@ local function renderDashboardPanel()
     local updStatus   = tostring((HUB and HUB.reload_status) or "Siap")
     local anyRun      = isAnyBotActive()
 
-    -- 1. HEADER PROFESIONAL & STATIS (BOREN STORE)
+    -- 1. HEADER PROFESIONAL & STATIS (BOREN STORE — Cyan & Ice White)
     safeSpacing()
-    centeredText("BOREN STORE", availW)
-    centeredText(string.format("Status: %s   |   World: %s   |   Gems: %d", anyRun and "AKTIF" or "STANDBY", curWorld, curGems), availW)
+    centeredText("BOREN STORE", availW, P.textCyan)
+    centeredText(
+        string.format("Status: %s   |   World: %s   |   Gems: %d", anyRun and "AKTIF" or "STANDBY", curWorld, curGems),
+        availW,
+        anyRun and P.textActive or P.textMuted
+    )
     if uiNotice ~= "" then
-        centeredText(uiNotice, availW)
+        centeredText(uiNotice, availW, P.textPurple)
     end
     safeSpacing()
     ImGui.Separator()
     safeSpacing()
 
-    -- 2. KARTU LOGO DISCORD & GITHUB (64x64 Full-Color Anti-Aliased, Statis)
+    -- 2. KARTU LOGO DISCORD & GITHUB (64x64 Full-Color Anti-Aliased, Border Cyan & Violet)
     local cardW = math.max(150, math.floor(availW * 0.47))
     local dcCopied = (tNow < dcCopiedUntil)
     local ghCopied = (tNow < ghCopiedUntil)
@@ -954,7 +1216,7 @@ local function renderDashboardPanel()
             dcCopiedUntil = tNow + 2.0
         end
         if rasterLogoOk then
-            local okV = drawRasterTileOnLastItem(DC_RASTER, DC_BG_COL, dcCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
+            local okV = drawRasterTileOnLastItem(DC_RASTER, DC_BG_COL, dcCopied and TILE_COPIED_BORDER or TILE_BORDER_DC)
             if not okV then rasterLogoOk = false end
         end
 
@@ -967,26 +1229,26 @@ local function renderDashboardPanel()
             ghCopiedUntil = tNow + 2.0
         end
         if rasterLogoOk then
-            local okV = drawRasterTileOnLastItem(GH_RASTER, GH_BG_COL, ghCopied and TILE_COPIED_BORDER or TILE_BORDER_COL)
+            local okV = drawRasterTileOnLastItem(GH_RASTER, GH_BG_COL, ghCopied and TILE_COPIED_BORDER or TILE_BORDER_GH)
             if not okV then rasterLogoOk = false end
         end
         ImGui.EndTable()
     end
 
     safeSpacing()
-    centeredText("Klik kartu logo di atas untuk menyalin link", availW)
+    centeredText("Klik kartu logo di atas untuk menyalin link", availW, P.textMuted)
     safeSpacing()
     ImGui.Separator()
     safeSpacing()
 
-    -- 3. TOMBOL REFRESH / UPDATE SCRIPT (Rapi & Terpusat)
+    -- 3. TOMBOL REFRESH / UPDATE SCRIPT (Rapi, Aksen BOREN & Terpusat)
     local rlBtnW = math.min(240, math.max(170, math.floor(availW * 0.48)))
-    if centeredBtn(isReloading and "Updating...##dash_rl" or "Refresh / Update Script##dash_rl", rlBtnW, availW) then
+    if centeredBtn(isReloading and "Updating...##dash_rl" or "Refresh / Update Script##dash_rl", rlBtnW, availW, true) then
         if not isReloading then
             triggerHotReloadAll()
         end
     end
-    centeredText(updStatus, availW)
+    centeredText(updStatus, availW, P.textMuted)
 end
 
 -- ============================================================================
@@ -1011,26 +1273,27 @@ end
 
 local function renderLeftFeatureSidebar(colW)
     local btnW = math.max(90, colW - 18)
-    centeredText("MENU", btnW)
+    local P = getBorenPal()
+    centeredText("MENU", btnW, P.textCyan)
     safeSpacing()
-    if fullBtn(activeFeature == "dashboard" and "[ Dashboard ]" or "Dashboard", btnW) then
+    if styledBtn("Dashboard", btnW, activeFeature == "dashboard", false) then
         activeFeature = "dashboard"
     end
-    if fullBtn(activeFeature == "plant" and "[ Plant ]" or "Plant", btnW) then
+    if styledBtn("Plant", btnW, activeFeature == "plant", false) then
         activeFeature = "plant"
     end
-    if fullBtn(activeFeature == "dirt_farm" and "[ Dirt Farm ]" or "Dirt Farm", btnW) then
+    if styledBtn("Dirt Farm", btnW, activeFeature == "dirt_farm", false) then
         activeFeature = "dirt_farm"
     end
-    if fullBtn(activeFeature == "build_soil" and "[ Build Soil ]" or "Build Soil", btnW) then
+    if styledBtn("Build Soil", btnW, activeFeature == "build_soil", false) then
         activeFeature = "build_soil"
     end
-    if fullBtn(activeFeature == "buy_pack" and "[ Buy Pack ]" or "Buy Pack", btnW) then
+    if styledBtn("Buy Pack", btnW, activeFeature == "buy_pack", false) then
         activeFeature = "buy_pack"
     end
 
     ImGui.Text("")
-    if fullBtn("Hide UI", btnW) then
+    if styledBtn("Hide UI", btnW, false, true) then
         windowOpen = false
     end
 end
@@ -1044,19 +1307,19 @@ local function renderRightPanel()
 
     elseif activeFeature == "plant" then
         -- BARIS ATAS (mengisi bagian atas kanan): sub-menu khusus kategori Plant
-        if autoBtn(activePlantSub == "worlds" and "[ List World ]" or "List World") then
+        if styledBtn(" List World ", nil, activePlantSub == "worlds", false) then
             activePlantSub = "worlds"
         end
         ImGui.SameLine()
-        if autoBtn(activePlantSub == "storage" and "[ List Storage ]" or "List Storage") then
+        if styledBtn(" List Storage ", nil, activePlantSub == "storage", false) then
             activePlantSub = "storage"
         end
         ImGui.SameLine()
-        if autoBtn(activePlantSub == "settings" and "[ Settings ]" or "Settings") then
+        if styledBtn(" Settings ", nil, activePlantSub == "settings", false) then
             activePlantSub = "settings"
         end
         ImGui.SameLine()
-        if autoBtn(activePlantSub == "logs" and "[ Logs ]" or "Logs") then
+        if styledBtn(" Logs ", nil, activePlantSub == "logs", false) then
             activePlantSub = "logs"
         end
 
@@ -1118,6 +1381,8 @@ local function renderFrame()
         end
     end
 
+    local cCnt, vCnt = pushBorenTheme()
+
     if not windowOpen then
         if ImGui.SetNextWindowPos and ImVec2 then
             pcall(ImGui.SetNextWindowPos, ImVec2(24, 150), (ImGui.Cond and ImGui.Cond.Once) or 2)
@@ -1126,11 +1391,13 @@ local function renderFrame()
             pcall(ImGui.SetNextWindowSize, ImVec2(300, 155), (ImGui.Cond and ImGui.Cond.Always) or 1)
         end
         if ImGui.Begin("BOREN STORE##boren_mini") then
-            if autoBtn("  Buka BOREN STORE  ") then
+            drawWindowNeonChrome()
+            if styledBtn("  Buka BOREN STORE  ", nil, true, false) then
                 windowOpen = true
             end
         end
         ImGui.End()
+        popBorenTheme(cCnt, vCnt)
         return
     end
 
@@ -1139,6 +1406,7 @@ local function renderFrame()
     end
 
     if ImGui.Begin("BOREN STORE##boren_main") then
+        drawWindowNeonChrome()
         local winW = safeWinW()
         local sideW = math.max(130, math.floor(winW * 0.20))
 
@@ -1169,6 +1437,7 @@ local function renderFrame()
         end
     end
     ImGui.End()
+    popBorenTheme(cCnt, vCnt)
 end
 
 -- ============================================================================
