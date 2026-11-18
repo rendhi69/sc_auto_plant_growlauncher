@@ -78,10 +78,15 @@ local function safeWinW()
 end
 
 -- ============================================================================
--- TEMA RESMI BOREN STORE (Midnight Obsidian + Neon Cyan #00CDFC + Violet #8B3DFF)
+-- TEMA RESMI BOREN STORE (Solid Hitam Pekat + Neon Tebal Cyan #00D8FF & Ungu #B026FF)
 -- ============================================================================
 local vec4Ok = nil
+local pushColMode = nil -- auto-deteksi sekali di frame pertama: "u32" | "rgba4" | "vec4" | "none"
 local borenPal = nil
+
+local function packU32(r, g, b, a)
+    return math.floor(r) + math.floor(g) * 256 + math.floor(b) * 65536 + math.floor(a or 255) * 16777216
+end
 
 local function canUseImVec4()
     if vec4Ok ~= nil then return vec4Ok end
@@ -102,65 +107,140 @@ local function v4(r, g, b, a)
     return nil
 end
 
+-- Buat entry warna lengkap { r, g, b, a, u32, v4 } (0..255 + 0..1)
+local function mkCol(r, g, b, a)
+    a = a or 255
+    return {
+        r = r / 255.0, g = g / 255.0, b = b / 255.0, a = a / 255.0,
+        u32 = packU32(r, g, b, a),
+        v4  = v4(r / 255.0, g / 255.0, b / 255.0, a / 255.0),
+    }
+end
+
+local function detectPushColorMode()
+    if pushColMode ~= nil then return pushColMode end
+    if not (ImGui and ImGui.PushStyleColor and ImGui.PopStyleColor and ImGui.Col) then
+        pushColMode = "none"
+        return pushColMode
+    end
+    local slot = ImGui.Col.PlotLines or ImGui.Col.NavWindowingHighlight or 38
+    if type(ImGui.GetStyleColorVec4) ~= "function" then
+        pushColMode = "none"
+        return pushColMode
+    end
+
+    local function matchesTestColor()
+        local okG, cv = pcall(ImGui.GetStyleColorVec4, slot)
+        if not (okG and cv) then return false end
+        local okR, x, y, z, w = pcall(function() return cv.x, cv.y, cv.z, cv.w end)
+        if not (okR and type(x) == "number" and type(w) == "number") then return false end
+        return (x > 0.80 and y < 0.25 and z > 0.70 and w > 0.85)
+    end
+
+    -- 1. Coba format packed ImU32 (paling umum di binding Android)
+    local ok1 = pcall(ImGui.PushStyleColor, slot, packU32(250, 20, 220, 255))
+    if ok1 then
+        local hit = matchesTestColor()
+        pcall(ImGui.PopStyleColor, 1)
+        if hit then pushColMode = "u32"; return pushColMode end
+    end
+
+    -- 2. Coba format 4 float (r, g, b, a)
+    local ok2 = pcall(ImGui.PushStyleColor, slot, 0.98, 0.08, 0.86, 1.0)
+    if ok2 then
+        local hit = matchesTestColor()
+        pcall(ImGui.PopStyleColor, 1)
+        if hit then pushColMode = "rgba4"; return pushColMode end
+    end
+
+    -- 3. Coba format ImVec4(r, g, b, a)
+    local tv4 = v4(0.98, 0.08, 0.86, 1.0)
+    if tv4 then
+        local ok3 = pcall(ImGui.PushStyleColor, slot, tv4)
+        if ok3 then
+            local hit = matchesTestColor()
+            pcall(ImGui.PopStyleColor, 1)
+            if hit then pushColMode = "vec4"; return pushColMode end
+        end
+    end
+
+    pushColMode = "none"
+    return pushColMode
+end
+
+local function pushOneColor(idx, c)
+    if idx == nil or c == nil then return false end
+    local mode = detectPushColorMode()
+    if mode == "u32" then
+        return pcall(ImGui.PushStyleColor, idx, c.u32)
+    elseif mode == "rgba4" then
+        return pcall(ImGui.PushStyleColor, idx, c.r, c.g, c.b, c.a)
+    elseif mode == "vec4" and c.v4 then
+        return pcall(ImGui.PushStyleColor, idx, c.v4)
+    end
+    return false
+end
+
 local function getBorenPal()
     if borenPal then return borenPal end
     borenPal = {
-        -- Base Midnight Obsidian (sampled dari logo BOREN #04050A & #04163A)
-        windowBg        = v4(0.025, 0.032, 0.068, 0.89),
-        childBg         = v4(0.032, 0.044, 0.095, 0.78),
-        popupBg         = v4(0.035, 0.048, 0.110, 0.96),
-        border          = v4(0.040, 0.680, 0.960, 0.52),
-        borderShadow    = v4(0.350, 0.050, 0.970, 0.16),
+        -- Solid Hitam Pekat (100% TEBAL, Alpha 255 = BUKAN Transparan)
+        windowBg        = mkCol(7,   9,  16, 255),
+        childBg         = mkCol(10, 13,  24, 255),
+        popupBg         = mkCol(10, 13,  24, 255),
+        border          = mkCol(0, 212, 255, 255), -- Neon Cyan Tebal
+        borderShadow    = mkCol(140, 38, 255, 180),
 
-        -- Title Bar (Deep Indigo -> Electric Violet)
-        titleBg         = v4(0.035, 0.048, 0.125, 0.96),
-        titleBgActive   = v4(0.115, 0.068, 0.300, 0.98),
-        titleBgColl     = v4(0.035, 0.048, 0.125, 0.90),
+        -- Title Bar Hitam-Indigo Pekat
+        titleBg         = mkCol(11, 14,  30, 255),
+        titleBgActive   = mkCol(24, 16,  68, 255),
+        titleBgColl     = mkCol(11, 14,  30, 255),
 
-        -- Inputs & Frames
-        frameBg         = v4(0.055, 0.088, 0.185, 0.92),
-        frameBgHover    = v4(0.065, 0.195, 0.355, 0.95),
-        frameBgActive   = v4(0.215, 0.115, 0.480, 0.98),
+        -- Input & Frame Solid Gelap
+        frameBg         = mkCol(16, 22,  42, 255),
+        frameBgHover    = mkCol(22, 52,  92, 255),
+        frameBgActive   = mkCol(54, 26, 126, 255),
 
-        -- Buttons (Default Cyber Navy -> Hover Cyan -> Click Purple)
-        btn             = v4(0.065, 0.105, 0.215, 0.92),
-        btnHover        = v4(0.045, 0.420, 0.690, 0.96),
-        btnActive       = v4(0.410, 0.140, 0.920, 1.00),
+        -- Tombol Solid Hitam-Navy -> Hover Cyan -> Klik Ungu Neon
+        btn             = mkCol(18, 24,  44, 255),
+        btnHover        = mkCol(10, 118, 192, 255),
+        btnActive       = mkCol(115, 36, 245, 255),
 
-        -- Active Menu / Tab Accent (Vivid BOREN Violet-Cyan)
-        accentBtn       = v4(0.350, 0.125, 0.860, 0.96),
-        accentBtnHover  = v4(0.455, 0.205, 0.960, 1.00),
-        accentBtnActive = v4(0.020, 0.660, 0.960, 1.00),
-        accentBorder    = v4(0.000, 0.804, 0.988, 0.92),
+        -- Tombol Aktif / Highlight (Ungu Neon Tebal + Border Cyan)
+        accentBtn       = mkCol(98,  30, 232, 255),
+        accentBtnHover  = mkCol(128, 52, 255, 255),
+        accentBtnActive = mkCol(0,  176, 248, 255),
+        accentBorder    = mkCol(0,  218, 255, 255),
 
-        -- Muted Utility Button (Hide UI)
-        mutedBtn        = v4(0.050, 0.065, 0.135, 0.85),
-        mutedBtnHover   = v4(0.160, 0.095, 0.285, 0.92),
+        -- Tombol Hide UI Solid Gelap
+        mutedBtn        = mkCol(14, 18,  34, 255),
+        mutedBtnHover   = mkCol(46, 24,  78, 255),
 
-        -- Headers, Tables, Separators, Scrollbars
-        header          = v4(0.110, 0.145, 0.340, 0.88),
-        headerHover     = v4(0.055, 0.430, 0.720, 0.94),
-        headerActive    = v4(0.380, 0.150, 0.890, 1.00),
-        separator       = v4(0.020, 0.720, 0.980, 0.38),
-        checkMark       = v4(0.000, 0.840, 1.000, 1.00),
-        sliderGrab      = v4(0.000, 0.780, 0.980, 1.00),
-        sliderGrabAct   = v4(0.560, 0.220, 1.000, 1.00),
-        scrollBg        = v4(0.025, 0.035, 0.075, 0.75),
-        scrollGrab      = v4(0.140, 0.260, 0.520, 0.85),
-        scrollGrabHov   = v4(0.040, 0.640, 0.940, 0.95),
-        scrollGrabAct   = v4(0.480, 0.180, 0.960, 1.00),
-        tableHeader     = v4(0.095, 0.085, 0.255, 0.96),
-        tableRow        = v4(0.035, 0.052, 0.115, 0.52),
-        tableRowAlt     = v4(0.050, 0.072, 0.155, 0.65),
-        tableBorderS    = v4(0.060, 0.520, 0.820, 0.50),
-        tableBorderL    = v4(0.140, 0.200, 0.420, 0.42),
+        -- Header, Tabel, Separator, Scrollbar (Solid & Neon)
+        header          = mkCol(28, 36,  86, 255),
+        headerHover     = mkCol(14, 112, 188, 255),
+        headerActive    = mkCol(104, 38, 238, 255),
+        separator       = mkCol(0,  204, 255, 220),
+        checkMark       = mkCol(0,  220, 255, 255),
+        sliderGrab      = mkCol(0,  205, 252, 255),
+        sliderGrabAct   = mkCol(168, 52, 255, 255),
+        scrollBg        = mkCol(8,  10,  20, 255),
+        scrollGrab      = mkCol(36, 68, 138, 255),
+        scrollGrabHov   = mkCol(0, 175, 245, 255),
+        scrollGrabAct   = mkCol(138, 44, 255, 255),
+        tableHeader     = mkCol(24, 22,  66, 255),
+        tableRow        = mkCol(11, 14,  28, 255),
+        tableRowAlt     = mkCol(16, 20,  38, 255),
+        tableBorderS    = mkCol(0,  185, 245, 220),
+        tableBorderL    = mkCol(48, 58, 122, 200),
 
-        -- Typography (Ice White #EDF7F8 + Neon Cyan #00CDFC + Violet + Emerald)
-        text            = v4(0.929, 0.969, 0.973, 1.00),
-        textMuted       = v4(0.565, 0.680, 0.825, 1.00),
-        textCyan        = v4(0.000, 0.835, 1.000, 1.00),
-        textPurple      = v4(0.745, 0.440, 1.000, 1.00),
-        textActive      = v4(0.240, 0.950, 0.660, 1.00),
+        -- Typography (ImVec4 untuk TextColored + mkCol untuk Col.Text)
+        textCol         = mkCol(240, 248, 255, 255),
+        textMutedCol    = mkCol(150, 178, 214, 255),
+        textCyan        = v4(0.000, 0.855, 1.000, 1.00),
+        textPurple      = v4(0.765, 0.450, 1.000, 1.00),
+        textActive      = v4(0.240, 0.960, 0.660, 1.00),
+        textMuted       = v4(0.620, 0.735, 0.875, 1.00),
     }
     return borenPal
 end
@@ -172,11 +252,9 @@ local function pushBorenTheme()
     local V = ImGui.StyleVar
     local P = getBorenPal()
 
-    if ImGui.PushStyleColor and C and canUseImVec4() then
+    if detectPushColorMode() ~= "none" and C then
         local function pc(idx, col)
-            if idx ~= nil and col ~= nil then
-                if pcall(ImGui.PushStyleColor, idx, col) then cCnt = cCnt + 1 end
-            end
+            if pushOneColor(idx, col) then cCnt = cCnt + 1 end
         end
         pc(C.WindowBg,             P.windowBg)
         pc(C.ChildBg,              P.childBg)
@@ -208,8 +286,8 @@ local function pushBorenTheme()
         pc(C.TableRowBgAlt,        P.tableRowAlt)
         pc(C.TableBorderStrong,    P.tableBorderS)
         pc(C.TableBorderLight,     P.tableBorderL)
-        pc(C.Text,                 P.text)
-        pc(C.TextDisabled,         P.textMuted)
+        pc(C.Text,                 P.textCol)
+        pc(C.TextDisabled,         P.textMutedCol)
     end
 
     if ImGui.PushStyleVar and V then
@@ -224,8 +302,8 @@ local function pushBorenTheme()
         pv(V.PopupRounding,     6.0)
         pv(V.GrabRounding,      5.0)
         pv(V.ScrollbarRounding, 6.0)
-        pv(V.WindowBorderSize,  1.2)
-        pv(V.FrameBorderSize,   1.0)
+        pv(V.WindowBorderSize,  2.0)
+        pv(V.FrameBorderSize,   1.2)
     end
     return cCnt, vCnt
 end
@@ -261,13 +339,11 @@ end
 -- Button dengan warna aksen BOREN (aktif / highlight)
 local function styledBtn(label, width, isAccent, isMuted)
     local pushed = 0
-    if (isAccent or isMuted) and ImGui and ImGui.PushStyleColor and ImGui.Col and canUseImVec4() then
+    if (isAccent or isMuted) and detectPushColorMode() ~= "none" and ImGui and ImGui.Col then
         local C = ImGui.Col
         local P = getBorenPal()
         local function pc(idx, col)
-            if idx ~= nil and col ~= nil and pcall(ImGui.PushStyleColor, idx, col) then
-                pushed = pushed + 1
-            end
+            if pushOneColor(idx, col) then pushed = pushed + 1 end
         end
         if isAccent then
             pc(C.Button,        P.accentBtn)
@@ -998,15 +1074,13 @@ local GH_RASTER = decodeRaster(
     GH_PAL
 )
 
-local TILE_BORDER_DC     = colU32(0, 195, 248, 220)   -- Neon Cyan (#00C3F8)
-local TILE_BORDER_GH     = colU32(139, 61, 255, 220)  -- Electric Violet (#8B3DFF)
+local TILE_BORDER_DC     = colU32(0, 208, 255, 255)   -- Neon Cyan (#00D0FF)
+local TILE_BORDER_GH     = colU32(158, 56, 255, 255)  -- Electric Violet (#9E38FF)
 local TILE_COPIED_BORDER = colU32(87, 242, 135, 255)  -- Neon Emerald (#57F287)
 
-local NEON_CYAN_U32      = colU32(0, 205, 252, 255)
-local NEON_PURPLE_U32    = colU32(168, 48, 255, 255)
-local GLOW_CYAN_BG_U32   = colU32(0, 185, 252, 42)
-local GLOW_PURPLE_BG_U32 = colU32(138, 36, 255, 46)
-local GLOW_DEEP_BG_U32   = colU32(4, 5, 12, 18)
+local NEON_CYAN_U32      = colU32(0, 216, 255, 255)
+local NEON_PURPLE_U32    = colU32(176, 38, 255, 255)
+local SOLID_BLACK_BG_U32 = colU32(7, 9, 16, 255)      -- 100% Solid Hitam Pekat (Alpha 255)
 
 local function getFGDrawList()
     if not ImGui then return nil end
@@ -1028,7 +1102,7 @@ local function getBGDrawList()
     return nil
 end
 
--- Garis gradien neon Cyan -> Ungu (statis) di bagian atas window + ambient glow halus
+-- Frame neon TEBAL (3px Cyan -> Ungu sekeliling 4 sisi) + latar HITAM PEKAT 100% solid (bukan transparan!)
 local function drawWindowNeonChrome()
     if not (ImGui and ImVec2 and ImGui.GetWindowPos and ImGui.GetWindowSize) then return end
     local okP, wp = pcall(ImGui.GetWindowPos)
@@ -1038,14 +1112,33 @@ local function drawWindowNeonChrome()
     if not (okC and type(wx) == "number" and type(ww) == "number" and ww > 40 and wh > 40) then return end
 
     local bg = getBGDrawList()
-    if bg and bg.AddRectFilledMultiColor then
-        pcall(function()
-            bg:AddRectFilledMultiColor(
-                ImVec2(wx - 2, wy - 2),
-                ImVec2(wx + ww + 2, wy + wh + 2),
-                GLOW_CYAN_BG_U32, GLOW_PURPLE_BG_U32, GLOW_DEEP_BG_U32, GLOW_DEEP_BG_U32
-            )
-        end)
+    if bg then
+        local drewBorder = false
+        if bg.AddRectFilledMultiColor then
+            drewBorder = pcall(function()
+                bg:AddRectFilledMultiColor(
+                    ImVec2(wx - 3, wy - 3),
+                    ImVec2(wx + ww + 3, wy + wh + 3),
+                    NEON_CYAN_U32, NEON_PURPLE_U32, NEON_PURPLE_U32, NEON_CYAN_U32
+                )
+            end)
+        end
+        if bg.AddRectFilled then
+            if not drewBorder then
+                pcall(function()
+                    bg:AddRectFilled(ImVec2(wx - 3, wy - 3), ImVec2(wx + ww + 3, wy + wh + 3), NEON_CYAN_U32)
+                end)
+            end
+            -- Latar hitam pekat solid di dalam frame neon
+            local okSolid = pcall(function()
+                bg:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + ww, wy + wh), SOLID_BLACK_BG_U32)
+            end)
+            if not okSolid then
+                pcall(function()
+                    bg:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + ww, wy + wh), SOLID_BLACK_BG_U32, 0)
+                end)
+            end
+        end
     end
 
     local fg = getFGDrawList()
@@ -1054,15 +1147,15 @@ local function drawWindowNeonChrome()
         if fg.AddRectFilledMultiColor then
             drawn = pcall(function()
                 fg:AddRectFilledMultiColor(
-                    ImVec2(wx + 2, wy),
-                    ImVec2(wx + ww - 2, wy + 2.5),
+                    ImVec2(wx, wy),
+                    ImVec2(wx + ww, wy + 3.5),
                     NEON_CYAN_U32, NEON_PURPLE_U32, NEON_PURPLE_U32, NEON_CYAN_U32
                 )
             end)
         end
         if not drawn and fg.AddRectFilled then
             pcall(function()
-                fg:AddRectFilled(ImVec2(wx + 2, wy), ImVec2(wx + ww - 2, wy + 2.5), NEON_CYAN_U32)
+                fg:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + ww, wy + 3.5), NEON_CYAN_U32)
             end)
         end
     end
@@ -1384,6 +1477,7 @@ local function renderFrame()
     local cCnt, vCnt = pushBorenTheme()
 
     if not windowOpen then
+        if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
         if ImGui.SetNextWindowPos and ImVec2 then
             pcall(ImGui.SetNextWindowPos, ImVec2(24, 150), (ImGui.Cond and ImGui.Cond.Once) or 2)
         end
@@ -1401,6 +1495,7 @@ local function renderFrame()
         return
     end
 
+    if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
     if ImGui.SetNextWindowSize and ImVec2 then
         pcall(ImGui.SetNextWindowSize, ImVec2(780, 470), (ImGui.Cond and ImGui.Cond.Once) or 2)
     end
