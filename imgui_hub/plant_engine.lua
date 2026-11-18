@@ -26,6 +26,10 @@ Engine.STATE = {
     enabled              = false,
     running              = false,
     paused               = false,
+    anti_take_active     = false,
+    pending_drop_id      = 0,
+    pending_drop_amt     = 0,
+    drop_confirmed       = false,
     status_text          = "Idle",
     rows                 = {},   -- { { name="W", door="D", seed_id=4585, splice_id=0, status="Ready" }, ... }
     selected_idx         = 0,
@@ -299,20 +303,18 @@ local function cleanWorldName(s)
 end
 
 local function getCurrentWorldSafe()
-    local fns = { getCurrentWorldName, GetWorldName, getWorld, getCurrentWorld, GetWorld }
-    for _, fn in ipairs(fns) do
-        if type(fn) == "function" then
-            local ok, res = pcall(fn)
-            if ok and res ~= nil then
-                if type(res) == "string" then
-                    local nm = cleanWorldName(res)
-                    if nm ~= "" then return nm end
-                elseif type(res) == "table" or type(res) == "userdata" then
-                    local okN, nm = pcall(function() return res.name or res.worldName end)
-                    if okN and type(nm) == "string" then
-                        local c = cleanWorldName(nm)
-                        if c ~= "" then return c end
-                    end
+    local fn = getCurrentWorldName or GetWorldName or getWorld or getCurrentWorld or GetWorld
+    if fn and type(fn) == "function" then
+        local ok, res = pcall(fn)
+        if ok and res ~= nil then
+            if type(res) == "string" then
+                local nm = cleanWorldName(res)
+                if nm ~= "" then return nm end
+            elseif type(res) == "table" or type(res) == "userdata" then
+                local okN, nm = pcall(function() return res.name or res.worldName end)
+                if okN and type(nm) == "string" then
+                    local c = cleanWorldName(nm)
+                    if c ~= "" then return c end
                 end
             end
         end
@@ -527,6 +529,21 @@ end
 
 local function scanForeignLocksInWorld()
     Engine.STATE.foreign_locked_tiles = {}
+    local mainDoorX, mainDoorY = nil, nil
+    for y = 0, 53 do
+        for x = 0, 99 do
+            local t = getTileSafe(x, y)
+            if t and tonumber(t.fg) == 6 then -- Main Door
+                mainDoorX, mainDoorY = x, y
+                break
+            end
+        end
+        if mainDoorX then break end
+    end
+
+    local me = getLocalSafe()
+    local myUserId = tonumber(me and (me.userID or me.userId)) or 0
+
     local foreignCount, lockedTiles = 0, 0
     for y = 0, 53 do
         for x = 0, 99 do
@@ -534,16 +551,42 @@ local function scanForeignLocksInWorld()
             local fg = tonumber(t and t.fg) or 0
             -- Hanya Small/Big/Huge/Builder Lock (JANGAN lock seluruh world karena WL)
             if fg == 202 or fg == 204 or fg == 206 or fg == 4994 then
-                if not isLockOwnedByLocal(t) then
-                    foreignCount = foreignCount + 1
-                    local rad = (fg == 202 and 5) or (fg == 204 and 7) or 15
-                    for cy = math.max(0, y - rad), math.min(53, y + rad) do
-                        for cx = math.max(0, x - rad), math.min(99, x + rad) do
-                            if math.abs(cx - x) + math.abs(cy - y) <= (rad + 1) then
-                                local k = cx .. "_" .. cy
-                                if not Engine.STATE.foreign_locked_tiles[k] then
-                                    Engine.STATE.foreign_locked_tiles[k] = true
-                                    lockedTiles = lockedTiles + 1
+                -- JANGAN PERNAH tandai lock di dekat Main Door sebagai foreign lock (itu lock proteksi pintu farm sendiri!)
+                local isNearDoor = false
+                if mainDoorX and mainDoorY then
+                    if math.abs(x - mainDoorX) <= 3 and math.abs(y - mainDoorY) <= 3 then
+                        isNearDoor = true
+                    end
+                end
+
+                if not isNearDoor then
+                    -- Hanya anggap lock asing jika data owner definitif berbeda dan myUserId diketahui (> 0)
+                    local isForeign = false
+                    local okExtra, extra = pcall(function() return t.extra end)
+                    if okExtra and extra and myUserId > 0 then
+                        local ownerId = tonumber(extra.owner or extra.owner_signed) or 0
+                        if ownerId > 0 and ownerId ~= myUserId then
+                            local isAdmin = false
+                            if extra.admin then
+                                for _, admId in ipairs(extra.admin) do
+                                    if tonumber(admId) == myUserId then isAdmin = true; break end
+                                end
+                            end
+                            if not isAdmin then isForeign = true end
+                        end
+                    end
+
+                    if isForeign then
+                        foreignCount = foreignCount + 1
+                        local rad = (fg == 202 and 4) or (fg == 204 and 7) or 15
+                        for cy = math.max(0, y - rad), math.min(53, y + rad) do
+                            for cx = math.max(0, x - rad), math.min(99, x + rad) do
+                                if math.abs(cx - x) + math.abs(cy - y) <= (rad + 1) then
+                                    local k = cx .. "_" .. cy
+                                    if not Engine.STATE.foreign_locked_tiles[k] then
+                                        Engine.STATE.foreign_locked_tiles[k] = true
+                                        lockedTiles = lockedTiles + 1
+                                    end
                                 end
                             end
                         end
@@ -553,7 +596,7 @@ local function scanForeignLocksInWorld()
         end
     end
     if foreignCount > 0 then
-        addLog(string.format("[Lock Orang Lain] %d lock terdeteksi (%d petak dilewati).", foreignCount, lockedTiles))
+        addLog(string.format("[Lock Orang Lain] %d lock asing terdeteksi (%d petak dilewati).", foreignCount, lockedTiles))
     end
 end
 
@@ -709,11 +752,80 @@ local function stripGTColors(s)
     return tostring(s or ""):gsub("`.", ""):gsub("%z", ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+-- Parse field OnDialogRequest asli Growtopia (support dialog_name 'drop' & 'drop_item', embed_data dinamis, & text input dinamis)
+local function buildDropDialogReturn(dlgText, fallbackItemID, dropAmt)
+    local dName = "drop_item"
+    local embedLines = {}
+    local hasItemEmbed = false
+    local countField = "count"
+    local foundInput = false
+
+    if type(dlgText) == "string" and dlgText ~= "" then
+        for line in dlgText:gmatch("[^\r\n]+") do
+            local parts = {}
+            for part in (line .. "|"):gmatch("([^|]*)|") do
+                parts[#parts + 1] = part
+            end
+            local cmd = parts[1]
+            if cmd == "end_dialog" and parts[2] and parts[2] ~= "" then
+                dName = trimStr(parts[2])
+            elseif cmd == "embed_data" and parts[2] and parts[2] ~= "" then
+                local ek = trimStr(parts[2])
+                local ev = trimStr(parts[3] or "")
+                if ek:lower() == "itemid" or ek:lower() == "item_id" then hasItemEmbed = true end
+                embedLines[#embedLines + 1] = ek .. "|" .. ev .. "|"
+            elseif cmd == "add_text_input" and parts[2] and parts[2] ~= "" and (not foundInput) then
+                countField = trimStr(parts[2])
+                foundInput = true
+            end
+        end
+    end
+
+    local lines = {
+        "action|dialog_return",
+        "dialog_name|" .. dName,
+    }
+    for _, el in ipairs(embedLines) do
+        lines[#lines + 1] = el
+    end
+    if not hasItemEmbed then
+        lines[#lines + 1] = "itemID|" .. tostring(fallbackItemID) .. "|"
+    end
+    lines[#lines + 1] = countField .. "|" .. tostring(dropAmt)
+    return table.concat(lines, "\n") .. "\n"
+end
+
 -- Dengarkan pesan asli server Growtopia (OnConsoleMessage / OnTextOverlay / OnFailedToEnterWorld)
 -- agar world yang sekadar delay "Entering..." / cooldown TIDAK PERNAH salah dikira Inaccessible!
 function Engine.handleVariant(var)
+    if type(var) ~= "table" and type(var) ~= "userdata" then return false end
+
+    local v1, v2 = nil, nil
+    pcall(function() v1 = var.v1 or var[0] end)
+    pcall(function() v2 = var.v2 or var[1] end)
+    local fn = tostring(v1 or "")
+    local payload = tostring(v2 or "")
+
+    -- Auto-confirm dialog drop / drop_item Growtopia V5.x saat Engine.STATE.pending_drop_id > 0
+    if fn == "OnDialogRequest" and payload ~= "" then
+        local low = payload:lower()
+        local endDlg = (payload:match("end_dialog|([^|\r\n]+)") or ""):lower()
+        if (Engine.STATE.pending_drop_id or 0) > 0 and (endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
+            or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true))
+        then
+            if not Engine.STATE.drop_confirmed then
+                Engine.STATE.drop_confirmed = true
+                if sendPacket then
+                    local pktStr = buildDropDialogReturn(payload, Engine.STATE.pending_drop_id, Engine.STATE.pending_drop_amt)
+                    pcall(sendPacket, 2, pktStr)
+                end
+            end
+            return true
+        end
+    end
+
     local ev = Engine.STATE.warp_event
-    if not ev or type(var) ~= "table" and type(var) ~= "userdata" then return false end
+    if not ev then return false end
 
     local v1, v2 = nil, nil
     pcall(function() v1 = var.v1 or var[0] end)
@@ -1212,6 +1324,203 @@ local function restockFromStorage(row, s1, s2)
     return false
 end
 
+-- Tunggu berkurangnya seed di tas setelah drop
+local function waitInvDropTo(itemID, targetMax, maxWaitMs)
+    local waited = 0
+    local lim = maxWaitMs or 900
+    while waited < lim and Engine.STATE.running do
+        safeSleep(80)
+        waited = waited + 80
+        syncInventoryCache()
+        if getInvCount(itemID) <= targetMax then
+            return true
+        end
+    end
+    return (getInvCount(itemID) <= targetMax)
+end
+
+-- Drop satu jenis seed ke Storage (maks 200 per dialog, multi-round)
+local function dropSingleSeedToStorage(itemID, dropAmt, label)
+    itemID = math.floor(tonumber(itemID) or 0)
+    dropAmt = math.floor(tonumber(dropAmt) or 0)
+    if itemID <= 0 or dropAmt <= 0 then return true end
+
+    local initialCur = getInvCount(itemID)
+    if initialCur <= 0 then return true end
+    local targetAfter = math.max(0, initialCur - dropAmt)
+
+    for round = 1, 10 do
+        if not Engine.STATE.running then return false end
+        syncInventoryCache()
+        local cur = getInvCount(itemID)
+        if cur <= targetAfter then return true end
+
+        local excess = cur - targetAfter
+        local batchAmt = math.min(200, excess)
+
+        local okDropped = false
+        for attempt = 1, 3 do
+            if not Engine.STATE.running then return false end
+            syncInventoryCache()
+            cur = getInvCount(itemID)
+            if cur <= targetAfter then return true end
+            excess = cur - targetAfter
+            batchAmt = math.min(200, excess)
+
+            if attempt > 1 or round > 1 then
+                local px, py = getPlayerTilePos()
+                if px and py then
+                    local shift = ((attempt + round) % 2 == 0) and 2 or -2
+                    local nx = math.max(2, math.min(97, px + shift))
+                    moveSafeTo(nx, py)
+                    safeSleep(200)
+                end
+            end
+
+            Engine.STATE.pending_drop_id  = itemID
+            Engine.STATE.pending_drop_amt = batchAmt
+            Engine.STATE.drop_confirmed   = false
+            Engine.STATE.status_text = string.format("Drop %s (%d)...", tostring(label or itemID), batchAmt)
+            addLog(string.format("[Drop Seed R%d-#%d] %s (ID %d): drop %d (tas %d -> target sisa %d)",
+                round, attempt, tostring(label or itemID), itemID, batchAmt, cur, targetAfter))
+
+            -- Metode 1: API Native confirmDropItem
+            if growtopia and growtopia.confirmDropItem then
+                pcall(growtopia.confirmDropItem, itemID, batchAmt)
+                okDropped = waitInvDropTo(itemID, cur - 1, 850)
+            end
+
+            -- Metode 2: Packet standar action|drop -> ditangkap OnDialogRequest oleh Engine.handleVariant
+            if (not okDropped) and Engine.STATE.running and sendPacket then
+                Engine.STATE.drop_confirmed = false
+                pcall(sendPacket, 2, "action|drop\n|itemID|" .. tostring(itemID))
+                okDropped = waitInvDropTo(itemID, cur - 1, 950)
+            end
+
+            -- Metode 3: API Native growtopia.dropItem
+            if (not okDropped) and Engine.STATE.running and growtopia and growtopia.dropItem then
+                Engine.STATE.drop_confirmed = false
+                pcall(growtopia.dropItem, itemID)
+                okDropped = waitInvDropTo(itemID, cur - 1, 850)
+            end
+
+            -- Metode 4: Direct dialog_return untuk 'drop' & 'drop_item'
+            if (not okDropped) and Engine.STATE.running and sendPacket then
+                for _, dlgName in ipairs({ "drop", "drop_item" }) do
+                    if not Engine.STATE.running then break end
+                    local remNow = math.min(200, getInvCount(itemID) - targetAfter)
+                    if remNow <= 0 then okDropped = true; break end
+                    pcall(sendPacket, 2, string.format(
+                        "action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n",
+                        dlgName, itemID, remNow
+                    ))
+                    if waitInvDropTo(itemID, cur - 1, 750) then
+                        okDropped = true
+                        break
+                    end
+                end
+            end
+
+            Engine.STATE.pending_drop_id  = 0
+            Engine.STATE.pending_drop_amt = 0
+
+            if okDropped or getInvCount(itemID) < cur then
+                break
+            end
+            safeSleep(200)
+        end
+
+        safeSleep(300)
+    end
+
+    return (getInvCount(itemID) <= targetAfter)
+end
+
+-- Simpan kembali seluruh sisa seed di tas ke World Storage ketika penanaman selesai
+local function dropLeftoverSeedsToStorage(specificSeed1, specificSeed2)
+    local storages = parseStorageEntries()
+    if #storages == 0 then
+        addLog("[Drop Sisa Seed] Storage kosong, sisa seed dibiarkan di tas.")
+        return true
+    end
+
+    syncInventoryCache()
+    local seedsToDrop = {}
+    local seen = {}
+
+    local function checkSeed(sid)
+        sid = tonumber(sid) or 0
+        if sid > 0 and not seen[sid] then
+            seen[sid] = true
+            local cur = getInvCount(sid)
+            if cur > 0 then
+                table.insert(seedsToDrop, { id = sid, count = cur })
+            end
+        end
+    end
+
+    if specificSeed1 or specificSeed2 then
+        checkSeed(specificSeed1)
+        checkSeed(specificSeed2)
+    else
+        for _, row in ipairs(Engine.STATE.rows) do
+            checkSeed(row.seed1)
+            checkSeed(row.seed2)
+        end
+    end
+
+    if #seedsToDrop == 0 then
+        return true -- Tidak ada sisa seed di tas
+    end
+
+    local st = storages[1]
+    addLog(string.format("[Plant Selesai] Terdeteksi sisa seed di tas. Menuju Storage %s untuk drop...", st.name))
+    Engine.STATE.status_text = "Drop Sisa Seed..."
+
+    if not warpToWorld(st.name, st.door) then
+        addLog(string.format("[Gagal] Tidak bisa masuk ke Storage %s untuk drop sisa seed.", st.name))
+        return false
+    end
+    safeSleep(600)
+
+    -- Kunci anti-take & matikan auto-collect
+    Engine.STATE.anti_take_active = true
+    if editToggle then
+        pcall(editToggle, "Auto Collect", false)
+        pcall(editToggle, "AutoCollect", false)
+        pcall(editToggle, "Anti Collect", true)
+        pcall(editToggle, "Anti-Collect", true)
+        if Engine.CFG.use_modfly then pcall(editToggle, "ModFly", true) end
+    end
+    safeSleep(180)
+
+    -- Pindah menjauh dari pintu
+    local px, py = getPlayerTilePos()
+    if px and py then
+        local targetX = (px <= 95) and (px + 2) or (px - 2)
+        moveSafeTo(targetX, py)
+        safeSleep(250)
+    end
+
+    -- Drop setiap jenis seed
+    for _, it in ipairs(seedsToDrop) do
+        if not Engine.STATE.running then break end
+        dropSingleSeedToStorage(it.id, it.count, "Seed ID " .. tostring(it.id))
+        safeSleep(300)
+    end
+
+    safeSleep(200)
+    Engine.STATE.anti_take_active = false
+    if editToggle then
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+    end
+    addLog("[Drop Selesai] Sisa seed berhasil disimpan kembali ke Storage " .. st.name .. "!")
+    return true
+end
+
 -- ============================================================================
 -- 5. AKSI TANAM & SPLICE (RANGE-VERIFIED & SMART RESUME)
 -- ============================================================================
@@ -1601,6 +1910,29 @@ local function processWorldRow(row)
         row.status = "Done"
         addLog("[Info] World " .. row.name .. " sudah penuh tertanam.")
         Engine.saveData()
+
+        -- Cek apakah antrean berikutnya masih membutuhkan seed s1/s2 ini
+        local nextNeedsSameSeed = false
+        for i = (Engine.STATE.active_row_idx or 1) + 1, #Engine.STATE.rows do
+            local nextRow = Engine.STATE.rows[i]
+            if nextRow and nextRow.status ~= "Done" and nextRow.status ~= "Inaccessible" then
+                local ns1 = ensureSeedID(nextRow.seed_id or nextRow.seed1)
+                local ns2 = ensureSeedID(nextRow.splice_id or nextRow.seed2)
+                if (ns1 == s1 and ns2 == s2) or (ns1 == s2 and ns2 == s1) then
+                    nextNeedsSameSeed = true
+                end
+                break
+            end
+        end
+
+        local curS1 = (s1 > 0) and getInvCount(s1) or 0
+        local curS2 = (s2 > 0) and getInvCount(s2) or 0
+        if (curS1 > 0 or curS2 > 0) and not nextNeedsSameSeed then
+            addLog(string.format("[Sisa Seed] World %s sudah penuh dan terdapat sisa seed di tas (S1:%d, S2:%d). Mengembalikan ke storage...",
+                row.name, curS1, curS2))
+            dropLeftoverSeedsToStorage(s1, s2)
+        end
+
         return true
     elseif initHoles < 0 then
         row.status = "Retry Warp"
@@ -1669,6 +2001,29 @@ local function processWorldRow(row)
         row.status = "Done"
         addLog("[Selesai] World " .. row.name .. " 100% tuntas!")
         Engine.saveData()
+
+        -- Cek apakah antrean berikutnya masih membutuhkan seed s1/s2 ini
+        local nextNeedsSameSeed = false
+        for i = (Engine.STATE.active_row_idx or 1) + 1, #Engine.STATE.rows do
+            local nextRow = Engine.STATE.rows[i]
+            if nextRow and nextRow.status ~= "Done" and nextRow.status ~= "Inaccessible" then
+                local ns1 = ensureSeedID(nextRow.seed_id or nextRow.seed1)
+                local ns2 = ensureSeedID(nextRow.splice_id or nextRow.seed2)
+                if (ns1 == s1 and ns2 == s2) or (ns1 == s2 and ns2 == s1) then
+                    nextNeedsSameSeed = true
+                end
+                break
+            end
+        end
+
+        local curS1 = (s1 > 0) and getInvCount(s1) or 0
+        local curS2 = (s2 > 0) and getInvCount(s2) or 0
+        if (curS1 > 0 or curS2 > 0) and not nextNeedsSameSeed then
+            addLog(string.format("[Sisa Seed] World %s selesai dan terdapat sisa seed di tas (S1:%d, S2:%d). Mengembalikan ke storage...",
+                row.name, curS1, curS2))
+            dropLeftoverSeedsToStorage(s1, s2)
+        end
+
         return true
     else
         row.status = string.format("Sisa %d", rem)
@@ -1727,6 +2082,23 @@ local function mainPlantLoop()
         end
     end
 
+    -- Jika seluruh antrean tuntas (atau berhenti bukan karena loop): kembalikan sisa seed
+    if Engine.STATE.running and not Engine.CFG.loop_enabled then
+        local anyLeft = false
+        for _, r in ipairs(Engine.STATE.rows) do
+            local rs1 = ensureSeedID(r.seed_id or r.seed1)
+            local rs2 = ensureSeedID(r.splice_id or r.seed2)
+            if (rs1 > 0 and getInvCount(rs1) > 0) or (rs2 > 0 and getInvCount(rs2) > 0) then
+                anyLeft = true
+                break
+            end
+        end
+        if anyLeft then
+            addLog("[Plant Selesai] Seluruh antrean tuntas dan masih ada sisa seed di tas. Mengembalikan ke storage...")
+            dropLeftoverSeedsToStorage()
+        end
+    end
+
     Engine.STATE.running = false
     Engine.STATE.enabled = false
     Engine.STATE.active_row_idx = 0
@@ -1769,6 +2141,16 @@ function Engine.stop()
     Engine.STATE.running = false
     Engine.STATE.enabled = false
     Engine.STATE.status_text = "Stopped"
+    Engine.STATE.anti_take_active = false
+    Engine.STATE.pending_drop_id = 0
+    Engine.STATE.pending_drop_amt = 0
+    Engine.STATE.drop_confirmed = false
+    if editToggle then
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+    end
 end
 
 function Engine.removeInaccessible()

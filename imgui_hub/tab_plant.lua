@@ -2358,7 +2358,10 @@ local function handleSendPacketRaw(pkt)
         return true
     end
     if tonumber(pkt.type) == 11 then
-        -- Anti-Take untuk modul apapun yang mengaktifkan anti_take_active (misal Auto Buy Pack)
+        -- Anti-Take untuk modul apapun yang mengaktifkan anti_take_active (misal Auto Plant drop seed / Auto Buy Pack)
+        if HUB.plant and HUB.plant.STATE and HUB.plant.STATE.anti_take_active then
+            return true
+        end
         for _, feat in ipairs(getDynamicFeatures()) do
             local m = feat.mod or HUB[feat.id]
             if m and m.STATE and m.STATE.anti_take_active then

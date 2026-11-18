@@ -399,6 +399,9 @@ local STATE = {
     saved_farm_y        = nil,
     active_storage_idx  = 1,
     anti_take_active    = false,
+    pending_drop_id     = 0,
+    pending_drop_amt    = 0,
+    drop_confirmed      = false,
     hooks_installed     = false,
     logs                = {},
     error_logs          = {},
@@ -1284,38 +1287,78 @@ local function scanForeignLocksInWorld()
     STATE.foreign_locked_tiles = {}
     STATE.blocked_tiles = STATE.blocked_tiles or {}
 
+    local mainDoorX, mainDoorY = nil, nil
+    for y = 0, 53 do
+        for x = 0, 99 do
+            local t = getTileSafe(x, y)
+            if t and tonumber(t.fg) == 6 then -- Main Door
+                mainDoorX, mainDoorY = x, y
+                break
+            end
+        end
+        if mainDoorX then break end
+    end
+
+    local me = getLocalSafe()
+    local myUserId = tonumber(me and (me.userID or me.userId)) or 0
+
     local foreignLockCount = 0
     local lockedTileCount = 0
 
-    for y = 0, 59 do
+    for y = 0, 53 do
         for x = 0, 99 do
             local t = getTileSafe(x, y)
             local fg = tonumber(t and t.fg) or 0
             -- Hanya periksa Small Lock (202), Big Lock (204), Huge Lock (206), dan Builder's Lock (4994)
             -- JANGAN PERNAH me-lock seluruh world berdasarkan World Lock (242) agar world farm milik sendiri tidak terkunci!
             if fg == 202 or fg == 204 or fg == 206 or fg == 4994 then
-                local owned = isLockOwnedByLocal(t)
-                if not owned then
-                    foreignLockCount = foreignLockCount + 1
-                    local radius = 4 -- Small Lock (fg == 202)
-                    if fg == 204 then
-                        radius = 7 -- Big Lock
-                    elseif fg == 206 or fg == 4994 then
-                        radius = 15 -- Huge / Builder's Lock
+                -- JANGAN PERNAH tandai lock di dekat Main Door sebagai foreign lock (itu lock proteksi pintu farm sendiri!)
+                local isNearDoor = false
+                if mainDoorX and mainDoorY then
+                    if math.abs(x - mainDoorX) <= 3 and math.abs(y - mainDoorY) <= 3 then
+                        isNearDoor = true
+                    end
+                end
+
+                if not isNearDoor then
+                    -- Hanya anggap lock asing jika data owner definitif berbeda dan myUserId diketahui (> 0)
+                    local isForeign = false
+                    local okExtra, extra = pcall(function() return t.extra end)
+                    if okExtra and extra and myUserId > 0 then
+                        local ownerId = tonumber(extra.owner or extra.owner_signed) or 0
+                        if ownerId > 0 and ownerId ~= myUserId then
+                            local isAdmin = false
+                            if extra.admin then
+                                for _, admId in ipairs(extra.admin) do
+                                    if tonumber(admId) == myUserId then isAdmin = true; break end
+                                end
+                            end
+                            if not isAdmin then isForeign = true end
+                        end
                     end
 
-                    local minX = math.max(0, x - radius)
-                    local maxX = math.min(99, x + radius)
-                    local minY = math.max(0, y - radius)
-                    local maxY = math.min(53, y + radius)
-                    for cy = minY, maxY do
-                        for cx = minX, maxX do
-                            local dist = math.abs(cx - x) + math.abs(cy - y)
-                            if dist <= (radius + 1) then
-                                local k = cx .. "_" .. cy
-                                if not STATE.foreign_locked_tiles[k] then
-                                    STATE.foreign_locked_tiles[k] = true
-                                    lockedTileCount = lockedTileCount + 1
+                    if isForeign then
+                        foreignLockCount = foreignLockCount + 1
+                        local radius = 4 -- Small Lock (fg == 202)
+                        if fg == 204 then
+                            radius = 7 -- Big Lock
+                        elseif fg == 206 or fg == 4994 then
+                            radius = 15 -- Huge / Builder's Lock
+                        end
+
+                        local minX = math.max(0, x - radius)
+                        local maxX = math.min(99, x + radius)
+                        local minY = math.max(0, y - radius)
+                        local maxY = math.min(53, y + radius)
+                        for cy = minY, maxY do
+                            for cx = minX, maxX do
+                                local dist = math.abs(cx - x) + math.abs(cy - y)
+                                if dist <= (radius + 1) then
+                                    local k = cx .. "_" .. cy
+                                    if not STATE.foreign_locked_tiles[k] then
+                                        STATE.foreign_locked_tiles[k] = true
+                                        lockedTileCount = lockedTileCount + 1
+                                    end
                                 end
                             end
                         end
@@ -2251,6 +2294,236 @@ local function restockFromStorage()
 end
 
 -- ============================================================================
+-- 13.5. RETURN DIALOG & DROP SISA SEED KE WORLD STORAGE
+-- ============================================================================
+local function trimStr(s)
+    if type(s) ~= "string" then return "" end
+    return s:match("^%s*(.-)%s*$") or ""
+end
+
+local function buildDropDialogReturn(dlgText, fallbackItemID, dropAmt)
+    local dName = "drop_item"
+    local embedLines = {}
+    local hasItemEmbed = false
+    local countField = "count"
+    local foundInput = false
+
+    if type(dlgText) == "string" and dlgText ~= "" then
+        for line in dlgText:gmatch("[^\r\n]+") do
+            local parts = {}
+            for part in (line .. "|"):gmatch("([^|]*)|") do
+                parts[#parts + 1] = part
+            end
+            local cmd = parts[1]
+            if cmd == "end_dialog" and parts[2] and parts[2] ~= "" then
+                dName = trimStr(parts[2])
+            elseif cmd == "embed_data" and parts[2] and parts[2] ~= "" then
+                local ek = trimStr(parts[2])
+                local ev = trimStr(parts[3] or "")
+                if ek:lower() == "itemid" or ek:lower() == "item_id" then hasItemEmbed = true end
+                embedLines[#embedLines + 1] = ek .. "|" .. ev .. "|"
+            elseif cmd == "add_text_input" and parts[2] and parts[2] ~= "" and (not foundInput) then
+                countField = trimStr(parts[2])
+                foundInput = true
+            end
+        end
+    end
+
+    local lines = {
+        "action|dialog_return",
+        "dialog_name|" .. dName,
+    }
+    for _, el in ipairs(embedLines) do
+        lines[#lines + 1] = el
+    end
+    if not hasItemEmbed then
+        lines[#lines + 1] = "itemID|" .. tostring(fallbackItemID) .. "|"
+    end
+    lines[#lines + 1] = countField .. "|" .. tostring(dropAmt)
+    return table.concat(lines, "\n") .. "\n"
+end
+
+local function waitInvDropTo(itemID, targetMax, maxWaitMs)
+    local waited = 0
+    local lim = maxWaitMs or 900
+    while waited < lim and STATE.running do
+        safeSleep(80)
+        waited = waited + 80
+        syncInventoryCache()
+        if getInvCount(itemID) <= targetMax then
+            return true
+        end
+    end
+    return (getInvCount(itemID) <= targetMax)
+end
+
+local function dropSingleSeedToStorage(itemID, dropAmt, label)
+    itemID = math.floor(tonumber(itemID) or 0)
+    dropAmt = math.floor(tonumber(dropAmt) or 0)
+    if itemID <= 0 or dropAmt <= 0 then return true end
+
+    local initialCur = getInvCount(itemID)
+    if initialCur <= 0 then return true end
+    local targetAfter = math.max(0, initialCur - dropAmt)
+
+    for round = 1, 10 do
+        if not STATE.running then return false end
+        syncInventoryCache()
+        local cur = getInvCount(itemID)
+        if cur <= targetAfter then return true end
+
+        local excess = cur - targetAfter
+        local batchAmt = math.min(200, excess)
+
+        local okDropped = false
+        for attempt = 1, 3 do
+            if not STATE.running then return false end
+            syncInventoryCache()
+            cur = getInvCount(itemID)
+            if cur <= targetAfter then return true end
+            excess = cur - targetAfter
+            batchAmt = math.min(200, excess)
+
+            if attempt > 1 or round > 1 then
+                local px, py = getPlayerTilePos()
+                if px and py then
+                    local shift = ((attempt + round) % 2 == 0) and 2 or -2
+                    local nx = math.max(2, math.min(97, px + shift))
+                    moveSafeTo(nx, py)
+                    safeSleep(200)
+                end
+            end
+
+            STATE.pending_drop_id  = itemID
+            STATE.pending_drop_amt = batchAmt
+            STATE.drop_confirmed   = false
+            setStatus("Drop Seed", string.format("Drop %s (%d)...", tostring(label or itemID), batchAmt))
+            addLog(string.format("[Drop Seed R%d-#%d] %s (ID %d): drop %d (tas %d -> target sisa %d)",
+                round, attempt, tostring(label or itemID), itemID, batchAmt, cur, targetAfter))
+
+            -- Metode 1: API Native confirmDropItem
+            if growtopia and growtopia.confirmDropItem then
+                pcall(growtopia.confirmDropItem, itemID, batchAmt)
+                okDropped = waitInvDropTo(itemID, cur - 1, 850)
+            end
+
+            -- Metode 2: Packet standar action|drop -> ditangkap OnDialogRequest oleh hook onvariant
+            if (not okDropped) and STATE.running and sendPacket then
+                STATE.drop_confirmed = false
+                pcall(sendPacket, 2, "action|drop\n|itemID|" .. tostring(itemID))
+                okDropped = waitInvDropTo(itemID, cur - 1, 950)
+            end
+
+            -- Metode 3: API Native growtopia.dropItem
+            if (not okDropped) and STATE.running and growtopia and growtopia.dropItem then
+                STATE.drop_confirmed = false
+                pcall(growtopia.dropItem, itemID)
+                okDropped = waitInvDropTo(itemID, cur - 1, 850)
+            end
+
+            -- Metode 4: Direct dialog_return untuk 'drop' & 'drop_item'
+            if (not okDropped) and STATE.running and sendPacket then
+                for _, dlgName in ipairs({ "drop", "drop_item" }) do
+                    if not STATE.running then break end
+                    local remNow = math.min(200, getInvCount(itemID) - targetAfter)
+                    if remNow <= 0 then okDropped = true; break end
+                    pcall(sendPacket, 2, string.format(
+                        "action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n",
+                        dlgName, itemID, remNow
+                    ))
+                    if waitInvDropTo(itemID, cur - 1, 750) then
+                        okDropped = true
+                        break
+                    end
+                end
+            end
+
+            STATE.pending_drop_id  = 0
+            STATE.pending_drop_amt = 0
+
+            if okDropped or getInvCount(itemID) < cur then
+                break
+            end
+            safeSleep(200)
+        end
+
+        safeSleep(300)
+    end
+
+    return (getInvCount(itemID) <= targetAfter)
+end
+
+local function dropLeftoverSeedsToStorage(specificSeed1, specificSeed2)
+    if #CFG.storage_world_list == 0 then
+        addLog("[Drop Sisa Seed] Daftar World Storage kosong, sisa seed dibiarkan di tas.")
+        return true
+    end
+
+    syncInventoryCache()
+    local s1 = tonumber(specificSeed1 or CFG.seed_1_id) or 0
+    local s2 = tonumber(specificSeed2 or CFG.seed_2_id) or 0
+
+    local seedsToDrop = {}
+    if s1 > 0 and getInvCount(s1) > 0 then
+        table.insert(seedsToDrop, { id = s1, count = getInvCount(s1) })
+    end
+    if s2 > 0 and s2 ~= s1 and getInvCount(s2) > 0 then
+        table.insert(seedsToDrop, { id = s2, count = getInvCount(s2) })
+    end
+
+    if #seedsToDrop == 0 then return true end
+
+    local storEntry = CFG.storage_world_list[1]
+    local storName = storEntry.name
+    local storDoor = storEntry.door or ""
+
+    setStatus("Drop Sisa Seed", string.format("Warp ke Storage: %s...", storName))
+    addLog(string.format("[Plant Selesai] Menyimpan sisa seed ke Storage %s...", storName))
+
+    local okWarp = warpToWorld(storName, storDoor)
+    if not okWarp then
+        addLog(string.format("[Gagal] Tidak bisa masuk ke Storage %s untuk drop sisa seed.", storName))
+        return false
+    end
+    safeSleep(700)
+
+    -- Aktifkan anti-take agar bot tidak menyedot kembali seed yang di-drop
+    STATE.anti_take_active = true
+    if editToggle then
+        pcall(editToggle, "Auto Collect", false)
+        pcall(editToggle, "AutoCollect", false)
+        pcall(editToggle, "Anti Collect", true)
+        pcall(editToggle, "Anti-Collect", true)
+        if CFG.modfly_enabled then pcall(editToggle, "ModFly", true) end
+    end
+    safeSleep(200)
+
+    local px, py = getPlayerTilePos()
+    if px and py then
+        local targetX = (px <= 95) and (px + 2) or (px - 2)
+        moveSafeTo(targetX, py)
+        safeSleep(250)
+    end
+
+    for _, it in ipairs(seedsToDrop) do
+        if not STATE.running then break end
+        dropSingleSeedToStorage(it.id, it.count, getItemNameSafe(it.id))
+        safeSleep(300)
+    end
+
+    safeSleep(200)
+    STATE.anti_take_active = false
+    if editToggle then
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+    end
+    addLog("[Drop Selesai] Sisa seed berhasil disimpan kembali ke Storage " .. storName .. "!")
+    return true
+end
+
+-- ============================================================================
 -- 14. ALUR UTAMA TANAM PER BARIS & WORLD
 -- ============================================================================
 local function countPlantableSpotsInWorld()
@@ -2765,6 +3038,26 @@ local function autoPlantMainLoop()
                     STATE.active_world_idx = STATE.active_world_idx + 1
                     persistConfig()
                     updateWorldDisplayList()
+
+                    -- Cek apakah masih ada world berikutnya yang membutuhkan seed
+                    local nextNeedsSameSeed = false
+                    for i = STATE.active_world_idx, #CFG.world_list do
+                        local nw = CFG.world_list[i]
+                        if nw and not nw.done then
+                            nextNeedsSameSeed = true
+                            break
+                        end
+                    end
+
+                    local s1 = CFG.seed_1_id
+                    local s2 = CFG.seed_2_id
+                    local curS1 = (s1 > 0) and getInvCount(s1) or 0
+                    local curS2 = (CFG.splice_mode and s2 > 0) and getInvCount(s2) or 0
+                    if (curS1 > 0 or curS2 > 0) and not nextNeedsSameSeed then
+                        addLog(string.format("[Sisa Seed] World Farm %s sudah penuh dan ada sisa seed di tas (S1:%d, S2:%d). Mengembalikan ke storage...",
+                            entry.name, curS1, curS2))
+                        dropLeftoverSeedsToStorage(s1, s2)
+                    end
                 elseif initialHoles > 0 then
                     -- Cek stok awal HANYA jika world masih membutuhkan penanaman
                     if not hasEnoughSeedInBackpack() then
@@ -2787,6 +3080,26 @@ local function autoPlantMainLoop()
                         addLog(string.format("World Farm %s SELESAI ditanam!", entry.name))
                         if sendNotification then
                             pcall(sendNotification, string.format("Farm %s selesai! Menuju world berikutnya...", entry.name))
+                        end
+
+                        -- Cek apakah masih ada world berikutnya yang membutuhkan seed
+                        local nextNeedsSameSeed = false
+                        for i = STATE.active_world_idx, #CFG.world_list do
+                            local nw = CFG.world_list[i]
+                            if nw and not nw.done then
+                                nextNeedsSameSeed = true
+                                break
+                            end
+                        end
+
+                        local s1 = CFG.seed_1_id
+                        local s2 = CFG.seed_2_id
+                        local curS1 = (s1 > 0) and getInvCount(s1) or 0
+                        local curS2 = (CFG.splice_mode and s2 > 0) and getInvCount(s2) or 0
+                        if (curS1 > 0 or curS2 > 0) and not nextNeedsSameSeed then
+                            addLog(string.format("[Sisa Seed] World Farm %s selesai dan terdapat sisa seed di tas (S1:%d, S2:%d). Mengembalikan ke storage...",
+                                entry.name, curS1, curS2))
+                            dropLeftoverSeedsToStorage(s1, s2)
                         end
                     else
                         -- Terputus / Disconnect / Pause / Belum tuntas
@@ -2878,6 +3191,15 @@ local function autoPlantMainLoop()
     end
 
     if STATE.running then
+        local s1 = CFG.seed_1_id
+        local s2 = CFG.seed_2_id
+        local curS1 = (s1 > 0) and getInvCount(s1) or 0
+        local curS2 = (CFG.splice_mode and s2 > 0) and getInvCount(s2) or 0
+        if curS1 > 0 or curS2 > 0 then
+            addLog(string.format("[Sisa Seed] Seluruh world farm selesai dan terdapat sisa seed di tas (S1:%d, S2:%d). Mengembalikan ke storage...",
+                curS1, curS2))
+            dropLeftoverSeedsToStorage(s1, s2)
+        end
         setStatus("Selesai Semua World", "Seluruh antrean world farm telah selesai ditanam!")
         if sendNotification then pcall(sendNotification, "Semua world farm di list selesai ditanam!") end
     else
@@ -2917,8 +3239,18 @@ end
 local function stopBot()
     STATE.running = false
     STATE.paused  = false
+    STATE.anti_take_active = false
+    STATE.pending_drop_id = 0
+    STATE.pending_drop_amt = 0
+    STATE.drop_confirmed = false
     setStatus("Berhenti", "Bot dimatikan pengguna.")
-    if editToggle then pcall(editToggle, "ap_run_power", false) end
+    if editToggle then
+        pcall(editToggle, "ap_run_power", false)
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+    end
 end
 
 -- ============================================================================
@@ -3303,6 +3635,33 @@ local function onSendPacketDialogHook(ptype, pkt)
         return true
     end
 
+    return false
+end
+
+local function onVariantDialogHook(var)
+    if type(var) ~= "table" and type(var) ~= "userdata" then return false end
+    local v1, v2 = nil, nil
+    pcall(function() v1 = var.v1 or var[0] end)
+    pcall(function() v2 = var.v2 or var[1] end)
+    local fn = tostring(v1 or "")
+    local payload = tostring(v2 or "")
+
+    if fn == "OnDialogRequest" and payload ~= "" then
+        local endDlg = (payload:match("end_dialog|([^|\r\n]+)") or ""):lower()
+        local low = payload:lower()
+        if (STATE.pending_drop_id or 0) > 0 and (endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
+            or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true))
+        then
+            if not STATE.drop_confirmed then
+                STATE.drop_confirmed = true
+                if sendPacket then
+                    local pktStr = buildDropDialogReturn(payload, STATE.pending_drop_id, STATE.pending_drop_amt)
+                    pcall(sendPacket, 2, pktStr)
+                end
+            end
+            return true
+        end
+    end
     return false
 end
 
@@ -3945,9 +4304,12 @@ local ALL_UI_ALIASES = {
 ensureHooksInstalled()
 onSendPacket = onSendPacketDialogHook
 OnSendPacket = onSendPacketDialogHook
+onVariant    = onVariantDialogHook
+OnVariant    = onVariantDialogHook
 if addHook then
     pcall(addHook, OnValue, "onvalue")
     pcall(addHook, onSendPacketDialogHook, "onsendpacket")
+    pcall(addHook, onVariantDialogHook, "onvariant")
     if applyHook then pcall(applyHook) end
 end
 
@@ -4012,4 +4374,6 @@ _G.savePlantStoragesToFile = savePlantStoragesToFile
 _G.loadPlantStoragesFromFile = loadPlantStoragesFromFile
 _G.handlePlantUIValue = handlePlantUIValue
 _G.onSendPacketDialogHook = onSendPacketDialogHook
+_G.onVariantDialogHook = onVariantDialogHook
+_G.dropLeftoverSeedsToStorage = dropLeftoverSeedsToStorage
 
