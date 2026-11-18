@@ -64,6 +64,7 @@ BP.STATE = {
     buying_now       = false,
     pending_drop_id  = 0,
     pending_drop_amt = 0,
+    drop_confirmed   = false,
     bought_count     = 0,
     status_text      = "Idle",
     pack_db          = {},     -- { { name=..., id=..., price=..., items=... }, ... }
@@ -204,8 +205,10 @@ function BP.saveData()
         "QTY=" .. tostring(tonumber(BP.CFG.target_qty) or 0),
         "SAVEW=" .. tostring(BP.CFG.save_world or ""),
         "ADROP=" .. (BP.CFG.auto_drop and "1" or "0"),
+        "DTHRESH=" .. tostring(tonumber(BP.CFG.drop_thresh) or 100),
         "BDELAY=" .. tostring(tonumber(BP.CFG.buy_delay) or 900),
         "DDELAY=" .. tostring(tonumber(BP.CFG.drop_delay) or 450),
+        "WDELAY=" .. tostring(tonumber(BP.CFG.warp_delay) or 3500),
     }
     local ok, f = pcall(io.open, getDataPath(), "w")
     if ok and f then f:write(table.concat(lines, "\n")); f:close() end
@@ -225,8 +228,10 @@ function BP.loadData()
         elseif k == "QTY" then BP.CFG.target_qty = tonumber(v) or 0
         elseif k == "SAVEW" then BP.CFG.save_world = trimStr(v)
         elseif k == "ADROP" then BP.CFG.auto_drop = (v ~= "0")
+        elseif k == "DTHRESH" then BP.CFG.drop_thresh = tonumber(v) or 100
         elseif k == "BDELAY" then BP.CFG.buy_delay = tonumber(v) or 900
         elseif k == "DDELAY" then BP.CFG.drop_delay = tonumber(v) or 450
+        elseif k == "WDELAY" then BP.CFG.warp_delay = tonumber(v) or 3500
         end
     end
 end
@@ -332,6 +337,135 @@ local function getInvCount(id)
     return 0
 end
 
+local function getLocalSafe()
+    local fns = { getLocal, GetLocal }
+    for _, fn in ipairs(fns) do
+        if type(fn) == "function" then
+            local ok, res = pcall(fn)
+            if ok and res ~= nil then return res end
+        end
+    end
+    return nil
+end
+
+local function getPlayerPos()
+    local p = getLocalSafe()
+    if p then
+        local px = p.posX or (p.pos and p.pos.x)
+        local py = p.posY or (p.pos and p.pos.y)
+        if px and py then
+            return math.floor((px + 10) / 32), math.floor((py + 15) / 32)
+        end
+    end
+    return nil, nil
+end
+
+local function moveSafeTo(tx, ty)
+    if not BP.STATE.running then return false end
+    tx = math.max(0, math.min(99, math.floor(tx or 0)))
+    ty = math.max(0, math.min(53, math.floor(ty or 0)))
+    local px, py = getPlayerPos()
+    if px == tx and py == ty then return true end
+
+    local pFn = FindPath or findPath
+    if pFn then
+        pcall(pFn, tx, ty)
+        safeSleep(200)
+    elseif growtopia and growtopia.move then
+        pcall(growtopia.move, tx * 32, ty * 32)
+        safeSleep(200)
+    elseif sendPacketRaw then
+        pcall(sendPacketRaw, false, {
+            type = 0,
+            pos = { x = tx * 32, y = ty * 32 }
+        })
+        safeSleep(200)
+    end
+    return true
+end
+
+local function ensureSafeDropPosition(shiftOffset)
+    if editToggle then pcall(editToggle, "ModFly", true) end
+    local px, py = getPlayerPos()
+    if not px or not py then
+        safeSleep(150)
+        return
+    end
+
+    local targetX = px
+    local targetY = py
+
+    if shiftOffset and shiftOffset ~= 0 then
+        targetX = math.max(2, math.min(97, px + shiftOffset))
+    else
+        -- Geser 2 petak menjauh dari pintu masuk agar tidak terblokir 'Cannot drop here'
+        local dX = (px <= 95) and 2 or -2
+        targetX = math.max(2, math.min(97, px + dX))
+    end
+
+    moveSafeTo(targetX, targetY)
+    safeSleep(250)
+end
+
+local function setAutoCollectActive(enabled)
+    if not editToggle then return end
+    if enabled then
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+    else
+        pcall(editToggle, "Auto Collect", false)
+        pcall(editToggle, "AutoCollect", false)
+        pcall(editToggle, "Anti Collect", true)
+        pcall(editToggle, "Anti-Collect", true)
+    end
+end
+
+local function getInventorySnapshot()
+    local snap = {}
+    if getInventory then
+        local ok, inv = pcall(getInventory)
+        if ok and (type(inv) == "table" or type(inv) == "userdata") then
+            local container = inv
+            pcall(function()
+                if inv.items ~= nil and (type(inv.items) == "table" or type(inv.items) == "userdata") then
+                    container = inv.items
+                end
+            end)
+            local seen = 0
+            pcall(function()
+                for _, it in pairs(container) do
+                    local iid, amt = readInvItemFields(it)
+                    if iid and iid > 0 then
+                        seen = seen + 1
+                        snap[iid] = (snap[iid] or 0) + (amt or 0)
+                    end
+                end
+            end)
+            if seen == 0 then
+                local okLen, n = pcall(function() return #container end)
+                if not okLen or not n or n <= 0 then pcall(function() n = container:size() end) end
+                local maxI = (n and tonumber(n) and tonumber(n) > 0) and tonumber(n) or 400
+                local misses = 0
+                for i = 0, maxI do
+                    local okI, it = pcall(function() return container[i] end)
+                    local iid, amt = nil, nil
+                    if okI then iid, amt = readInvItemFields(it) end
+                    if iid and iid > 0 then
+                        misses = 0
+                        snap[iid] = (snap[iid] or 0) + (amt or 0)
+                    else
+                        misses = misses + 1
+                        if misses >= 50 and i > 5 then break end
+                    end
+                end
+            end
+        end
+    end
+    return snap
+end
+
 local function warpToSaveWorld()
     local raw = trimStr(BP.CFG.save_world)
     if raw == "" then return true end
@@ -355,7 +489,7 @@ local function warpToSaveWorld()
         while w < lim and BP.STATE.running do
             safeSleep(250); w = w + 250
             if getCurrentWorldSafe() == wName then
-                safeSleep(600)
+                safeSleep(700)
                 if HUB_REF and HUB_REF.conn and HUB_REF.conn.setWarping then pcall(HUB_REF.conn.setWarping, false) end
                 return true
             end
@@ -367,91 +501,305 @@ end
 
 local function getPackItemIDList()
     local ids = {}
+    local seen = {}
     for num in tostring(BP.CFG.pack_items or ""):gmatch("%d+") do
         local id = tonumber(num)
-        if id and id > 0 then table.insert(ids, id) end
+        if id and id > 0 and not seen[id] then
+            seen[id] = true
+            table.insert(ids, id)
+        end
     end
     return ids
 end
 
-local function dropPackItemsSafe()
-    if not BP.CFG.auto_drop then return end
-    local ids = getPackItemIDList()
-    if #ids == 0 then return end
+local function collectItemsToDrop(preInv)
+    local itemsToDrop = {}
+    local seen = {}
 
-    BP.STATE.anti_take_active = true
-    if editToggle then pcall(editToggle, "Auto Collect", false) end
-
-    local dDelay = math.max(250, tonumber(BP.CFG.drop_delay) or 450)
-    for _, itemID in ipairs(ids) do
-        if not BP.STATE.running then break end
-        local amt = getInvCount(itemID)
-        if amt > 0 then
-            BP.STATE.pending_drop_id = itemID
-            BP.STATE.pending_drop_amt = amt
-            if growtopia and growtopia.confirmDropItem then
-                pcall(growtopia.confirmDropItem, itemID, amt)
-            elseif sendPacket then
-                pcall(sendPacket, 2, string.format("action|drop\n|itemID|%d\n", itemID))
+    -- 1. Tambahkan seluruh ID dari konfigurasi pack_items (drop seluruh stok yang ada)
+    local packIds = getPackItemIDList()
+    for _, id in ipairs(packIds) do
+        if not seen[id] then
+            seen[id] = true
+            local cur = getInvCount(id)
+            if cur > 0 then
+                table.insert(itemsToDrop, { id = id, amt = cur, label = "Pack Item (ID " .. tostring(id) .. ")" })
             end
-            safeSleep(dDelay)
-            BP.STATE.pending_drop_id = 0
-            BP.STATE.pending_drop_amt = 0
         end
     end
 
+    -- 2. Tambahkan item ID yang bertambah dari snapshot sebelum beli (deteksi dinamis untuk pack random/custom)
+    if preInv and type(preInv) == "table" then
+        local postSnap = getInventorySnapshot()
+        for id, cur in pairs(postSnap) do
+            if id and id > 0 and not seen[id] then
+                local before = preInv[id] or 0
+                if cur > before then
+                    seen[id] = true
+                    local gained = cur - before
+                    table.insert(itemsToDrop, { id = id, amt = gained, label = "Item Didapat (ID " .. tostring(id) .. ")" })
+                end
+            end
+        end
+    end
+
+    return itemsToDrop
+end
+
+local function waitInvDropTo(itemID, targetMax, maxWaitMs)
+    local waited = 0
+    local lim = maxWaitMs or 900
+    while waited < lim and BP.STATE.running do
+        safeSleep(80)
+        waited = waited + 80
+        if getInvCount(itemID) <= targetMax then
+            return true
+        end
+    end
+    return (getInvCount(itemID) <= targetMax)
+end
+
+-- Parse field OnDialogRequest asli Growtopia (support dialog_name 'drop' & 'drop_item', embed_data dinamis, & text input dinamis)
+local function buildDropDialogReturn(dlgText, fallbackItemID, dropAmt)
+    local dName = "drop_item"
+    local embedLines = {}
+    local hasItemEmbed = false
+    local countField = "count"
+    local foundInput = false
+
+    if type(dlgText) == "string" and dlgText ~= "" then
+        for line in dlgText:gmatch("[^\r\n]+") do
+            local parts = {}
+            for part in (line .. "|"):gmatch("([^|]*)|") do
+                parts[#parts + 1] = part
+            end
+            local cmd = parts[1]
+            if cmd == "end_dialog" and parts[2] and parts[2] ~= "" then
+                dName = trimStr(parts[2])
+            elseif cmd == "embed_data" and parts[2] and parts[2] ~= "" then
+                local ek = trimStr(parts[2])
+                local ev = trimStr(parts[3] or "")
+                if ek:lower() == "itemid" or ek:lower() == "item_id" then hasItemEmbed = true end
+                embedLines[#embedLines + 1] = ek .. "|" .. ev .. "|"
+            elseif cmd == "add_text_input" and parts[2] and parts[2] ~= "" and (not foundInput) then
+                countField = trimStr(parts[2])
+                foundInput = true
+            end
+        end
+    end
+
+    local lines = {
+        "action|dialog_return",
+        "dialog_name|" .. dName,
+    }
+    for _, el in ipairs(embedLines) do
+        lines[#lines + 1] = el
+    end
+    if not hasItemEmbed then
+        lines[#lines + 1] = "itemID|" .. tostring(fallbackItemID) .. "|"
+    end
+    lines[#lines + 1] = countField .. "|" .. tostring(dropAmt)
+    return table.concat(lines, "\n") .. "\n"
+end
+
+local function dropSingleItem(itemID, dropAmt, label)
+    itemID = math.floor(tonumber(itemID) or 0)
+    dropAmt = math.floor(tonumber(dropAmt) or 0)
+    if itemID <= 0 or dropAmt <= 0 then return true end
+
+    local initialCur = getInvCount(itemID)
+    if initialCur <= 0 then return true end
+    local targetAfter = math.max(0, initialCur - dropAmt)
+
+    for round = 1, 10 do
+        if not BP.STATE.running then return false end
+        local cur = getInvCount(itemID)
+        if cur <= targetAfter then return true end
+
+        local excess = cur - targetAfter
+        local batchAmt = math.min(200, excess) -- Batas maks GT drop dialog = 200
+
+        local okDropped = false
+        for attempt = 1, 3 do
+            if not BP.STATE.running then return false end
+            cur = getInvCount(itemID)
+            if cur <= targetAfter then return true end
+            excess = cur - targetAfter
+            batchAmt = math.min(200, excess)
+
+            if attempt > 1 or round > 1 then
+                -- Geser posisi bila tile sebelumnya penuh / terblokir
+                local shift = ((attempt + round) % 2 == 0) and 2 or -2
+                ensureSafeDropPosition(shift)
+            end
+
+            BP.STATE.pending_drop_id  = itemID
+            BP.STATE.pending_drop_amt = batchAmt
+            BP.STATE.drop_confirmed   = false
+            BP.STATE.status_text = string.format("Drop %s (%d)...", tostring(label or itemID), batchAmt)
+            addLog(string.format("[Drop R%d-#%d] %s (ID %d): drop %d (tas %d -> target sisa %d)",
+                round, attempt, tostring(label or itemID), itemID, batchAmt, cur, targetAfter))
+
+            -- Metode 1: API Native confirmDropItem
+            if growtopia and growtopia.confirmDropItem then
+                pcall(growtopia.confirmDropItem, itemID, batchAmt)
+                okDropped = waitInvDropTo(itemID, cur - 1, 850)
+            end
+
+            -- Metode 2: Packet standar action|drop -> ditangkap OnDialogRequest oleh BP.handleVariant
+            if (not okDropped) and BP.STATE.running and sendPacket then
+                BP.STATE.drop_confirmed = false
+                pcall(sendPacket, 2, "action|drop\n|itemID|" .. tostring(itemID))
+                okDropped = waitInvDropTo(itemID, cur - 1, 950)
+            end
+
+            -- Metode 3: API Native growtopia.dropItem
+            if (not okDropped) and BP.STATE.running and growtopia and growtopia.dropItem then
+                BP.STATE.drop_confirmed = false
+                pcall(growtopia.dropItem, itemID)
+                okDropped = waitInvDropTo(itemID, cur - 1, 850)
+            end
+
+            -- Metode 4: Direct dialog_return untuk 'drop' & 'drop_item'
+            if (not okDropped) and BP.STATE.running and sendPacket then
+                for _, dlgName in ipairs({ "drop", "drop_item" }) do
+                    if not BP.STATE.running then break end
+                    local remNow = math.min(200, getInvCount(itemID) - targetAfter)
+                    if remNow <= 0 then okDropped = true; break end
+                    pcall(sendPacket, 2, string.format(
+                        "action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n",
+                        dlgName, itemID, remNow
+                    ))
+                    if waitInvDropTo(itemID, cur - 1, 750) then
+                        okDropped = true
+                        break
+                    end
+                end
+            end
+
+            BP.STATE.pending_drop_id  = 0
+            BP.STATE.pending_drop_amt = 0
+
+            if okDropped or getInvCount(itemID) < cur then
+                break
+            end
+            safeSleep(200)
+        end
+
+        safeSleep(math.max(150, tonumber(BP.CFG.drop_delay) or 450))
+    end
+
+    return (getInvCount(itemID) <= targetAfter)
+end
+
+local function executeDropAtStorage(preInv)
+    local rawSave = trimStr(BP.CFG.save_world)
+    if rawSave == "" then
+        addLog("[Drop] World Storage tidak diisi — item disimpan di tas.")
+        return true
+    end
+
+    -- 1. Warp ke World Storage jika belum berada di sana
+    BP.STATE.status_text = "Warp Storage..."
+    addLog("[Drop] Menuju World Storage: " .. rawSave)
+    if not warpToSaveWorld() then
+        addLog("[Gagal] Tidak bisa masuk ke World Storage: " .. rawSave)
+        return false
+    end
+    safeSleep(500)
+
+    -- 2. Kumpulkan daftar item yang harus di-drop
+    local toDrop = collectItemsToDrop(preInv)
+    if #toDrop == 0 then
+        addLog("[Drop] Tidak ada item pack / item baru yang perlu di-drop.")
+        return true
+    end
+
+    -- 3. Kunci anti-take & matikan auto-collect sebelum drop
+    BP.STATE.anti_take_active = true
+    setAutoCollectActive(false)
+    if editToggle then pcall(editToggle, "ModFly", true) end
+    safeSleep(180)
+
+    -- 4. Pindah ke posisi aman (jauh dari pintu masuk)
+    ensureSafeDropPosition(0)
+
+    -- 5. Drop seluruh item dalam daftar
+    local allSuccess = true
+    for _, it in ipairs(toDrop) do
+        if not BP.STATE.running then break end
+        local okD = dropSingleItem(it.id, it.amt, it.label)
+        if not okD then allSuccess = false end
+        safeSleep(math.max(200, tonumber(BP.CFG.drop_delay) or 450))
+    end
+
+    -- 6. Kembalikan anti-take & auto-collect
     safeSleep(200)
     BP.STATE.anti_take_active = false
+    setAutoCollectActive(true)
+
+    if allSuccess then
+        addLog("[Drop Selesai] Semua item berhasil di-drop di World Storage!")
+    else
+        addLog("[Drop Selesai] Sebagian item mungkin belum ter-drop penuh (tile penuh?).")
+    end
+    return allSuccess
 end
 
 local function mainLoop()
     BP.STATE.running = true
     BP.STATE.bought_count = 0
+    BP.STATE.drop_confirmed = false
+    BP.STATE.anti_take_active = false
+    BP.STATE.buying_now = false
+
     local packCode = trimStr(BP.CFG.pack_id)
     if packCode == "" then
         addLog("[Peringatan] Pack ID kosong! Pilih pack di tab 'Cari Pack'.")
-        BP.STATE.running = false; BP.STATE.enabled = false; return
-    end
-
-    BP.STATE.status_text = "Warp Save..."
-    if trimStr(BP.CFG.save_world) ~= "" then
-        if not warpToSaveWorld() then
-            addLog("[Gagal] Tidak bisa masuk World Save: " .. tostring(BP.CFG.save_world))
-            BP.STATE.status_text = "Gagal Warp"
-            BP.STATE.running = false; BP.STATE.enabled = false; return
-        end
+        BP.STATE.running = false
+        BP.STATE.enabled = false
+        BP.STATE.status_text = "Pilih Pack!"
+        return
     end
 
     local targetQty = math.max(0, math.floor(tonumber(BP.CFG.target_qty) or 0))
     local price = math.max(0, math.floor(tonumber(BP.CFG.pack_price) or 0))
     local bDelay = math.max(400, tonumber(BP.CFG.buy_delay) or 900)
-    local ids = getPackItemIDList()
+    local dropThresh = math.max(10, tonumber(BP.CFG.drop_thresh) or 100)
+    local hasStorage = (trimStr(BP.CFG.save_world) ~= "")
+    local packIds = getPackItemIDList()
 
-    addLog(string.format("Mulai Auto Buy: %s (%s) | Target: %s",
-        tostring(BP.CFG.pack_name), packCode, targetQty > 0 and tostring(targetQty) or "Habiskan Gems"))
+    addLog(string.format("Mulai Auto Buy: %s (%s) | Target: %s | Storage: %s",
+        tostring(BP.CFG.pack_name), packCode,
+        targetQty > 0 and tostring(targetQty) or "Habiskan Gems",
+        hasStorage and tostring(BP.CFG.save_world) or "(Tidak Diisi)"))
 
     local saveWName, saveWDoor = "", ""
-    do
+    if hasStorage then
         local rawS = trimStr(BP.CFG.save_world):gsub("|", ":")
-        if rawS ~= "" then
-            local wn, di = rawS:match("^([^:]+):(.*)$")
-            saveWName = trimStr(wn or rawS):upper()
-            saveWDoor = trimStr(di or ""):upper()
-        end
+        local wn, di = rawS:match("^([^:]+):(.*)$")
+        saveWName = trimStr(wn or rawS):upper()
+        saveWDoor = trimStr(di or ""):upper()
     end
+
     if HUB_REF and HUB_REF.conn and HUB_REF.conn.clearFatal then pcall(HUB_REF.conn.clearFatal) end
 
+    -- Ambil snapshot inventori sebelum mulai beli
+    local preInv = getInventorySnapshot()
+
     while BP.STATE.running do
-        if HUB_REF and HUB_REF.conn and HUB_REF.conn.needsReconnect and HUB_REF.conn.needsReconnect(saveWName) then
-            BP.STATE.buying_now = false
-            BP.STATE.status_text = "RECONNECTING..."
-            local okOn = HUB_REF.conn.ensureOnline({
-                world     = saveWName,
-                door      = saveWDoor,
-                isRunning = function() return BP.STATE.running end,
-                warpFn    = function() return warpToSaveWorld() end,
-            })
-            if not okOn then break end
+        if hasStorage and saveWName ~= "" and getCurrentWorldSafe() == saveWName then
+            if HUB_REF and HUB_REF.conn and HUB_REF.conn.needsReconnect and HUB_REF.conn.needsReconnect(saveWName) then
+                BP.STATE.buying_now = false
+                BP.STATE.status_text = "RECONNECTING..."
+                local okOn = HUB_REF.conn.ensureOnline({
+                    world     = saveWName,
+                    door      = saveWDoor,
+                    isRunning = function() return BP.STATE.running end,
+                    warpFn    = function() return warpToSaveWorld() end,
+                })
+                if not okOn then break end
+            end
         end
 
         if targetQty > 0 and BP.STATE.bought_count >= targetQty then
@@ -474,33 +822,57 @@ local function mainLoop()
         BP.STATE.buying_now = false
         BP.STATE.bought_count = BP.STATE.bought_count + 1
 
-        -- Cek apakah ada item pack yang sudah mendekati penuh di backpack -> Drop!
-        if BP.CFG.auto_drop and #ids > 0 then
-            local needDrop = false
-            for _, id in ipairs(ids) do
-                if getInvCount(id) >= (tonumber(BP.CFG.drop_thresh) or 100) then
-                    needDrop = true; break
+        -- Cek apakah ada item pack yang sudah mendekati penuh di backpack -> Drop mid-session ke World Storage!
+        if hasStorage and BP.CFG.auto_drop ~= false and #packIds > 0 then
+            local needMidDrop = false
+            for _, id in ipairs(packIds) do
+                if getInvCount(id) >= dropThresh then
+                    needMidDrop = true
+                    break
                 end
             end
-            if needDrop then
-                BP.STATE.status_text = "Dropping..."
-                dropPackItemsSafe()
+            if needMidDrop then
+                addLog(string.format("[Auto Buy] Tas mencapai batas threshold (%d), drop ke World Storage...", dropThresh))
+                BP.STATE.status_text = "Mid Drop..."
+                executeDropAtStorage(preInv)
+                preInv = getInventorySnapshot()
             end
         end
     end
 
-    -- Drop sisa item di akhir sesi
-    if BP.CFG.auto_drop and BP.STATE.bought_count > 0 then
-        BP.STATE.status_text = "Final Drop..."
-        dropPackItemsSafe()
+    -- ========================================================================
+    -- SEHABIS BELI: Jika World Storage tersedia, jalankan DROP di World Storage!
+    -- ========================================================================
+    if BP.STATE.running then
+        if hasStorage and BP.CFG.auto_drop ~= false then
+            addLog(string.format("[Auto Buy] Selesai beli (%d pack). Menuju World Storage (%s) untuk drop...",
+                BP.STATE.bought_count, tostring(BP.CFG.save_world)))
+            BP.STATE.status_text = "Drop Selesai..."
+            local okD = executeDropAtStorage(preInv)
+            if okD then
+                addLog("[Auto Buy] Drop sehabis beli selesai dengan sukses!")
+            else
+                addLog("[Auto Buy] Drop sehabis beli selesai (sebagian item mungkin tersisa jika storage penuh).")
+            end
+        else
+            if not hasStorage then
+                addLog(string.format("[Auto Buy] Selesai beli (%d pack). World Storage tidak diset, item disimpan di tas.", BP.STATE.bought_count))
+            else
+                addLog(string.format("[Auto Buy] Selesai beli (%d pack). Auto Drop dinonaktifkan di Settings.", BP.STATE.bought_count))
+            end
+        end
     end
 
     BP.STATE.anti_take_active = false
     BP.STATE.buying_now = false
     BP.STATE.running = false
     BP.STATE.enabled = false
+    BP.STATE.pending_drop_id = 0
+    BP.STATE.pending_drop_amt = 0
+    BP.STATE.drop_confirmed = false
+    setAutoCollectActive(true)
     BP.STATE.status_text = "Selesai (" .. tostring(BP.STATE.bought_count) .. ")"
-    addLog("Auto Buy Pack selesai. Total beli: " .. tostring(BP.STATE.bought_count))
+    addLog("Auto Buy Pack tuntas. Total beli: " .. tostring(BP.STATE.bought_count))
 end
 
 function BP.start()
@@ -522,6 +894,10 @@ function BP.start()
             BP.STATE.buying_now = false
             BP.STATE.running = false
             BP.STATE.enabled = false
+            BP.STATE.pending_drop_id = 0
+            BP.STATE.pending_drop_amt = 0
+            BP.STATE.drop_confirmed = false
+            setAutoCollectActive(true)
             BP.STATE.status_text = "Error"
         end
     end
@@ -534,25 +910,51 @@ function BP.stop()
     BP.STATE.enabled = false
     BP.STATE.anti_take_active = false
     BP.STATE.buying_now = false
+    BP.STATE.pending_drop_id = 0
+    BP.STATE.pending_drop_amt = 0
+    BP.STATE.drop_confirmed = false
+    setAutoCollectActive(true)
     BP.STATE.status_text = "Stopped"
 end
 
--- Hook Variant untuk auto-confirm drop_item & suppress popup store saat buying
+-- Hook Variant untuk auto-confirm drop & suppress popup store saat buying
 function BP.handleVariant(var)
-    if not BP.STATE.running or type(var) ~= "table" then return false end
-    local v0 = tostring(var.v1 or var[0] or var[1] or "")
-    if v0 ~= "OnDialogRequest" then return false end
-    local payload = tostring(var.v2 or var[1] or var[2] or "")
-    local low = payload:lower()
+    if not BP.STATE.running then return false end
+    if type(var) ~= "table" and type(var) ~= "userdata" then return false end
 
-    if BP.STATE.pending_drop_id > 0 and low:find("drop_item", 1, true) then
-        local dName = payload:match("end_dialog|([^|\r\n]+)") or "drop_item"
-        if sendPacket then
-            pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n",
-                trimStr(dName), BP.STATE.pending_drop_id, BP.STATE.pending_drop_amt))
+    local v0, v1, v2 = nil, nil, nil
+    pcall(function() v0 = var.v0 or var[0] end)
+    pcall(function() v1 = var.v1 or var[1] end)
+    pcall(function() v2 = var.v2 or var[2] end)
+
+    local s0, s1 = tostring(v0 or ""), tostring(v1 or "")
+    local fn, payload = "", ""
+    if s0 == "OnDialogRequest" then
+        fn = "OnDialogRequest"
+        payload = tostring(v1 or "")
+    elseif s1 == "OnDialogRequest" then
+        fn = "OnDialogRequest"
+        payload = tostring(v2 or "")
+    end
+    if fn ~= "OnDialogRequest" or payload == "" then return false end
+
+    local low = payload:lower()
+    local endDlg = (payload:match("end_dialog|([^|\r\n]+)") or ""):lower()
+
+    -- Auto-confirm dialog drop / drop_item Growtopia V5.x
+    if (BP.STATE.pending_drop_id or 0) > 0 and (endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
+        or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true))
+    then
+        if not BP.STATE.drop_confirmed then
+            BP.STATE.drop_confirmed = true
+            if sendPacket then
+                local pktStr = buildDropDialogReturn(payload, BP.STATE.pending_drop_id, BP.STATE.pending_drop_amt)
+                pcall(sendPacket, 2, pktStr)
+            end
         end
         return true
     end
+
     return false
 end
 
@@ -741,6 +1143,14 @@ local function renderMainSub()
                 BP.CFG.target_qty = 0; numBufs["bp_qty"] = "0"; BP.saveData()
             end
         end)
+        renderOptRow("World Storage Drop", function()
+            local sw = trimStr(BP.CFG.save_world)
+            if sw == "" then
+                ImGui.Text("(Belum Diisi - Simpan di Tas)")
+            else
+                ImGui.Text(sw)
+            end
+        end)
         ImGui.EndTable()
     end
 
@@ -895,6 +1305,11 @@ local function renderSettingsSub()
                 BP.CFG.auto_drop = not BP.CFG.auto_drop; BP.saveData()
             end
         end)
+        renderOptRow("Drop Threshold (Tas)", function()
+            renderNumInput("bp_dt", BP.CFG.drop_thresh, 10, 200, 10, "item", function(v)
+                BP.CFG.drop_thresh = v; BP.saveData()
+            end)
+        end)
         renderOptRow("Buy Delay", function()
             renderNumInput("bp_bd", BP.CFG.buy_delay, 300, 5000, 100, "ms", function(v)
                 BP.CFG.buy_delay = v; BP.saveData()
@@ -903,6 +1318,11 @@ local function renderSettingsSub()
         renderOptRow("Drop Delay", function()
             renderNumInput("bp_dd", BP.CFG.drop_delay, 200, 3000, 50, "ms", function(v)
                 BP.CFG.drop_delay = v; BP.saveData()
+            end)
+        end)
+        renderOptRow("Warp Delay", function()
+            renderNumInput("bp_wd", BP.CFG.warp_delay, 1000, 10000, 500, "ms", function(v)
+                BP.CFG.warp_delay = v; BP.saveData()
             end)
         end)
         ImGui.EndTable()
