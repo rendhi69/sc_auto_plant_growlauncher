@@ -1750,6 +1750,34 @@ local function drawSwitchEffect(sideW)
     end
 end
 
+local function drawSidebarDivider(width)
+    local w = math.max(60, math.floor(tonumber(width) or 110))
+    if ImGui and ImGui.Dummy and ImVec2 then
+        pcall(ImGui.Dummy, ImVec2(w, 2))
+        local x1, y1, x2, y2 = getLastItemRect()
+        local fg = getFGDrawList()
+        if x1 and fg then
+            local cy = (y1 + y2) * 0.5
+            local drew = false
+            if fg.AddRectFilledMultiColor then
+                drew = pcall(function()
+                    fg:AddRectFilledMultiColor(
+                        ImVec2(x1, cy - 1), ImVec2(x2, cy + 1),
+                        NEON_CYAN_U32, NEON_PURPLE_U32, NEON_PURPLE_U32, NEON_CYAN_U32
+                    )
+                end)
+            end
+            if not drew and fg.AddRectFilled then
+                pcall(function()
+                    fg:AddRectFilled(ImVec2(x1, cy - 1), ImVec2(x2, cy + 1), NEON_CYAN_U32)
+                end)
+            end
+        end
+    else
+        uiGap(6)
+    end
+end
+
 local function renderLeftFeatureSidebar(colW)
     local btnW = math.max(90, colW - 18)
     local P = getBorenPal()
@@ -1767,7 +1795,56 @@ local function renderLeftFeatureSidebar(colW)
         end
     end
 
-    uiGap(10)
+    -- Dorong kontrol jendela (Pin & Hide UI) ke bagian paling bawah sidebar, terpisah dari fitur
+    local rowH = 38
+    local _, ly1, _, ly2 = getLastItemRect()
+    if ly1 and ly2 and (ly2 - ly1) >= 18 then
+        rowH = math.ceil((ly2 - ly1) + 8)
+    elseif ImGui and ImGui.GetFrameHeightWithSpacing then
+        local okFH, fh = pcall(ImGui.GetFrameHeightWithSpacing)
+        if okFH and type(fh) == "number" and fh >= 18 then
+            rowH = math.ceil(fh)
+        end
+    end
+
+    local availY = nil
+    if ImGui and ImGui.GetContentRegionAvail then
+        local okA, av, av2 = pcall(ImGui.GetContentRegionAvail)
+        if okA and av then
+            if type(av) == "number" and type(av2) == "number" then
+                availY = av2
+            else
+                local okY, y = pcall(function() return av.y end)
+                if okY and type(y) == "number" then availY = y end
+            end
+        end
+    end
+    if not availY and ImGui and ImGui.GetWindowSize and ImGui.GetCursorPosY then
+        local okS, ws, wsH = pcall(ImGui.GetWindowSize)
+        local okC, cy = pcall(ImGui.GetCursorPosY)
+        local wh = nil
+        if okS and ws then
+            if type(ws) == "number" and type(wsH) == "number" then
+                wh = wsH
+            else
+                local okH, h = pcall(function() return ws.y end)
+                if okH and type(h) == "number" then wh = h end
+            end
+        end
+        if wh and okC and type(cy) == "number" then
+            availY = wh - cy - 12
+        end
+    end
+
+    local bottomBlockH = (rowH * 2) + 22
+    local pushDown = 20
+    if availY and availY > bottomBlockH then
+        pushDown = math.max(20, math.min(320, math.floor(availY - bottomBlockH)))
+    end
+    uiGap(pushDown)
+    drawSidebarDivider(btnW)
+    uiGap(6)
+
     -- Tombol Pin (Hitam + Neon: ON = terkunci tidak bergeser, OFF = bebas digeser)
     local pinPushed = 0
     if detectPushColorMode() ~= "none" and ImGui and ImGui.Col then
