@@ -131,15 +131,20 @@ DF.CFG = {
 }
 
 DF.STATE = {
-    enabled      = false,
-    running      = false,
-    finding_one  = false,
-    status_text  = "Idle",
-    rows         = {},   -- { { name="W", door="D", status="Ready" }, ... }
-    selected_idx = 0,
-    selected_st  = 0,
-    found_count  = 0,
-    logs         = {},
+    enabled          = false,
+    running          = false,
+    finding_one      = false,
+    in_storage       = false,
+    anti_take_active = false,
+    pending_drop_id  = 0,
+    pending_drop_amt = 0,
+    drop_confirmed   = false,
+    status_text      = "Idle",
+    rows             = {},   -- { { name="W", door="D", status="Ready" }, ... }
+    selected_idx     = 0,
+    selected_st      = 0,
+    found_count      = 0,
+    logs             = {},
 }
 
 local HUB_REF = nil
@@ -151,6 +156,7 @@ local addStorageDoorBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
 local breakCollectCounter = 0
+local activeTargetWorld = ""
 
 local function safeInputText(id, curVal, maxLen)
     local s = tostring(curVal or "")
@@ -756,6 +762,9 @@ end
 
 local function rawAction(tx, ty, val)
     if not sendPacketRaw then return false end
+    -- GUARD KERAS: Jangan pernah mengirim paket break/place saat masih di storage atau belum di world target!
+    if DF.STATE.in_storage then return false end
+    if activeTargetWorld ~= "" and getCurrentWorldSafe() ~= activeTargetWorld then return false end
     local p = getLocalSafe()
     local px = (p and (p.posX or (p.pos and p.pos.x))) or (tx * 32)
     local py = (p and (p.posY or (p.pos and p.pos.y))) or (ty * 32)
@@ -766,6 +775,7 @@ local function rawAction(tx, ty, val)
 end
 
 local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, forceCollect)
+    if DF.STATE.anti_take_active then return 0 end
     if (not DF.CFG.auto_collect) and (not forceCollect) then return 0 end
     local px, py = getPlayerPos()
     local refX = centerX or px
@@ -1217,6 +1227,258 @@ local function autoSetupLockAndJammer(doorX, doorY)
     end
 end
 
+-- ============================================================================
+-- 4B. VALIDASI ALAT STORAGE (MASING-MASING 1) & DROP KELEBIHAN BACKPACK
+-- ============================================================================
+local function getRequiredDFKit()
+    local kit = {}
+    local byId = {}
+    local function addNeed(id, want, label)
+        id = math.floor(tonumber(id) or 0)
+        if id <= 0 then return end
+        if byId[id] then
+            byId[id].want = byId[id].want + want
+        else
+            local entry = { id = id, want = want, label = label }
+            byId[id] = entry
+            kit[#kit + 1] = entry
+        end
+    end
+    if DF.CFG.auto_lock_wl then
+        addNeed(ITEM.WORLD_LOCK, 1, "WL")
+    end
+    if DF.CFG.auto_place_jammer then
+        addNeed(ITEM.JAMMER, 1, "Jammer")
+    end
+    if DF.CFG.auto_place_sl then
+        addNeed(ITEM.SMALL_LOCK, 1, "SL")
+    end
+    if DF.CFG.use_blocker_door then
+        local blkID = math.max(1, tonumber(DF.CFG.blocker_door_itemid) or 2810)
+        addNeed(blkID, 1, "Blocker#" .. tostring(blkID))
+    end
+    if DF.CFG.use_id_door then
+        local dID = math.max(1, tonumber(DF.CFG.id_door_itemid) or 12)
+        addNeed(dID, 1, "Door#" .. tostring(dID))
+    end
+    return kit
+end
+
+local function inspectKitBackpack(kit)
+    local missing, excess, summary = {}, {}, {}
+    for _, it in ipairs(kit) do
+        local cnt = getInvCount(it.id)
+        summary[#summary + 1] = string.format("%s=%d/%d", it.label, cnt, it.want)
+        if cnt < it.want then
+            missing[#missing + 1] = it
+        elseif cnt > it.want then
+            excess[#excess + 1] = { id = it.id, want = it.want, have = cnt, label = it.label }
+        end
+    end
+    return missing, excess, table.concat(summary, ", ")
+end
+
+-- Drop kelebihan item saat di Storage hingga tersisa TEPAT keepAmt (1) di backpack
+local function dropExcessItemAtStorage(itemID, keepAmt, label)
+    itemID = math.floor(tonumber(itemID) or 0)
+    keepAmt = math.max(0, math.floor(tonumber(keepAmt) or 1))
+    if itemID <= 0 then return true end
+
+    local cur = getInvCount(itemID)
+    if cur <= keepAmt then return true end
+
+    DF.STATE.anti_take_active = true
+    if editToggle then
+        pcall(editToggle, "Auto Collect", false)
+        pcall(editToggle, "Anti Collect", true)
+    end
+    safeSleep(180)
+
+    for attempt = 1, 3 do
+        if not isActive() then return false end
+        cur = getInvCount(itemID)
+        if cur <= keepAmt then return true end
+        local excess = cur - keepAmt
+
+        -- Geser sedikit pada percobaan ulang bila tile drop penuh
+        if attempt > 1 then
+            local px, py = getPlayerPos()
+            if px and py then
+                local dir = (attempt == 2) and 1 or -1
+                local nx = math.max(1, math.min(98, px + dir))
+                if isTileSafeToStand(nx, py) then moveSafeTo(nx, py); safeSleep(150) end
+            end
+        end
+
+        DF.STATE.pending_drop_id  = itemID
+        DF.STATE.pending_drop_amt = excess
+        DF.STATE.drop_confirmed   = false
+        DF.STATE.status_text = string.format("Drop %s (%d)...", tostring(label or itemID), excess)
+        addLog(string.format("[Storage Drop] Drop kelebihan %s (ID %d): %d (sisakan %d)...",
+            tostring(label or itemID), itemID, excess, keepAmt))
+
+        if growtopia and growtopia.confirmDropItem then
+            pcall(growtopia.confirmDropItem, itemID, excess)
+        elseif sendPacket then
+            pcall(sendPacket, 2, string.format("action|drop\n|itemID|%d\n", itemID))
+            safeSleep(320)
+            if (not DF.STATE.drop_confirmed) and isActive() then
+                pcall(sendPacket, 2, string.format(
+                    "action|dialog_return\ndialog_name|drop_item\nitemID|%d|\ncount|%d\n",
+                    itemID, excess
+                ))
+            end
+        end
+
+        -- Tunggu sinkronisasi backpack hingga jumlah benar-benar <= keepAmt (maks 1.8 detik)
+        local waited = 0
+        while waited < 1800 and isActive() do
+            safeSleep(150)
+            waited = waited + 150
+            if getInvCount(itemID) <= keepAmt then break end
+        end
+
+        DF.STATE.pending_drop_id  = 0
+        DF.STATE.pending_drop_amt = 0
+        if getInvCount(itemID) <= keepAmt then
+            return true
+        end
+        safeSleep(250)
+    end
+
+    return (getInvCount(itemID) <= keepAmt)
+end
+
+-- Ambil alat yang kurang di Storage, drop SEMUA kelebihan hingga masing-masing 1,
+-- dan validasi 100% lengkap sebelum boleh find world / masuk DF / break dirt!
+local function prepareAndValidateDFKit()
+    local kit = getRequiredDFKit()
+    if #kit == 0 then return true end
+
+    local missing, excess, summary = inspectKitBackpack(kit)
+    if #missing == 0 and #excess == 0 then
+        addLog("[DF Kit] Validasi OK (" .. summary .. "). Lanjut!")
+        return true
+    end
+
+    local storages = getStorageList()
+    if #storages == 0 then
+        if #missing > 0 then
+            local mNames = {}
+            for _, it in ipairs(missing) do mNames[#mNames + 1] = it.label end
+            addLog("[DF Kit] Alat kurang (" .. table.concat(mNames, ", ") .. ") & Storage belum diisi!")
+            DF.STATE.status_text = "Alat Kurang!"
+            return false
+        end
+        addLog("[DF Kit] Semua alat ada (" .. summary .. "), Storage kosong untuk drop kelebihan.")
+        return true
+    end
+
+    -- KUNCI in_storage = true selama di storage -> rawAction() 100% memblokir break dirt!
+    DF.STATE.in_storage = true
+    activeTargetWorld = ""
+    DF.STATE.status_text = "Ambil Alat Storage..."
+
+    local enteredAnyStorage = false
+    for _, st in ipairs(storages) do
+        if not isActive() then
+            DF.STATE.in_storage = false
+            return false
+        end
+        missing, excess = inspectKitBackpack(kit)
+        if #missing == 0 and #excess == 0 then break end
+
+        addLog(string.format("[DF Storage] Masuk storage %s untuk ambil & rapikan alat...", st.name))
+        if warpToWorld(st.name, st.door) then
+            enteredAnyStorage = true
+            safeSleep(650)
+
+            -- FASE A: Ambil hanya item yang masih kurang (< want)
+            missing = inspectKitBackpack(kit)
+            if #missing > 0 then
+                DF.STATE.anti_take_active = false
+                if editToggle then
+                    pcall(editToggle, "Anti Collect", false)
+                    pcall(editToggle, "Auto Collect", true)
+                end
+                safeSleep(150)
+
+                for _, it in ipairs(missing) do
+                    if not isActive() then break end
+                    if getInvCount(it.id) < it.want then
+                        DF.STATE.status_text = "Ambil " .. it.label .. "..."
+                        local grabbed = false
+                        forEachWorldObject(function(oid, uid, amt, rx, ry)
+                            if grabbed or (not isActive()) or getInvCount(it.id) >= it.want then return end
+                            if oid == it.id then
+                                moveSafeTo(math.floor((rx + 10) / 32), math.floor((ry + 10) / 32))
+                                if sendPacketRaw then
+                                    pcall(sendPacketRaw, false, { type = 11, value = uid, x = rx, y = ry })
+                                end
+                                -- Tunggu sync tas hingga terdeteksi masuk (maks 1.6 detik)
+                                local sw = 0
+                                while sw < 1600 and isActive() do
+                                    safeSleep(150); sw = sw + 150
+                                    if getInvCount(it.id) >= it.want then grabbed = true; break end
+                                end
+                            end
+                        end)
+                    end
+                end
+            end
+
+            -- FASE B: AKTIFKAN ANTI-TAKE & DROP SEMUA KELEBIHAN ALAT DI STORAGE (sisakan masing-masing 1!)
+            DF.STATE.anti_take_active = true
+            if editToggle then
+                pcall(editToggle, "Auto Collect", false)
+                pcall(editToggle, "Anti Collect", true)
+            end
+            safeSleep(350)
+
+            for pass = 1, 2 do
+                local _, curExcess = inspectKitBackpack(kit)
+                if #curExcess == 0 then break end
+                for _, ex in ipairs(curExcess) do
+                    if not isActive() then break end
+                    dropExcessItemAtStorage(ex.id, ex.want, ex.label)
+                end
+                safeSleep(350)
+            end
+
+            missing, excess = inspectKitBackpack(kit)
+            if #missing == 0 and #excess == 0 then break end
+        end
+    end
+
+    -- FASE C: VALIDASI KETAT SEBELUM BOLEH KELUAR STORAGE / FIND WORLD / BREAK DIRT!
+    safeSleep(350)
+    missing, excess, summary = inspectKitBackpack(kit)
+    DF.STATE.in_storage = false
+
+    if #missing > 0 then
+        local mNames = {}
+        for _, it in ipairs(missing) do mNames[#mNames + 1] = string.format("%s(%d/%d)", it.label, getInvCount(it.id), it.want) end
+        addLog("[DF Kit GAGAL] Alat belum lengkap di storage: " .. table.concat(mNames, ", ") .. " — tidak jadi lanjut!")
+        DF.STATE.status_text = "Alat Kurang"
+        DF.STATE.anti_take_active = false
+        return false
+    end
+
+    if #excess > 0 then
+        local eNames = {}
+        for _, ex in ipairs(excess) do eNames[#eNames + 1] = string.format("%s(%d>%d)", ex.label, ex.have, ex.want) end
+        addLog("[DF Kit GAGAL] Gagal drop kelebihan di storage: " .. table.concat(eNames, ", ") .. " — cek posisi drop storage!")
+        DF.STATE.status_text = "Drop Kelebihan Gagal"
+        DF.STATE.anti_take_active = false
+        return false
+    end
+
+    -- Pertahankan anti_take_active = true sampai bot benar-benar warp keluar dari storage!
+    if not enteredAnyStorage then DF.STATE.anti_take_active = false end
+    addLog("`2[DF Kit OK] Validasi lengkap & kelebihan sudah di-drop (" .. summary .. "). Siap jalan!")
+    return true
+end
+
 local function findOneFreeWorld()
     local len = math.max(4, math.min(14, tonumber(DF.CFG.find_name_len) or 7))
     local useNum = (DF.CFG.find_use_num == true)
@@ -1228,6 +1490,8 @@ local function findOneFreeWorld()
         addLog(string.format("[Find World #%d] Mengecek %s...", attempt, cand))
 
         if warpToWorld(cand, "") then
+            DF.STATE.anti_take_active = false
+            activeTargetWorld = cleanWorldName(cand)
             safeSleep(700)
             local okFree, reason, dx, dy = isCurrentWorldFreeForDF()
             if okFree then
@@ -1259,6 +1523,13 @@ function DF.findSingleWorldNow()
     DF.STATE.finding_one = true
     local function runner()
         local ok, err = xpcall(function()
+            if #getStorageList() > 0 then
+                if not prepareAndValidateDFKit() then
+                    uiNotice = "Alat storage belum lengkap / gagal drop kelebihan!"
+                    DF.STATE.status_text = "Kit Belum Siap"
+                    return
+                end
+            end
             local row = findOneFreeWorld()
             if row then
                 uiNotice = "Ketemu world kosong: " .. row.name
@@ -1269,6 +1540,9 @@ function DF.findSingleWorldNow()
             end
         end, function(e) return tostring(e) end)
         if not ok then addLog("`4[Find Err] `w" .. tostring(err)) end
+        DF.STATE.in_storage = false
+        DF.STATE.anti_take_active = false
+        activeTargetWorld = ""
         DF.STATE.finding_one = false
     end
     if runCoroutine then pcall(runCoroutine, runner)
@@ -1278,36 +1552,73 @@ end
 -- ============================================================================
 -- 5. RESTOCK STORAGE, AUTO FARM DIRT & MAIN DIRT FARM PIPELINE
 -- ============================================================================
-local function restockItem(farmRow, itemID, wantAmt)
-    if getInvCount(itemID) >= 5 then return true end
+local function restockItem(farmRow, itemID, wantAmt, exactCap)
+    local minHave = exactCap and exactCap or 5
+    if getInvCount(itemID) >= minHave and ((not exactCap) or getInvCount(itemID) <= exactCap) then
+        return true
+    end
     local storages = getStorageList()
     if #storages == 0 then
         addLog("[DF] Stok item ID " .. tostring(itemID) .. " habis & Storage kosong!")
         return false
     end
+
+    local prevTarget = activeTargetWorld
+    DF.STATE.in_storage = true
+    activeTargetWorld = ""
+
+    local gotItem = false
     for _, st in ipairs(storages) do
-        if not DF.STATE.running then return false end
+        if not DF.STATE.running then break end
         if warpToWorld(st.name, st.door) then
             safeSleep(650)
-            if editToggle then
-                pcall(editToggle, "Anti Collect", false)
-                pcall(editToggle, "Auto Collect", true)
-            end
-            forEachWorldObject(function(oid, uid, amt, rx, ry)
-                if not DF.STATE.running or getInvCount(itemID) >= (wantAmt or 120) then return end
-                if oid == itemID then
-                    moveSafeTo(math.floor((rx + 10) / 32), math.floor((ry + 10) / 32))
-                    if sendPacketRaw then
-                        pcall(sendPacketRaw, false, { type = 11, value = uid, x = rx, y = ry })
-                    end
-                    safeSleep(180)
+            if getInvCount(itemID) < (exactCap or wantAmt or 1) then
+                DF.STATE.anti_take_active = false
+                if editToggle then
+                    pcall(editToggle, "Anti Collect", false)
+                    pcall(editToggle, "Auto Collect", true)
                 end
-            end)
-            if getInvCount(itemID) >= 1 then
-                return warpToWorld(farmRow.name, farmRow.door)
+                forEachWorldObject(function(oid, uid, amt, rx, ry)
+                    if not DF.STATE.running or getInvCount(itemID) >= (exactCap or wantAmt or 120) then return end
+                    if oid == itemID then
+                        moveSafeTo(math.floor((rx + 10) / 32), math.floor((ry + 10) / 32))
+                        if sendPacketRaw then
+                            pcall(sendPacketRaw, false, { type = 11, value = uid, x = rx, y = ry })
+                        end
+                        local sw = 0
+                        while sw < 1400 and DF.STATE.running do
+                            safeSleep(150); sw = sw + 150
+                            if getInvCount(itemID) >= (exactCap or 1) then break end
+                        end
+                    end
+                end)
+            end
+
+            -- Bila butuh jumlah pas (misal exactCap = 1 untuk alat), drop kelebihannya SEBELUM keluar storage!
+            if exactCap and getInvCount(itemID) > exactCap then
+                dropExcessItemAtStorage(itemID, exactCap, "Item#" .. tostring(itemID))
+            end
+
+            if getInvCount(itemID) >= 1 and ((not exactCap) or getInvCount(itemID) <= exactCap) then
+                gotItem = true
+                break
             end
         end
     end
+
+    DF.STATE.in_storage = false
+    if gotItem then
+        local okBack = warpToWorld(farmRow.name, farmRow.door)
+        DF.STATE.anti_take_active = false
+        if okBack then
+            activeTargetWorld = cleanWorldName(farmRow.name)
+            return true
+        end
+    end
+
+    -- Pastikan TIDAK pernah diam di storage sambil mengembalikan kontrol ke break loop!
+    DF.STATE.anti_take_active = false
+    activeTargetWorld = prevTarget
     return false
 end
 
@@ -1403,13 +1714,18 @@ local function setupWorldSecurity(row, doorX, doorY)
 
     local function ensureAndPlace(tx, ty, itemID, prefDir, label)
         if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+        if getCurrentWorldSafe() ~= cleanWorldName(row.name) then
+            if not warpToWorld(row.name, row.door) then return false end
+            safeSleep(450)
+        end
         local t = getTileSafe(tx, ty)
         if t and tonumber(t.fg) == itemID then return true end
         if getInvCount(itemID) <= 0 then
-            if not restockItem(row, itemID, 5) then
+            if not restockItem(row, itemID, 1, 1) then
                 addLog("[Lock/Door] Stok " .. label .. " (ID " .. tostring(itemID) .. ") habis!")
                 return false
             end
+            if getCurrentWorldSafe() ~= cleanWorldName(row.name) then return false end
             t = getTileSafe(tx, ty)
             if t and tonumber(t.fg) == itemID then return true end
         end
@@ -1490,22 +1806,54 @@ local function setupWorldSecurity(row, doorX, doorY)
     return true
 end
 
-local function processDirtFarmWorld(row)
+local function processDirtFarmWorld(row, skipPreKitCheck)
+    -- 0A. Siapkan & validasi alat di Storage (masing-masing 1 + drop kelebihan) SEBELUM masuk world DF!
+    if not skipPreKitCheck then
+        if not prepareAndValidateDFKit() then
+            row.status = "Alat Kurang"
+            DF.saveData()
+            return false
+        end
+    end
+
+    local targetName = cleanWorldName(row.name)
     row.status = "Warping..."
     DF.STATE.status_text = "Warp: " .. row.name
     if not warpToWorld(row.name, row.door) then
+        DF.STATE.anti_take_active = false
+        activeTargetWorld = ""
         row.status = "Inaccessible"
         DF.saveData()
         return false
     end
+    DF.STATE.anti_take_active = false
+    DF.STATE.in_storage = false
+    activeTargetWorld = targetName
     safeSleep(550)
 
     local doorX, doorY = findMainDoor()
     local minX, maxX = getDFRowBounds()
     local sideCols = getSideColumns()
 
-    -- 0. SETUP SECURITY (Penghalang, Jammer, WL, SL, Door ID) bila diaktifkan
+    -- 0B. SETUP SECURITY (Penghalang, Jammer, WL, SL, Door ID) bila diaktifkan
     setupWorldSecurity(row, doorX, doorY)
+
+    -- GUARD KERAS: Pastikan bot BENAR-BENAR berada di world DF target (BUKAN di storage!)
+    -- sebelum boleh mengirim 1 pun packet break dirt!
+    if getCurrentWorldSafe() ~= targetName then
+        if not warpToWorld(row.name, row.door) then
+            addLog("[DF Guard] Gagal kembali ke " .. row.name .. " — batal break dirt agar tidak merusak storage!")
+            activeTargetWorld = ""
+            row.status = "Retry Warp"
+            DF.saveData()
+            return false
+        end
+        DF.STATE.anti_take_active = false
+        DF.STATE.in_storage = false
+        activeTargetWorld = targetName
+        safeSleep(550)
+        doorX, doorY = findMainDoor()
+    end
 
     -- 1. CLEAR SISI PINGGIR (0,99 atau 1,0,98,99 jika Platform ON | Y=24..53, FG + Cave BG!)
     if DF.CFG.clear_side and #sideCols > 0 then
@@ -1695,6 +2043,7 @@ local function processDirtFarmWorld(row)
         end
     end
 
+    activeTargetWorld = ""
     row.status = "Done"
     DF.saveData()
     addLog("[Selesai] Dirt Farm " .. row.name .. " tuntas!")
@@ -1703,6 +2052,9 @@ end
 
 local function mainLoop()
     DF.STATE.running = true
+    DF.STATE.in_storage = false
+    DF.STATE.anti_take_active = false
+    activeTargetWorld = ""
     applyCheats()
     addLog("Auto Dirt Farm dimulai.")
 
@@ -1711,17 +2063,22 @@ local function mainLoop()
         for _, row in ipairs(DF.STATE.rows) do
             if not DF.STATE.running then break end
             if row.status ~= "Done" and row.status ~= "Inaccessible" then
-                processDirtFarmWorld(row)
+                processDirtFarmWorld(row, false)
                 safeSleep(450)
             end
         end
         -- 2. Cari world random kosong sebanyak find_target_cnt
+        -- WAJIB ambil & validasi alat di storage (masing-masing 1 + drop kelebihan) SEBELUM find world!
         local targetCnt = math.max(1, tonumber(DF.CFG.find_target_cnt) or 1)
         for _ = 1, targetCnt do
             if not DF.STATE.running then break end
+            if not prepareAndValidateDFKit() then
+                addLog("[DF] Berhenti: alat di storage belum lengkap atau kelebihan belum ter-drop.")
+                break
+            end
             local foundRow = findOneFreeWorld()
             if foundRow and DF.STATE.running then
-                processDirtFarmWorld(foundRow)
+                processDirtFarmWorld(foundRow, true)
                 safeSleep(500)
             end
         end
@@ -1730,7 +2087,7 @@ local function mainLoop()
             for _, row in ipairs(DF.STATE.rows) do
                 if not DF.STATE.running then break end
                 if row.status ~= "Done" and row.status ~= "Inaccessible" then
-                    processDirtFarmWorld(row)
+                    processDirtFarmWorld(row, false)
                     safeSleep(400)
                 end
             end
@@ -1747,6 +2104,11 @@ local function mainLoop()
         end
     end
 
+    DF.STATE.in_storage = false
+    DF.STATE.anti_take_active = false
+    DF.STATE.pending_drop_id = 0
+    DF.STATE.pending_drop_amt = 0
+    activeTargetWorld = ""
     DF.STATE.running = false
     DF.STATE.enabled = false
     DF.STATE.status_text = "Idle"
@@ -1768,6 +2130,11 @@ function DF.start()
         end)
         if not ok then
             addLog("`4[DF Crash] `w" .. tostring(err))
+            DF.STATE.in_storage = false
+            DF.STATE.anti_take_active = false
+            DF.STATE.pending_drop_id = 0
+            DF.STATE.pending_drop_amt = 0
+            activeTargetWorld = ""
             DF.STATE.running = false
             DF.STATE.enabled = false
             DF.STATE.status_text = "Error"
@@ -1780,8 +2147,37 @@ end
 function DF.stop()
     DF.STATE.running = false
     DF.STATE.finding_one = false
+    DF.STATE.in_storage = false
+    DF.STATE.anti_take_active = false
+    DF.STATE.pending_drop_id = 0
+    DF.STATE.pending_drop_amt = 0
+    activeTargetWorld = ""
     DF.STATE.enabled = false
     DF.STATE.status_text = "Stopped"
+end
+
+-- Auto-confirm dialog drop_item saat membuang kelebihan alat di Storage
+function DF.handleVariant(var)
+    if (not isActive()) or DF.STATE.pending_drop_id <= 0 then return false end
+    if type(var) ~= "table" and type(var) ~= "userdata" then return false end
+    local v0, v1 = nil, nil
+    pcall(function() v0 = var.v1 or var[0] or var[1] end)
+    pcall(function() v1 = var.v2 or var[1] or var[2] end)
+    if tostring(v0 or "") ~= "OnDialogRequest" then return false end
+    local payload = tostring(v1 or "")
+    local low = payload:lower()
+    if low:find("drop_item", 1, true) then
+        local dName = payload:match("end_dialog|([^|\r\n]+)") or "drop_item"
+        DF.STATE.drop_confirmed = true
+        if sendPacket then
+            pcall(sendPacket, 2, string.format(
+                "action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n",
+                trimStr(dName), DF.STATE.pending_drop_id, DF.STATE.pending_drop_amt
+            ))
+        end
+        return true
+    end
+    return false
 end
 
 -- Expose helpers for unit testing / diagnostics
