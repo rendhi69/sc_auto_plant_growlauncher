@@ -1,14 +1,30 @@
 -- ============================================================================
--- LOADER BOREN STORE IMGUI (PERMANENT THIN LOADER - ZERO PATH MAINTENANCE)
+-- LOADER BOREN STORE IMGUI (PERMANENT THIN LOADER)
 -- File: loader_hub_imgui.lua
 -- ============================================================================
--- Loader tipis ini TIDAK PERLU diubah lagi saat ada fitur baru di GitHub!
--- Seluruh daftar fitur, validasi modul GL (META), dan Hot-Reload dikelola
--- otomatis dari pusat: imgui_hub/boot.lua + imgui_hub/manifest.lua.
+-- Loader tipis permanen — tidak perlu diubah lagi saat ada penambahan fitur.
+-- Endpoint remote di-encode agar URL sumber tidak tampil polos di file loader.
 -- ============================================================================
 
-local BASE_RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/"
-local BOOT_PATH    = "imgui_hub/boot.lua"
+local function _d(t, seed)
+    local out = {}
+    for i = 1, #t do
+        local k = (seed + i * 17) % 256
+        out[i] = string.char((t[i] - k) % 256)
+    end
+    return table.concat(out)
+end
+
+local _u = _d({
+    164,193,210,223,243,203,209,226,54,54,93,37,111,130,158,163,193,191,227,
+    242,245,19,21,50,66,89,91,117,140,87,157,186,201,156,240,244,14,21,42,60,
+    26,46,53,138,139,152,171,208,224,236,237,15,28,34,64,87,83,108,136,150,
+    175,181,187,224,234,240,6,20,50,0,79,84,109,131,85
+}, 43)
+
+local _p = _d({
+    193,214,225,0,5,12,38,68,66,32,100,130,147,169,116,195,221,218
+}, 71)
 
 local function makeTag()
     if getTime then
@@ -33,7 +49,7 @@ end
 
 local code = nil
 if fetch then
-    local okF, res = pcall(fetch, BASE_RAW_URL .. BOOT_PATH .. "?v=" .. makeTag())
+    local okF, res = pcall(fetch, _u .. _p .. "?v=" .. makeTag())
     if okF and type(res) == "string" and res ~= "" and not res:match("^404") and not res:match("^<!DOCTYPE") then
         code = res
     end
@@ -48,7 +64,7 @@ if not code or code == "" then
         "",
     }
     for _, root in ipairs(localRoots) do
-        local okO, f = pcall(io.open, root .. BOOT_PATH, "r")
+        local okO, f = pcall(io.open, root .. _p, "r")
         if okO and f then
             local txt = f:read("*a")
             f:close()
@@ -58,7 +74,7 @@ if not code or code == "" then
 end
 
 if not code or code == "" then
-    logMsg("`4Gagal memuat BOREN STORE boot.lua! Cek koneksi internet.")
+    logMsg("`4Gagal memuat BOREN STORE! Cek koneksi internet.")
     notifyMsg("Gagal memuat BOREN STORE! Cek koneksi.")
     return
 end
@@ -66,14 +82,14 @@ end
 local loaderFn = loadstring or load
 local chunk, err = loaderFn(code)
 if not chunk then
-    logMsg("`4Error kompilasi boot.lua: " .. tostring(err))
+    logMsg("`4Error kompilasi core: " .. tostring(err))
     return
 end
 
 local okRun, boot = pcall(chunk)
 if not okRun or type(boot) ~= "table" or type(boot.start) ~= "function" then
-    logMsg("`4Error menjalankan boot.lua: " .. tostring(boot))
+    logMsg("`4Error menjalankan core: " .. tostring(boot))
     return
 end
 
-boot.start(BASE_RAW_URL)
+boot.start(_u)
