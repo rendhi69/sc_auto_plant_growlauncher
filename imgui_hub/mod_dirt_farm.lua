@@ -181,6 +181,7 @@ DF.STATE = {
     wl_edit_seen       = false,
     wl_edit_is_public  = false,
     wl_edit_return_pkt = "",
+    world_enter_public = nil,   -- nil=belum diketahui, true=world masuk [OPEN]/Public, false=world masuk Private
     status_text        = "Idle",
     rows               = {},   -- { { name="W", door="D", status="Ready" }, ... }
     selected_idx       = 0,
@@ -901,6 +902,7 @@ local function warpToWorldInner(wName, doorID)
     end
 
     local joinStr = (doorID ~= "") and (wName .. "|" .. doorID) or wName
+    DF.STATE.world_enter_public = nil
     for _ = 1, 3 do
         if not isActive() then return false end
         if sendPacket then
@@ -2306,6 +2308,22 @@ local function setupWorldSecurity(row, doorX, doorY)
         return okP, false
     end
 
+    -- Cek bit flag Growtopia TILE_FLAG_PUBLIC (0x80 = 128) langsung dari tile di memori (0 paket, 0 wrench!)
+    local function isTilePublicFlag(t)
+        if not t then return false, false end
+        if type(t.isPublic) == "boolean" then
+            return t.isPublic, true
+        end
+        local fl = tonumber(t.flags)
+        if fl == nil then fl = tonumber(t.flag) end
+        if fl ~= nil then
+            return (math.floor(fl / 128) % 2 == 1), true
+        end
+        return false, false
+    end
+
+    local wlNewlyPlaced = false
+
     if sec.clusterComplete then
         addLog("[Lock/Door] Posisi lock sudah benar — skip buat ulang lock, lanjut cek Door ID.")
     else
@@ -2386,7 +2404,11 @@ local function setupWorldSecurity(row, doorX, doorY)
 
         -- 3. World Lock (242) di (doorX + 1, doorY)
         if DF.CFG.auto_lock_wl and (not sec.hasWL) and doorX + 1 <= 99 then
-            ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock", false)
+            local okWL, alreadyWL = ensureAndPlace(doorX + 1, doorY, ITEM.WORLD_LOCK, 1, "World Lock", false)
+            if okWL and (not alreadyWL) then
+                wlNewlyPlaced = true
+                DF.STATE.world_enter_public = false
+            end
         end
 
         -- 4. Small Lock (202) di atas White Door (doorX, doorY - 1) — hanya 2-Step Apply jika baru dipasang!
@@ -2425,59 +2447,87 @@ local function setupWorldSecurity(row, doorX, doorY)
         end
     end
 
-    -- 4.5. PASTIKAN WORLD LOCK (242) = "Allow anyone to Build and Break" (Public = 1) + VERIFIKASI DINAMIS!
-    -- Berjalan untuk WL baru maupun WL lama: baca dialog lock_edit asli server; jika sudah Public -> skip; jika belum -> set & verifikasi!
+    -- 4.5. PASTIKAN WORLD LOCK (242) = "Allow anyone to Build and Break" (0 WRENCH JIKA SUDAH PUBLIC!)
+    -- Lapis 1: Cek bit flag tile WL (flags bit 0x80 = 128) langsung dari memori (0 wrench!)
+    -- Lapis 2: Cek status world saat masuk (OnConsoleMessage [OPEN] / open to the public -> 0 wrench!)
+    -- Lapis 3: Hanya wrench & set dinamis jika WL baru dipasang ATAU memang terdeteksi masih Private!
     if DF.CFG.auto_lock_wl and DF.CFG.wl_public and doorX + 1 <= 99 and sendPacket then
         local wlX, wlY = doorX + 1, doorY
         local tWL = getTileSafe(wlX, wlY)
         if tWL and tonumber(tWL.fg) == ITEM.WORLD_LOCK then
-            local appliedWL = false
-            for attempt = 1, 3 do
-                if not DF.STATE.running then break end
-                moveAdjacentSafe(wlX, wlY, 1)
-                safeSleep(220)
+            local flagPub, hasFlag = isTilePublicFlag(tWL)
+            local msgPub = DF.STATE.world_enter_public
 
-                DF.STATE.checking_wl_edit   = true
-                DF.STATE.wl_edit_seen       = false
-                DF.STATE.wl_edit_is_public  = false
-                DF.STATE.wl_edit_return_pkt = ""
-
-                rawAction(wlX, wlY, ITEM.WRENCH)
-                local w = 0
-                while w < 1300 and isActive() and (not DF.STATE.wl_edit_seen) do
-                    safeSleep(75); w = w + 75
-                end
-                DF.STATE.checking_wl_edit = false
-
-                if DF.STATE.wl_edit_seen then
-                    if DF.STATE.wl_edit_is_public then
-                        if appliedWL then
-                            addLog("[Lock/Door] World Lock (242) terverifikasi: Allow anyone to Build & Break = ON!")
-                        else
-                            addLog("[Lock/Door] World Lock (242) sudah Allow anyone to Build & Break — skip edit.")
-                        end
+            if (not wlNewlyPlaced) and (flagPub or msgPub == true) then
+                addLog("[Lock/Door] World Lock (242) sudah Public (status world/flag 0x80) — skip 0 wrench!")
+            else
+                if wlNewlyPlaced then safeSleep(500) end
+                local appliedWL = false
+                for attempt = 1, 3 do
+                    if not DF.STATE.running then break end
+                    -- Cek cepat via tile flag sebelum wrench ulang
+                    local fNow, hasFNow = isTilePublicFlag(getTileSafe(wlX, wlY))
+                    if appliedWL and hasFNow and fNow then
+                        DF.STATE.world_enter_public = true
+                        addLog("[Lock/Door] World Lock (242) terverifikasi Public via tile flag (0x80)!")
                         break
-                    else
-                        local retPkt = DF.STATE.wl_edit_return_pkt
-                        if retPkt == "" then
-                            retPkt = string.format(
-                                "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
-                                wlX, wlY
-                            )
-                        end
-                        pcall(sendPacket, 2, retPkt)
-                        appliedWL = true
-                        safeSleep(550)
                     end
-                else
-                    -- Fallback bila APK tidak meneruskan OnDialogRequest lock_edit ke Lua
-                    pcall(sendPacket, 2, string.format(
-                        "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
-                        wlX, wlY
-                    ))
-                    safeSleep(550)
-                    addLog("[Lock/Door] World Lock (242) diset Allow anyone to Build & Break (fallback).")
-                    break
+
+                    moveAdjacentSafe(wlX, wlY, 1)
+                    safeSleep(220)
+
+                    DF.STATE.checking_wl_edit   = true
+                    DF.STATE.wl_edit_seen       = false
+                    DF.STATE.wl_edit_is_public  = false
+                    DF.STATE.wl_edit_return_pkt = ""
+
+                    rawAction(wlX, wlY, ITEM.WRENCH)
+                    local w = 0
+                    while w < 1300 and isActive() and (not DF.STATE.wl_edit_seen) do
+                        safeSleep(75); w = w + 75
+                    end
+                    DF.STATE.checking_wl_edit = false
+
+                    if DF.STATE.wl_edit_seen then
+                        if DF.STATE.wl_edit_is_public then
+                            DF.STATE.world_enter_public = true
+                            addLog(appliedWL
+                                and "[Lock/Door] World Lock (242) terverifikasi: Allow anyone to Build & Break = ON!"
+                                or  "[Lock/Door] World Lock (242) sudah Allow anyone to Build & Break.")
+                            break
+                        else
+                            local retPkt = DF.STATE.wl_edit_return_pkt
+                            if retPkt == "" then
+                                retPkt = string.format(
+                                    "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
+                                    wlX, wlY
+                                )
+                            end
+                            pcall(sendPacket, 2, retPkt)
+                            appliedWL = true
+                            -- Tunggu sinkronisasi tile flag 0x80 (bila langsung ON, selesai tanpa wrench kedua!)
+                            local sw = 0
+                            while sw < 900 and isActive() do
+                                safeSleep(90); sw = sw + 90
+                                local fp2, hf2 = isTilePublicFlag(getTileSafe(wlX, wlY))
+                                if hf2 and fp2 then
+                                    DF.STATE.world_enter_public = true
+                                    addLog("[Lock/Door] World Lock (242) diset Allow anyone to Build & Break = ON!")
+                                    break
+                                end
+                            end
+                            if DF.STATE.world_enter_public == true then break end
+                        end
+                    else
+                        -- Fallback bila APK tidak meneruskan OnDialogRequest lock_edit ke Lua
+                        pcall(sendPacket, 2, string.format(
+                            "action|dialog_return\ndialog_name|lock_edit\ntilex|%d|\ntiley|%d|\ncheckbox_public|1\ncheckbox_disable_music|0\ntempo|100\ncheckbox_disable_music_render|0\ncheckbox_set_as_home_world|0\nminimum_entry_level|1\n",
+                            wlX, wlY
+                        ))
+                        safeSleep(550)
+                        addLog("[Lock/Door] World Lock (242) diset Allow anyone to Build & Break (fallback).")
+                        break
+                    end
                 end
             end
         end
@@ -3200,14 +3250,10 @@ local function parseWLPublicDialog(payload)
     return isPublic, table.concat(lines, "\n") .. "\n"
 end
 
--- Auto-confirm dialog drop / drop_item + cek senyap dialog door_edit & lock_edit (World Lock Allow Build)
+-- Auto-confirm dialog drop / drop_item + cek senyap dialog door_edit & lock_edit + baca status world OnConsoleMessage!
 -- Mendukung format VariantList v0/v1 maupun v1/v2 serta dialog Growtopia V5.x!
 function DF.handleVariant(var)
     if not isActive() then return false end
-    local wantDrop = (DF.STATE.pending_drop_id > 0)
-    local wantDoor = (DF.STATE.checking_door_edit == true)
-    local wantWL   = (DF.STATE.checking_wl_edit == true)
-    if (not wantDrop) and (not wantDoor) and (not wantWL) then return false end
     if type(var) ~= "table" and type(var) ~= "userdata" then return false end
 
     local v0, v1, v2 = nil, nil, nil
@@ -3215,11 +3261,32 @@ function DF.handleVariant(var)
     pcall(function() v1 = var.v1 or var[1] end)
     pcall(function() v2 = var.v2 or var[2] end)
 
+    local s0, s1 = tostring(v0 or ""), tostring(v1 or "")
+
+    -- 0. Pantau pesan masuk world (OnConsoleMessage) untuk tahu otomatis apakah WL sudah Public [OPEN] (0 wrench!)
+    if s0 == "OnConsoleMessage" or s1 == "OnConsoleMessage" then
+        local msg = (s0 == "OnConsoleMessage") and tostring(v1 or "") or tostring(v2 or "")
+        local clean = msg:gsub("`.", ""):lower()
+        if clean:find("world locked by", 1, true) or clean:find("open to the public", 1, true) or clean:find("[open]", 1, true) then
+            if clean:find("[open]", 1, true) or clean:find("open to the public", 1, true) or clean:find("allow anyone", 1, true) then
+                DF.STATE.world_enter_public = true
+            elseif clean:find("world locked by", 1, true) then
+                DF.STATE.world_enter_public = false
+            end
+        end
+        return false -- Jangan blokir tampilan console normal!
+    end
+
+    local wantDrop = (DF.STATE.pending_drop_id > 0)
+    local wantDoor = (DF.STATE.checking_door_edit == true)
+    local wantWL   = (DF.STATE.checking_wl_edit == true)
+    if (not wantDrop) and (not wantDoor) and (not wantWL) then return false end
+
     local fn, payload = "", ""
-    if tostring(v0 or "") == "OnDialogRequest" then
+    if s0 == "OnDialogRequest" then
         fn = "OnDialogRequest"
         payload = tostring(v1 or "")
-    elseif tostring(v1 or "") == "OnDialogRequest" then
+    elseif s1 == "OnDialogRequest" then
         fn = "OnDialogRequest"
         payload = tostring(v2 or "")
     end
