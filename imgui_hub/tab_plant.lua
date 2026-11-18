@@ -559,6 +559,8 @@ local function openNativeInputDialog(dialogId, title, fields, submitLabel, onSub
     end
 end
 
+local showKetikBtn = false -- Sembunyikan tombol "Ketik (Keyboard HP)" di UI (fungsi tetap aktif; ketik /ketik di chat jika ingin munculkan)
+
 local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
     if not skipTopSep then
         uiGap(6)
@@ -566,7 +568,7 @@ local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
     end
     uiGap(4)
     coloredText(getBorenPal().textCyan, title)
-    if onKetikClick then
+    if showKetikBtn and onKetikClick then
         ImGui.SameLine()
         ImGui.Text("  ")
         ImGui.SameLine()
@@ -2166,6 +2168,12 @@ local function handleSendPacket(pktType, pktStr)
                 return true
             elseif cmd == "/reload" then
                 triggerHotReloadAll()
+                return true
+            elseif cmd == "/ketik" then
+                showKetikBtn = not showKetikBtn
+                if LogToConsole then
+                    pcall(LogToConsole, "`e[BOREN STORE] `wTombol Ketik HP: " .. (showKetikBtn and "`2ON" or "`4HIDDEN"))
+                end
                 return true
             elseif cmd:sub(1, 5) == "/add " and HUB and HUB.plant then
                 local arg = trimmed:sub(6):gsub("^%s+", "")
