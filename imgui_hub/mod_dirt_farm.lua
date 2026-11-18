@@ -1160,7 +1160,7 @@ end
 
 local function breakTileLayerWithLagGuard(tx, ty, isFgLayer, prefDir)
     local pDelay = math.max(80, tonumber(DF.CFG.punch_delay) or 160)
-    for round = 1, 5 do
+    for round = 1, 7 do
         if not isActive() then return false end
         if not ensureDFOnline(activeTargetWorld, activeTargetDoor) then return false end
         local t = getTileSafe(tx, ty)
@@ -1174,6 +1174,7 @@ local function breakTileLayerWithLagGuard(tx, ty, isFgLayer, prefDir)
         local px, py = getPlayerPos()
         if (not px) or (px == tx and py == ty) or math.abs(px - tx) > 2 or math.abs(py - ty) > 2 or (not isTileSafeToStand(px, py)) then
             moveAdjacentSafe(tx, ty, prefDir)
+            safeSleep(60)
         end
 
         local baseHits = estimateTileBreakHits(curId)
@@ -1188,14 +1189,15 @@ local function breakTileLayerWithLagGuard(tx, ty, isFgLayer, prefDir)
             safeSleep(pDelay)
         end
 
-        local waitWin = (round == 1) and 220 or ((round == 2) and 280 or 360)
+        local waitWin = (round == 1) and 220 or ((round == 2) and 300 or ((round == 3) and 380 or 450))
         if awaitTileLayerCleared(tx, ty, isFgLayer, waitWin) then
             return true
         end
 
-        -- Jika lag/rubberband di ronde >= 3, re-posisi sejenak
-        if round >= 3 then
-            moveAdjacentSafe(tx, ty, prefDir)
+        -- Jika lag/rubberband di ronde >= 2, re-posisi agar tidak memukul angin / out-of-range
+        if round >= 2 then
+            local altDir = (round % 2 == 0) and prefDir or (-(prefDir or 1))
+            moveAdjacentSafe(tx, ty, altDir)
             safeSleep(120)
         end
     end
@@ -1245,6 +1247,20 @@ local function breakTileCompletely(tx, ty, breakFg, breakBg, prefDir, skipCollec
     return fgDone and bgDone
 end
 
+-- Tunggu sinkronisasi server bahwa block/seed benar-benar sudah ter-put di tile target
+local function awaitTilePlaced(tx, ty, itemID, maxWaitMs)
+    local t = getTileSafe(tx, ty)
+    if t and tonumber(t.fg) == itemID then return true end
+    local waited = 0
+    local lim = maxWaitMs or 220
+    while isActive() and waited < lim do
+        safeSleep(30); waited = waited + 30
+        t = getTileSafe(tx, ty)
+        if t and tonumber(t.fg) == itemID then return true end
+    end
+    return false
+end
+
 local function placeTileAt(tx, ty, itemID, prefDir)
     if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
     local t = getTileSafe(tx, ty)
@@ -1255,18 +1271,27 @@ local function placeTileAt(tx, ty, itemID, prefDir)
     local pDelay = math.max(80, tonumber(DF.CFG.place_delay) or 160)
     local isSeed = (itemID == ITEM.DIRT_SEED or itemID == ITEM.CAVE_BG_SEED or itemID == ITEM.LAVA_SEED or itemID == ITEM.ROCK_SEED)
 
-    for _ = 1, 8 do
+    for attempt = 1, 8 do
         if not isActive() then return false end
+        if not ensureDFOnline(activeTargetWorld, activeTargetDoor) then return false end
         t = getTileSafe(tx, ty)
         if t and tonumber(t.fg) == itemID then return true end
+        if getInvCount(itemID) <= 0 then return false end
+
         local px, py = getPlayerPos()
         local outOfRange = (not px) or math.abs(px - tx) > 2 or math.abs(py - ty) > 2
         local onTarget = (px == tx and py == ty)
-        if outOfRange or ((not isSeed) and onTarget) then
-            moveAdjacentSafe(tx, ty, prefDir)
+        if outOfRange or ((not isSeed) and onTarget) or attempt >= 3 then
+            local altDir = (attempt % 2 == 1) and prefDir or (-(prefDir or 1))
+            moveAdjacentSafe(tx, ty, altDir)
+            if attempt >= 3 then safeSleep(80) end
         end
         rawAction(tx, ty, itemID)
         safeSleep(pDelay)
+        local waitWin = (attempt == 1) and 140 or ((attempt <= 3) and 220 or 320)
+        if awaitTilePlaced(tx, ty, itemID, waitWin) then
+            return true
+        end
     end
     t = getTileSafe(tx, ty)
     return (t ~= nil and tonumber(t.fg) == itemID)
@@ -2648,7 +2673,27 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
         end
     end
 
-    -- 4. BANGUN LANTAI DIRT ATAS (Y = 2, 4, ..., 22) POLA 3-ZIGZAG + AUTO FARM DIRT BILA HABIS
+    local function isSecurityMoatZone(tx, ty)
+        if (not DF.CFG.auto_place_sl) or (not doorX) or (not doorY) then return false end
+        return (math.abs(tx - doorX) <= 2 and math.abs(ty - doorY) <= 2)
+    end
+
+    local function ensureDirtStock(contextLabel)
+        if getInvCount(ITEM.DIRT) > 0 then return true end
+        -- PRIORITAS 1: Pungut SEMUA Dirt Block yang ter-drop di world DF dulu sebelum tanam seed!
+        DF.STATE.df_stash_spots = {}
+        DF.STATE.status_text = row.name .. " Ambil Dirt DF..."
+        collectFloatingItemInDF(ITEM.DIRT, 185)
+        if getInvCount(ITEM.DIRT) > 0 then return true end
+        -- PRIORITAS 2: Hanya tanam Dirt Seed bila Dirt Block di tas & world DF sudah benar-benar 0!
+        if farmDirtOnce(doorX, doorY, minX, maxX) and getInvCount(ITEM.DIRT) > 0 then
+            return true
+        end
+        addLog("[DF] Dirt (2) & Dirt Seed (3) habis saat " .. tostring(contextLabel or "build"))
+        return false
+    end
+
+    -- 4. BANGUN LANTAI DIRT ATAS (Y = 2, 4, ..., 22) POLA 3-ZIGZAG + VERIFIKASI PUT ANTI-LAG
     if DF.CFG.build_upper_dirt then
         local pDelay = math.max(80, tonumber(DF.CFG.place_delay) or 160)
         local goingRight = true
@@ -2664,41 +2709,52 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
                 if not DF.STATE.running then return false end
                 if not ensureDFOnline(row.name, row.door) then return false end
                 local xs = goingRight and { standX - 1, standX, standX + 1 } or { standX + 1, standX, standX - 1 }
-                local miss = {}
-                for _, bx in ipairs(xs) do
-                    if bx >= minX and bx <= maxX and (not isProtectedDoorArea(bx, py, doorX, doorY)) then
-                        local t = getTileSafe(bx, py)
-                        if t and (tonumber(t.fg) or 0) == 0 then table.insert(miss, bx) end
-                    end
-                end
-                if #miss > 0 then
-                    local function ensureDirtForBuild()
-                        if getInvCount(ITEM.DIRT) > 0 then return true end
-                        -- PRIORITAS 1: Pungut SEMUA Dirt Block yang ter-drop di world DF dulu sebelum tanam seed!
-                        DF.STATE.df_stash_spots = {}
-                        DF.STATE.status_text = row.name .. " Ambil Dirt DF..."
-                        collectFloatingItemInDF(ITEM.DIRT, 185)
-                        if getInvCount(ITEM.DIRT) > 0 then return true end
-                        -- PRIORITAS 2: Hanya tanam Dirt Seed bila Dirt Block di tas & world DF sudah benar-benar 0!
-                        if farmDirtOnce(doorX, doorY, minX, maxX) and getInvCount(ITEM.DIRT) > 0 then
-                            return true
-                        end
-                        addLog("[DF] Dirt (2) & Dirt Seed (3) habis saat build baris atas Y=" .. py)
-                        outOfDirt = true
-                        return false
-                    end
 
-                    if not ensureDirtForBuild() then break end
-                    if moveSafeTo(standX, standY) then
+                local function collectMissingInChunk()
+                    local m = {}
+                    for _, bx in ipairs(xs) do
+                        if bx >= minX and bx <= maxX and (not isProtectedDoorArea(bx, py, doorX, doorY)) and (not isSecurityMoatZone(bx, py)) then
+                            local t = getTileSafe(bx, py)
+                            if t and (tonumber(t.fg) or 0) == 0 then table.insert(m, bx) end
+                        end
+                    end
+                    return m
+                end
+
+                local miss = collectMissingInChunk()
+                if #miss > 0 then
+                    -- Verifikasi tiap 3-tile chunk hingga benar-benar ter-put di server (maks 4 ronde bila lag/rubberband)
+                    for vRound = 1, 4 do
+                        if not DF.STATE.running then break end
+                        if not ensureDirtStock("build baris atas Y=" .. py) then
+                            outOfDirt = true
+                            break
+                        end
+                        local px, pyNow = getPlayerPos()
+                        if vRound > 1 or (not px) or math.abs(px - standX) > 1 or pyNow ~= standY then
+                            moveSafeTo(standX, standY)
+                            if vRound > 1 then safeSleep(80) end
+                        end
                         for _, bx in ipairs(miss) do
                             if not DF.STATE.running then break end
-                            if getInvCount(ITEM.DIRT) <= 0 then
-                                if not ensureDirtForBuild() then break end
-                                if not moveSafeTo(standX, standY) then break end
+                            local tNow = getTileSafe(bx, py)
+                            if tNow and (tonumber(tNow.fg) or 0) == 0 then
+                                if getInvCount(ITEM.DIRT) <= 0 then
+                                    if not ensureDirtStock("build baris atas Y=" .. py) then
+                                        outOfDirt = true
+                                        break
+                                    end
+                                    moveSafeTo(standX, standY)
+                                end
+                                rawAction(bx, py, ITEM.DIRT)
+                                safeSleep(pDelay)
                             end
-                            rawAction(bx, py, ITEM.DIRT)
-                            safeSleep(pDelay)
                         end
+                        if outOfDirt or (not DF.STATE.running) then break end
+                        -- Tunggu konfirmasi server singkat lalu cek ulang apakah masih ada yang bolong akibat lag!
+                        safeSleep((vRound == 1) and 90 or 160)
+                        miss = collectMissingInChunk()
+                        if #miss == 0 then break end
                     end
                     if outOfDirt then break end
                 end
@@ -2709,7 +2765,7 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
         end
     end
 
-    -- 5. PASANG WOODEN PLATFORM (ID 102) DI SISI TANGGA X=1 & X=98
+    -- 5. PASANG PLATFORM (ID CONFIGURABLE) DI SISI TANGGA X=1 & X=98
     if DF.CFG.place_platform then
         local platID = tonumber(DF.CFG.platform_id) or 102
         row.status = "Place Plat..."
@@ -2732,16 +2788,205 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
         end
     end
 
+    -- 5.5. VALIDASI MENYELURUH BENTUK WORLD & SEMUA PUT/BREAK (AUTO-REPAIR SISA LAG!)
+    local remainingIssues = 0
+    if DF.STATE.running then
+        local platID = tonumber(DF.CFG.platform_id) or 102
+        local outOfDirtVal = false
+        local outOfPlatVal = false
+
+        local function scanWorldDefects()
+            local d = { sides = {}, rows = {}, lavaRock = {}, lowerHoles = {}, upperDirt = {}, platforms = {} }
+
+            -- A. Audit Break Sisi Pinggir
+            if DF.CFG.clear_side and #sideCols > 0 then
+                for _, sx in ipairs(sideCols) do
+                    for sy = 24, 53 do
+                        local need, nFg, nBg = isOddTileClearNeeded(sx, sy, doorX, doorY)
+                        if need then
+                            d.sides[#d.sides + 1] = { x = sx, y = sy, fg = nFg, bg = nBg }
+                        end
+                    end
+                end
+            end
+
+            -- B. Audit Break Lorong Baris Ganjil (FG + Cave BG)
+            if DF.CFG.clear_rows then
+                for sy = 25, 53, 2 do
+                    for sx = minX, maxX do
+                        local need, nFg, nBg = isOddTileClearNeeded(sx, sy, doorX, doorY)
+                        if need then
+                            d.rows[#d.rows + 1] = { x = sx, y = sy, fg = nFg, bg = nBg }
+                        end
+                    end
+                end
+            end
+
+            -- C. Audit Platform Bawah (Y=24..52 genap): sisa Lava/Rock & lubang floor di luar Moat Lock
+            if DF.CFG.break_lava or DF.CFG.break_rock then
+                for py = 24, 52, 2 do
+                    for px = minX, maxX do
+                        if (not isProtectedDoorArea(px, py, doorX, doorY)) and (not isSecurityMoatZone(px, py)) then
+                            local t = getTileSafe(px, py)
+                            local fg = tonumber(t and t.fg) or 0
+                            if (DF.CFG.break_lava and fg == ITEM.LAVA) or (DF.CFG.break_rock and fg == ITEM.ROCK) then
+                                d.lavaRock[#d.lavaRock + 1] = { x = px, y = py }
+                            elseif fg == 0 and DF.CFG.build_upper_dirt then
+                                d.lowerHoles[#d.lowerHoles + 1] = { x = px, y = py }
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- D. Audit Put Lantai Dirt Atas (Y=2..22 genap)
+            if DF.CFG.build_upper_dirt then
+                for py = 2, 22, 2 do
+                    for px = minX, maxX do
+                        if (not isProtectedDoorArea(px, py, doorX, doorY)) and (not isSecurityMoatZone(px, py)) then
+                            local t = getTileSafe(px, py)
+                            if t and (tonumber(t.fg) or 0) == 0 then
+                                d.upperDirt[#d.upperDirt + 1] = { x = px, y = py }
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- E. Audit Put Platform Sisi Tangga (X=1 & X=98, Y=2..52 genap)
+            if DF.CFG.place_platform then
+                for _, px in ipairs({ 1, 98 }) do
+                    for py = 2, 52, 2 do
+                        local t = getTileSafe(px, py)
+                        if t and tonumber(t.fg) ~= platID and (tonumber(t.fg) or 0) == 0 then
+                            d.platforms[#d.platforms + 1] = { x = px, y = py }
+                        end
+                    end
+                end
+            end
+
+            d.total = #d.sides + #d.rows + #d.lavaRock + #d.lowerHoles + #d.upperDirt + #d.platforms
+            return d
+        end
+
+        for vPass = 1, 6 do
+            if not DF.STATE.running then return false end
+            if not ensureDFOnline(row.name, row.door) then return false end
+
+            local d = scanWorldDefects()
+            remainingIssues = d.total
+            if d.total == 0 then
+                addLog(string.format("[DF Validasi OK] Pass #%d: Bentuk world & semua put/break 100%% sempurna!", vPass))
+                break
+            end
+
+            row.status = string.format("Validasi #%d (%d)", vPass, d.total)
+            DF.STATE.status_text = string.format("%s Fix #%d (%d)", row.name, vPass, d.total)
+            addLog(string.format(
+                "[DF Validasi #%d] Ditemukan %d sisa lag (Sisi=%d, Lorong=%d, Lava/Rock=%d, LubangBawah=%d, DirtAtas=%d, Plat=%d) — memperbaiki...",
+                vPass, d.total, #d.sides, #d.rows, #d.lavaRock, #d.lowerHoles, #d.upperDirt, #d.platforms
+            ))
+
+            local repairedAny = false
+
+            -- 1. Repair Break Sisi Pinggir
+            for _, item in ipairs(d.sides) do
+                if not DF.STATE.running then return false end
+                if breakTileCompletely(item.x, item.y, item.fg, item.bg, (item.x < 50) and 1 or -1, false) then
+                    repairedAny = true
+                end
+                checkAutoTrash()
+            end
+
+            -- 2. Repair Break Lorong Ganjil
+            for _, item in ipairs(d.rows) do
+                if not DF.STATE.running then return false end
+                if breakTileCompletely(item.x, item.y, item.fg, item.bg, -1, false) then
+                    repairedAny = true
+                end
+                checkAutoTrash()
+            end
+
+            -- 3. Repair Lava / Rock Platform Bawah + Tambal Dirt
+            for _, item in ipairs(d.lavaRock) do
+                if not DF.STATE.running then return false end
+                if breakTileCompletely(item.x, item.y, true, false, -1, false) then
+                    repairedAny = true
+                    if (not outOfDirtVal) and ensureDirtStock("tambal lava/rock") then
+                        placeTileAt(item.x, item.y, ITEM.DIRT, -1)
+                    end
+                end
+            end
+
+            -- 4. Repair Lubang Floor Bawah (Y=24..52 genap)
+            if not outOfDirtVal then
+                for _, item in ipairs(d.lowerHoles) do
+                    if not DF.STATE.running then return false end
+                    if not ensureDirtStock("validasi floor bawah") then
+                        outOfDirtVal = true
+                        break
+                    end
+                    if placeTileAt(item.x, item.y, ITEM.DIRT, -1) then
+                        repairedAny = true
+                    end
+                end
+            end
+
+            -- 5. Repair Put Lantai Dirt Atas (Y=2..22 genap)
+            if not outOfDirtVal then
+                for _, item in ipairs(d.upperDirt) do
+                    if not DF.STATE.running then return false end
+                    if not ensureDirtStock("validasi dirt atas") then
+                        outOfDirtVal = true
+                        break
+                    end
+                    if placeTileAt(item.x, item.y, ITEM.DIRT, -1) then
+                        repairedAny = true
+                    end
+                end
+            end
+
+            -- 6. Repair Put Platform Sisi Tangga
+            if not outOfPlatVal then
+                for _, item in ipairs(d.platforms) do
+                    if not DF.STATE.running then return false end
+                    if getInvCount(platID) <= 0 then
+                        if not restockItem(row, platID, 120) then
+                            outOfPlatVal = true
+                            break
+                        end
+                    end
+                    if placeTileAt(item.x, item.y, platID, (item.x < 50) and 1 or -1) then
+                        repairedAny = true
+                    end
+                end
+            end
+
+            safeSleep(180)
+            if not repairedAny then
+                -- Cek ulang 1x untuk angka sisa akurat bila memang bahan habis / petak terkunci
+                remainingIssues = scanWorldDefects().total
+                break
+            end
+        end
+    end
+
     -- 6. SIMPAN SISA DIRT BLOCK & DIRT SEED KE SAVE WORLD (Bila kosong -> biarkan di Dirt Farm!)
     if DF.STATE.running then
         saveLeftoverDirtToSaveWorld(row)
     end
 
     activeTargetWorld = ""
-    row.status = "Done"
-    DF.saveData()
-    addLog("[Selesai] Dirt Farm " .. row.name .. " tuntas!")
-    return true
+    if remainingIssues == 0 then
+        row.status = "Done"
+        DF.saveData()
+        addLog("[Selesai] Dirt Farm " .. row.name .. " tuntas & tervalidasi 100%!")
+    else
+        row.status = "Sisa (" .. tostring(remainingIssues) .. ")"
+        DF.saveData()
+        addLog(string.format("[Peringatan] Dirt Farm %s masih ada %d tile belum rapi (cek bahan/lock)!", row.name, remainingIssues))
+    end
+    return (remainingIssues == 0)
 end
 
 local function mainLoop()
