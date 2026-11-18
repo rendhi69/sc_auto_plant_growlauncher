@@ -1816,7 +1816,7 @@ end
 local function uiEnableBtn(isOn, id)
     local k = uiKit()
     if k and k.enableBtn then return k.enableBtn(isOn, id) end
-    return autoBtn((isOn and " ON - AKTIF ##" or " OFF - MATI ##") .. tostring(id))
+    return autoBtn((isOn and "ON##" or "OFF##") .. tostring(id))
 end
 
 local function uiToggleBtn(isOn, id, onLbl, offLbl)
@@ -1856,11 +1856,11 @@ end
 local function renderWorldsSub()
     local w = availX()
     uiSection("Kontrol Dirt Farm", true)
-    ImGui.Text("Status Bot:"); ImGui.SameLine()
+    ImGui.Text("Status Bot  :"); ImGui.SameLine()
     if uiEnableBtn(DF.STATE.enabled, "df_en") then
         if DF.STATE.enabled then DF.stop() else DF.start() end
     end
-    ImGui.SameLine(); ImGui.Text("   Loop:"); ImGui.SameLine()
+    ImGui.SameLine(); ImGui.Text("    Loop  :"); ImGui.SameLine()
     if uiToggleBtn(DF.CFG.loop_enabled, "df_lp") then
         DF.CFG.loop_enabled = not DF.CFG.loop_enabled; DF.saveData()
     end

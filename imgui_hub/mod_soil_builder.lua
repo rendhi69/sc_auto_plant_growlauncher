@@ -845,7 +845,7 @@ end
 local function uiEnableBtn(isOn, id)
     local k = uiKit()
     if k and k.enableBtn then return k.enableBtn(isOn, id) end
-    return autoBtn((isOn and " ON - AKTIF ##" or " OFF - MATI ##") .. tostring(id))
+    return autoBtn((isOn and "ON##" or "OFF##") .. tostring(id))
 end
 
 local function uiToggleBtn(isOn, id, onLbl, offLbl)
@@ -885,11 +885,11 @@ end
 local function renderWorldsSub()
     local w = availX()
     uiSection("Kontrol Build Soil", true)
-    ImGui.Text("Status Bot:"); ImGui.SameLine()
+    ImGui.Text("Status Bot  :"); ImGui.SameLine()
     if uiEnableBtn(SB.STATE.enabled, "sb_en") then
         if SB.STATE.enabled then SB.stop() else SB.start() end
     end
-    ImGui.SameLine(); ImGui.Text("   Loop:"); ImGui.SameLine()
+    ImGui.SameLine(); ImGui.Text("    Loop  :"); ImGui.SameLine()
     if uiToggleBtn(SB.CFG.loop_enabled, "sb_lp") then
         SB.CFG.loop_enabled = not SB.CFG.loop_enabled; SB.saveData()
     end

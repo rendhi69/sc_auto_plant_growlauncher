@@ -541,7 +541,7 @@ end
 local function uiEnableBtn(isOn, id)
     local k = uiKit()
     if k and k.enableBtn then return k.enableBtn(isOn, id) end
-    return autoBtn((isOn and " ON - AKTIF ##" or " OFF - MATI ##") .. tostring(id))
+    return autoBtn((isOn and "ON##" or "OFF##") .. tostring(id))
 end
 
 local function uiToggleBtn(isOn, id, onLbl, offLbl)
@@ -626,7 +626,7 @@ end
 local function renderMainSub()
     local w = availX()
     uiSection("Kontrol Buy Pack", true)
-    ImGui.Text("Status Bot:"); ImGui.SameLine()
+    ImGui.Text("Status Bot  :"); ImGui.SameLine()
     if uiEnableBtn(BP.STATE.enabled, "bp_en") then
         if BP.STATE.enabled then BP.stop() else BP.start() end
     end

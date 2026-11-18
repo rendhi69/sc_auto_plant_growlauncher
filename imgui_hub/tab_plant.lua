@@ -216,16 +216,18 @@ local function getBorenPal()
         mutedBtn        = mkCol(14, 18,  34, 255),
         mutedBtnHover   = mkCol(46, 24,  78, 255),
 
-        -- Tombol Toggle ON (Hijau Emerald Kontras Tinggi) & OFF (Merah Crimson Kontras Tinggi)
-        onBtn           = mkCol(18, 154,  78, 255),
-        onBtnHover      = mkCol(26, 188,  96, 255),
-        onBtnActive     = mkCol(14, 130,  66, 255),
-        onBorder        = mkCol(82, 255, 162, 255),
+        -- Tombol Toggle ON/OFF Wajib Hitam + Neon (ON = Hitam + Neon Cyan, OFF = Hitam + Neon Ungu)
+        onBtn           = mkCol(8,   22,  34, 255),
+        onBtnHover      = mkCol(14,  42,  64, 255),
+        onBtnActive     = mkCol(6,   54,  84, 255),
+        onBorder        = mkCol(0,  228, 255, 255),
+        onText          = mkCol(0,  238, 255, 255),
 
-        offBtn          = mkCol(164, 30,  52, 255),
-        offBtnHover     = mkCol(202, 42,  68, 255),
-        offBtnActive    = mkCol(136, 22,  42, 255),
-        offBorder       = mkCol(255, 102, 126, 255),
+        offBtn          = mkCol(9,   11,  20, 255),
+        offBtnHover     = mkCol(24,  18,  48, 255),
+        offBtnActive    = mkCol(38,  22,  76, 255),
+        offBorder       = mkCol(162, 56, 255, 255),
+        offText         = mkCol(214, 196, 255, 255),
 
         -- Header, Tabel, Separator, Scrollbar (Solid & Neon)
         header          = mkCol(28, 36,  86, 255),
@@ -314,7 +316,7 @@ local function pushBorenTheme()
         pv(V.GrabRounding,      5.0)
         pv(V.ScrollbarRounding, 6.0)
         pv(V.WindowBorderSize,  2.0)
-        pv(V.FrameBorderSize,   1.2)
+        pv(V.FrameBorderSize,   1.5)
     end
     return cCnt, vCnt
 end
@@ -407,7 +409,7 @@ local function uiSection(title, skipTopSep)
     end
 end
 
--- Tombol Toggle ON (Hijau Emerald) / OFF (Merah Crimson) dengan proporsi pas & tulisan jelas terbaca
+-- Kotak Toggle ON/OFF: Wajib Hitam + Neon, lebar seragam 95px (sama dengan kotak input teks/angka)
 local function toggleBtn(isOn, id, onLabel, offLabel)
     local pushed = 0
     if detectPushColorMode() ~= "none" and ImGui and ImGui.Col then
@@ -421,27 +423,39 @@ local function toggleBtn(isOn, id, onLabel, offLabel)
             pc(C.ButtonHovered, P.onBtnHover)
             pc(C.ButtonActive,  P.onBtnActive)
             pc(C.Border,        P.onBorder)
-            pc(C.Text,          P.textCol)
+            pc(C.Text,          P.onText)
         else
             pc(C.Button,        P.offBtn)
             pc(C.ButtonHovered, P.offBtnHover)
             pc(C.ButtonActive,  P.offBtnActive)
             pc(C.Border,        P.offBorder)
-            pc(C.Text,          P.textCol)
+            pc(C.Text,          P.offText)
         end
     end
     local txt = isOn and (onLabel or "ON") or (offLabel or "OFF")
-    local lbl = " " .. txt .. " ##" .. tostring(id or "tg")
-    local clicked = autoBtn(lbl)
+    local btnW = 95
+    if #txt > 4 then
+        local tw = #txt * 9
+        if ImGui and ImGui.CalcTextSize then
+            local okS, sz = pcall(ImGui.CalcTextSize, txt)
+            if okS and sz then
+                local okW, w = pcall(function() return sz.x end)
+                if okW and type(w) == "number" and w > 0 then tw = w end
+            end
+        end
+        btnW = math.max(95, math.floor(tw + 26))
+    end
+    local lbl = txt .. "##" .. tostring(id or "tg")
+    local clicked = fullBtn(lbl, btnW)
     if pushed > 0 and ImGui and ImGui.PopStyleColor then
         pcall(ImGui.PopStyleColor, pushed)
     end
     return clicked
 end
 
--- Tombol Enable Utama Fitur (proporsi pas ke tulisan, warna kontras Hijau=AKTIF / Merah=MATI)
+-- Kotak Status Bot ON/OFF (seragam 95px Hitam + Neon, klik untuk ganti ON / OFF)
 local function enableBtn(isOn, id, onLabel, offLabel)
-    return toggleBtn(isOn, id, onLabel or "ON - AKTIF", offLabel or "OFF - MATI")
+    return toggleBtn(isOn, id, onLabel or "ON", offLabel or "OFF")
 end
 
 -- Tombol Sub-Tab Aktif (Aksen Ungu Neon + Border Cyan)
@@ -474,14 +488,14 @@ local function renderPlantWorldsSub()
 
     -- 1. KONTROL UTAMA BOT
     uiSection("Kontrol Auto Plant", true)
-    ImGui.Text("Status Bot:")
+    ImGui.Text("Status Bot  :")
     ImGui.SameLine()
     if enableBtn(E.STATE.enabled, "en") then
         if E.STATE.enabled then E.stop() else E.start() end
     end
 
     ImGui.SameLine()
-    ImGui.Text("   Loop:")
+    ImGui.Text("    Loop  :")
     ImGui.SameLine()
     if toggleBtn(E.CFG.loop_enabled, "lp") then
         E.CFG.loop_enabled = not E.CFG.loop_enabled
@@ -1591,6 +1605,7 @@ local function renderFrame()
             pcall(ImGui.SetNextWindowSize, ImVec2(300, 155), (ImGui.Cond and ImGui.Cond.Always) or 1)
         end
         if ImGui.Begin("BOREN STORE##boren_mini") then
+            if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
             drawWindowNeonChrome()
             if styledBtn("  Buka BOREN STORE  ", nil, true, false) then
                 windowOpen = true
@@ -1607,6 +1622,7 @@ local function renderFrame()
     end
 
     if ImGui.Begin("BOREN STORE##boren_main") then
+        if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
         drawWindowNeonChrome()
         local winW = safeWinW()
         local sideW = math.max(130, math.floor(winW * 0.20))
