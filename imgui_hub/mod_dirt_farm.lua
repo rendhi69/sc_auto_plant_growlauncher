@@ -110,6 +110,7 @@ local KNOWN_BREAK_HITS = {
 
 DF.CFG = {
     storage_raw         = "",
+    save_world          = "",     -- World penyimpanan sisa Dirt Block & Dirt Seed (kosong = biarkan di Dirt Farm)
     loop_enabled        = false,
     -- Find World
     find_world_mode     = false,
@@ -164,6 +165,7 @@ DF.STATE = {
     selected_idx     = 0,
     selected_st      = 0,
     found_count      = 0,
+    df_stash_spots   = {},   -- Petak drop sementara Dirt/Seed di DF agar tidak langsung terhisap balik saat break
     logs             = {},
 }
 
@@ -302,6 +304,7 @@ function DF.saveData()
     local lines = {
         "CFGVER=3",
         "STORAGE=" .. tostring(DF.CFG.storage_raw or ""),
+        "SAVEW=" .. tostring(DF.CFG.save_world or ""),
         "LOOP=" .. (DF.CFG.loop_enabled and "1" or "0"),
         "FINDMODE=" .. (DF.CFG.find_world_mode and "1" or "0"),
         "FINDLEN=" .. tostring(tonumber(DF.CFG.find_name_len) or 7),
@@ -352,6 +355,7 @@ function DF.loadData()
         local k, v = line:match("^([A-Z0-9]+)=(.*)$")
         if k == "CFGVER" then cfgVer = tonumber(v) or 0
         elseif k == "STORAGE" then DF.CFG.storage_raw = trimStr(v)
+        elseif k == "SAVEW" then DF.CFG.save_world = trimStr(v)
         elseif k == "LOOP" then DF.CFG.loop_enabled = (v == "1")
         elseif k == "FINDMODE" then DF.CFG.find_world_mode = (v == "1")
         elseif k == "FINDLEN" then DF.CFG.find_name_len = math.max(4, math.min(14, tonumber(v) or 7))
@@ -871,6 +875,8 @@ local function rawAction(tx, ty, val)
     })
 end
 
+local dropExcessItemAtStorage -- forward declaration untuk stash overflow Dirt/Seed saat break
+
 -- Tarik (vacuum) item/seed/gems di sekitar karakter dengan packet type=11 TANPA teleport ke objek!
 local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, forceCollect)
     if DF.STATE.anti_take_active or DF.STATE.in_storage then return 0 end
@@ -882,12 +888,14 @@ local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, 
     if not refX or not refY then return 0 end
     local radius = math.max(2, tonumber(customRadius) or tonumber(DF.CFG.collect_range) or 3)
     local collected = 0
+    local stashMap = DF.STATE.df_stash_spots or {}
 
     forEachWorldObject(function(itemid, uid, amt, oxPx, oyPx)
         if not DF.STATE.running then return end
         if itemid == ITEM.LAVA then return end
         local ox = math.floor((oxPx + 10) / 32)
         local oy = math.floor((oyPx + 10) / 32)
+        if (not forceCollect) and stashMap[ox .. "," .. oy] then return end
         local distP = math.max(math.abs(ox - refX), math.abs(oy - refY))
         local distC = (centerX and centerY) and math.max(math.abs(ox - centerX), math.abs(oy - centerY)) or distP
         if (distP <= radius or distC <= radius) and (itemid == 112 or getInvCount(itemid) < 200) then
@@ -901,8 +909,41 @@ local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, 
 end
 
 local function checkAutoTrash()
-    if not DF.CFG.auto_trash or not sendPacket then return end
     local thresh = math.max(50, tonumber(DF.CFG.trash_thresh) or 180)
+    -- Saat build_upper_dirt ON: bila Dirt Block / Dirt Seed penuh di tas (>= thresh), drop dulu di atas DF
+    -- (bukan di-trash!) agar bisa dipungut lagi saat tahap pasang Dirt atas!
+    if DF.CFG.build_upper_dirt and dropExcessItemAtStorage then
+        local dCnt = getInvCount(ITEM.DIRT)
+        local sCnt = getInvCount(ITEM.DIRT_SEED)
+        if dCnt >= thresh or sCnt >= thresh then
+            local retX, retY = getPlayerPos()
+            if dCnt >= thresh then
+                dropExcessItemAtStorage(ITEM.DIRT, 20, "Dirt Block (Stash DF)")
+                local dx, dy = getPlayerPos()
+                if dx and dy then
+                    for ox = math.max(0, dx - 1), math.min(99, dx + 1) do
+                        DF.STATE.df_stash_spots[ox .. "," .. dy] = true
+                    end
+                end
+            end
+            if sCnt >= thresh then
+                dropExcessItemAtStorage(ITEM.DIRT_SEED, 20, "Dirt Seed (Stash DF)")
+                local sx, sy = getPlayerPos()
+                if sx and sy then
+                    for ox = math.max(0, sx - 1), math.min(99, sx + 1) do
+                        DF.STATE.df_stash_spots[ox .. "," .. sy] = true
+                    end
+                end
+            end
+            if retX and retY and isTileSafeToStand(retX, retY) then
+                moveSafeTo(retX, retY)
+            end
+            DF.STATE.anti_take_active = false
+            setAutoCollectActive(DF.CFG.auto_collect == true)
+        end
+    end
+
+    if not DF.CFG.auto_trash or not sendPacket then return end
     local junks = { ITEM.CAVE_BG, ITEM.CAVE_BG_SEED, ITEM.LAVA, ITEM.LAVA_SEED, ITEM.ROCK, ITEM.ROCK_SEED }
     if not DF.CFG.build_upper_dirt then
         table.insert(junks, ITEM.DIRT)
@@ -1469,8 +1510,8 @@ local function buildDropDialogReturn(dlgText, fallbackItemID, dropAmt)
     return table.concat(lines, "\n") .. "\n"
 end
 
--- Drop kelebihan item di area paling atas Storage (Y=1..2, gaya Lucifer) hingga tersisa TEPAT keepAmt (1)
-local function dropExcessItemAtStorage(itemID, keepAmt, label)
+-- Drop kelebihan item di area paling atas Storage/DF (Y=1..2, gaya Lucifer) hingga tersisa TEPAT keepAmt
+dropExcessItemAtStorage = function(itemID, keepAmt, label)
     itemID = math.floor(tonumber(itemID) or 0)
     keepAmt = math.max(0, math.floor(tonumber(keepAmt) or 1))
     if itemID <= 0 then return true end
@@ -1833,7 +1874,126 @@ local function restockItem(farmRow, itemID, wantAmt, exactCap)
     return false
 end
 
--- Auto Plant & Harvest Dirt Seed di baris Y=23 saat Dirt Block habis ketika membangun lantai atas
+-- Pungut stok item tertentu (misal Dirt Block ID 2 atau Dirt Seed ID 3) yang ter-drop di dalam world DF saat ini
+local function collectFloatingItemInDF(targetID, stopAtAmt)
+    local lim = stopAtAmt or 185
+    if getInvCount(targetID) >= lim then return getInvCount(targetID), true end
+
+    DF.STATE.anti_take_active = false
+    setAutoCollectActive(true)
+
+    local targets = {}
+    forEachWorldObject(function(oid, uid, amt, rx, ry)
+        if oid == targetID then
+            targets[#targets + 1] = { uid = uid, amt = amt, rx = rx, ry = ry, tx = math.floor((rx + 10) / 32), ty = math.floor((ry + 10) / 32) }
+        end
+    end)
+    if #targets == 0 then
+        return getInvCount(targetID), false
+    end
+
+    local foundAny = false
+    for _, obj in ipairs(targets) do
+        if not DF.STATE.running then break end
+        if getInvCount(targetID) >= lim then break end
+        foundAny = true
+        local px, py = getPlayerPos()
+        if (not px) or math.max(math.abs(obj.tx - px), math.abs(obj.ty - py)) > 2 then
+            if isTileSafeToStand(obj.tx, obj.ty) then
+                moveSafeTo(obj.tx, obj.ty)
+            else
+                moveAdjacentSafe(obj.tx, obj.ty, 1)
+            end
+        end
+        if sendPacketRaw then
+            pcall(sendPacketRaw, false, { type = 11, value = obj.uid, x = obj.rx, y = obj.ry })
+        end
+        safeSleep(140)
+    end
+    safeSleep(180)
+    return getInvCount(targetID), foundAny
+end
+
+-- Simpan sisa Dirt Block (2) & Dirt Seed (3) ke Save World bila diisi; bila kosong biarkan di Dirt Farm!
+local function saveLeftoverDirtToSaveWorld(farmRow)
+    local rawSave = trimStr(DF.CFG.save_world or "")
+    if rawSave == "" then
+        addLog("[DF] Save World kosong — sisa Dirt Block & Dirt Seed dibiarkan di Dirt Farm.")
+        return true
+    end
+
+    local parsed = parseWorldLine(rawSave)
+    if not parsed or parsed.name == "" then
+        addLog("[DF] Format Save World tidak valid — sisa Dirt dibiarkan di Dirt Farm.")
+        return true
+    end
+    local saveW, saveD = parsed.name, parsed.door
+    if cleanWorldName(saveW) == cleanWorldName(farmRow.name) then
+        return true
+    end
+
+    DF.STATE.df_stash_spots = {}
+    farmRow.status = "Save Sisa Dirt..."
+    DF.STATE.status_text = "Save -> " .. saveW
+
+    for trip = 1, 6 do
+        if not DF.STATE.running then return false end
+
+        -- 1. Pastikan sedang di world DF untuk menyapu sisa Dirt Block & Dirt Seed di lantai/atas DF
+        if getCurrentWorldSafe() ~= cleanWorldName(farmRow.name) then
+            if not warpToWorld(farmRow.name, farmRow.door) then break end
+            DF.STATE.in_storage = false
+            DF.STATE.anti_take_active = false
+            setAutoCollectActive(true)
+            safeSleep(450)
+        end
+
+        collectFloatingItemInDF(ITEM.DIRT, 195)
+        collectFloatingItemInDF(ITEM.DIRT_SEED, 195)
+
+        -- Cek apakah masih ada sisa floating di DF yang tidak muat 1 tas
+        local moreFloatingInDF = false
+        forEachWorldObject(function(oid)
+            if oid == ITEM.DIRT or oid == ITEM.DIRT_SEED then moreFloatingInDF = true end
+        end)
+
+        local hasDirt = getInvCount(ITEM.DIRT)
+        local hasSeed = getInvCount(ITEM.DIRT_SEED)
+        if hasDirt <= 0 and hasSeed <= 0 then
+            break
+        end
+
+        -- 2. Warp ke Save World & drop SEMUA sisa Dirt Block + Dirt Seed (keepAmt = 0)!
+        addLog(string.format("[DF Save #%d] Menyimpan sisa Dirt=%d & Seed=%d ke %s...", trip, hasDirt, hasSeed, saveW))
+        DF.STATE.in_storage = true
+        activeTargetWorld = ""
+        if not warpToWorld(saveW, saveD) then
+            DF.STATE.in_storage = false
+            addLog("[DF Save] Gagal masuk Save World " .. saveW .. ", sisa Dirt dibiarkan di tas/DF.")
+            return false
+        end
+        safeSleep(600)
+
+        if getInvCount(ITEM.DIRT) > 0 then
+            dropExcessItemAtStorage(ITEM.DIRT, 0, "Sisa Dirt Block")
+        end
+        if getInvCount(ITEM.DIRT_SEED) > 0 then
+            dropExcessItemAtStorage(ITEM.DIRT_SEED, 0, "Sisa Dirt Seed")
+        end
+
+        DF.STATE.in_storage = false
+        if not moreFloatingInDF then
+            break
+        end
+    end
+
+    DF.STATE.anti_take_active = false
+    setAutoCollectActive(DF.CFG.auto_collect == true)
+    addLog("[DF Save] Sisa Dirt Block & Dirt Seed selesai disimpan ke " .. saveW .. "!")
+    return true
+end
+
+-- Auto Plant & Harvest Dirt Seed di baris Y=23 (HANYA dijalankan setelah Dirt Block di tas & world habis!)
 local function farmDirtOnce(doorX, doorY, minX, maxX)
     if not DF.CFG.auto_farm_dirt then return false end
     local farmY = 23
@@ -1853,7 +2013,12 @@ local function farmDirtOnce(doorX, doorY, minX, maxX)
     end
     if harvested and getInvCount(ITEM.DIRT) > 0 then return true end
 
-    -- 2. Tanam sampai 40 Dirt Seed di Y=23 bila punya seed
+    -- 2. Bila Dirt Seed di tas 0, pungut dulu Dirt Seed yang ter-drop di world DF!
+    if getInvCount(ITEM.DIRT_SEED) <= 0 then
+        collectFloatingItemInDF(ITEM.DIRT_SEED, 180)
+    end
+
+    -- 3. Tanam sampai 40 Dirt Seed di Y=23 bila punya seed
     local planted = 0
     if getInvCount(ITEM.DIRT_SEED) > 0 then
         for x = minX, maxX do
@@ -2137,6 +2302,7 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
     end
     DF.STATE.anti_take_active = false
     DF.STATE.in_storage = false
+    DF.STATE.df_stash_spots = {}
     activeTargetWorld = targetName
     activeTargetDoor  = cleanWorldName(row.door)
     setAutoCollectActive(DF.CFG.auto_collect == true)
@@ -2315,20 +2481,35 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
                     end
                 end
                 if #miss > 0 then
-                    if getInvCount(ITEM.DIRT) <= 0 then
-                        if not farmDirtOnce(doorX, doorY, minX, maxX) then
-                            addLog("[DF] Dirt (2) & Dirt Seed (3) habis saat build baris atas Y=" .. py)
-                            outOfDirt = true
-                            break
+                    local function ensureDirtForBuild()
+                        if getInvCount(ITEM.DIRT) > 0 then return true end
+                        -- PRIORITAS 1: Pungut SEMUA Dirt Block yang ter-drop di world DF dulu sebelum tanam seed!
+                        DF.STATE.df_stash_spots = {}
+                        DF.STATE.status_text = row.name .. " Ambil Dirt DF..."
+                        collectFloatingItemInDF(ITEM.DIRT, 185)
+                        if getInvCount(ITEM.DIRT) > 0 then return true end
+                        -- PRIORITAS 2: Hanya tanam Dirt Seed bila Dirt Block di tas & world DF sudah benar-benar 0!
+                        if farmDirtOnce(doorX, doorY, minX, maxX) and getInvCount(ITEM.DIRT) > 0 then
+                            return true
                         end
+                        addLog("[DF] Dirt (2) & Dirt Seed (3) habis saat build baris atas Y=" .. py)
+                        outOfDirt = true
+                        return false
                     end
+
+                    if not ensureDirtForBuild() then break end
                     if moveSafeTo(standX, standY) then
                         for _, bx in ipairs(miss) do
-                            if not DF.STATE.running or getInvCount(ITEM.DIRT) <= 0 then break end
+                            if not DF.STATE.running then break end
+                            if getInvCount(ITEM.DIRT) <= 0 then
+                                if not ensureDirtForBuild() then break end
+                                if not moveSafeTo(standX, standY) then break end
+                            end
                             rawAction(bx, py, ITEM.DIRT)
                             safeSleep(pDelay)
                         end
                     end
+                    if outOfDirt then break end
                 end
                 standX = standX + step
             end
@@ -2358,6 +2539,11 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
                 end
             end
         end
+    end
+
+    -- 6. SIMPAN SISA DIRT BLOCK & DIRT SEED KE SAVE WORLD (Bila kosong -> biarkan di Dirt Farm!)
+    if DF.STATE.running then
+        saveLeftoverDirtToSaveWorld(row)
     end
 
     activeTargetWorld = ""
@@ -2993,6 +3179,43 @@ local function renderStorageSub()
         if idx >= 1 and idx <= #storages then
             table.remove(storages, idx); DF.STATE.selected_st = 0; setStorageList(storages); uiNotice = "Storage dihapus."
         end
+    end
+
+    -- SAVE WORLD SISA DIRT BLOCK & DIRT SEED (Kosong = Biarkan di Dirt Farm)
+    uiSectionWithKetik("Save World Sisa Dirt & Seed (Kosong = Biarkan di DF)", "df_ktk_sw", function()
+        uiOpenDialog("boren_in_df_sw", "Save World Sisa Dirt & Seed", {
+            { id = "f_sw", label = "World:DoorID", default = tostring(DF.CFG.save_world or ""), maxLen = 64 },
+        }, "Simpan", function(vals)
+            DF.CFG.save_world = trimStr(vals.f_sw or ""):upper()
+            DF.saveData()
+            uiNotice = (DF.CFG.save_world ~= "") and ("Save World diset: " .. DF.CFG.save_world) or "Save World dikosongkan (biarkan di DF)."
+        end)
+    end)
+    ImGui.PushItemWidth(math.max(180, math.floor(w - 14)))
+    local chSw, nvSw = safeInputText("##df_save_w", DF.CFG.save_world, 128)
+    ImGui.PopItemWidth()
+    if chSw then DF.CFG.save_world = nvSw; DF.saveData() end
+    uiGap(4)
+    local actSw = uiActionBar("BorenDFSaveWActs", w, {
+        { label = "World Ini##dfsw_cur", style = "accent" },
+        { label = "Paste##dfsw_pst" },
+        { label = "Kosongkan##dfsw_clr", style = "muted" },
+    })
+    if actSw == 1 then
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then
+            DF.CFG.save_world = curW; DF.saveData()
+            uiNotice = "Save World diset: " .. curW
+        else uiNotice = "Masuk ke world dulu!" end
+    elseif actSw == 2 then
+        local lines = uiReadClipLines()
+        if #lines > 0 then
+            DF.CFG.save_world = trimStr(lines[1]):upper(); DF.saveData()
+            uiNotice = "Save World di-paste: " .. DF.CFG.save_world
+        else uiNotice = "Clipboard kosong!" end
+    elseif actSw == 3 then
+        DF.CFG.save_world = ""; DF.saveData()
+        uiNotice = "Save World kosong (sisa Dirt dibiarkan di DF)."
     end
 end
 
