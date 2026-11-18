@@ -594,7 +594,126 @@ local function restockItem(farmRow, itemID)
     return false
 end
 
+local LOCK_IDS = {
+    [202]  = true, -- Small Lock
+    [204]  = true, -- Big Lock
+    [206]  = true, -- Huge Lock
+    [242]  = true, -- World Lock
+    [1796] = true, -- Diamond Lock
+    [4994] = true, -- Builder's Lock
+    [7188] = true, -- Blue Gem Lock
+    [226]  = true, -- Signal Jammer
+}
+
+local BLOCKER_DOOR_IDS = {
+    [6]    = true, -- Main Door (White Door)
+    [8]    = true, -- Bedrock
+    [12]   = true, -- Wooden Door
+    [658]  = true, -- Dungeon Door
+    [762]  = true, -- Castle Door
+    [858]  = true, -- Screen Door
+    [1042] = true, -- Steel Door
+    [1276] = true, -- VIP Entrance
+    [2810] = true, -- House Entrance (Penghalang)
+    [2812] = true, -- Portcullis (Penghalang)
+    [3402] = true, -- Security Camera
+    [3804] = true, -- Forcefield
+    [5980] = true, -- Entrance
+}
+
+local protectedAreaMap = {} -- ["x,y"] = true (area Main Door ±2, semua Lock ±1, dan semua Penghalang/Door ±1)
+
+local function markProtectedRect(cx, cy, rx, ry)
+    for y = math.max(0, cy - ry), math.min(53, cy + ry) do
+        for x = math.max(0, cx - rx), math.min(99, cx + rx) do
+            protectedAreaMap[x .. "," .. y] = true
+        end
+    end
+end
+
+-- Pindai seluruh area Lock, Penghalang, Jammer, Main Door, & Door ID (0,0) agar tidak pernah di-spam water/soil!
+local function scanProtectedAreas()
+    protectedAreaMap = {}
+    local tiles = nil
+    if getTiles then
+        local ok, res = pcall(getTiles)
+        if ok and res then tiles = res end
+    end
+
+    local function inspectTile(t, fx, fy)
+        if not t then return end
+        local tx = tonumber(t.x) or fx
+        local ty = tonumber(t.y) or fy
+        if not tx or not ty then return end
+        local fg = tonumber(t.fg) or 0
+        if fg == 0 then return end
+
+        if fg == 6 then
+            -- Main Door + seluruh cluster lock/penghalang/moat ±2 di sekitarnya
+            markProtectedRect(tx, ty, 2, 2)
+        elseif LOCK_IDS[fg] then
+            -- Semua jenis Lock & Jammer + 1 tile sekelilingnya
+            markProtectedRect(tx, ty, 1, 1)
+        elseif BLOCKER_DOOR_IDS[fg] then
+            -- Semua Door & Penghalang (termasuk Door ID di 0,0) + 1 tile sekelilingnya
+            markProtectedRect(tx, ty, 1, 1)
+        end
+    end
+
+    if tiles then
+        pcall(function()
+            for _, t in pairs(tiles) do inspectTile(t) end
+        end)
+    else
+        for y = 0, 53 do
+            for x = 0, 99 do
+                inspectTile(getTileSafe(x, y), x, y)
+            end
+        end
+    end
+
+    -- Jika pojok (0,0) berisi Door ID atau block penghalang apa pun, lindungi area (0..1, 0..1)
+    local t00 = getTileSafe(0, 0)
+    if t00 and (tonumber(t00.fg) or 0) ~= 0 then
+        markProtectedRect(0, 0, 1, 1)
+    end
+end
+
+-- Cek apakah petak masuk area Lock / Penghalang / Door yang WAJIB dihindari
+local function isProtectedLockOrBlocker(tx, ty, forWater)
+    if protectedAreaMap[tx .. "," .. ty] then return true end
+    local t = getTileSafe(tx, ty)
+    if not t then return false end
+    local fg = tonumber(t.fg) or 0
+    if fg ~= 0 and (LOCK_IDS[fg] or BLOCKER_DOOR_IDS[fg]) then return true end
+
+    if forWater then
+        -- Hindari juga petak yang dikunci langsung oleh area lock (SL/BL/HL) bila parent menunjuk ke lock non-WL
+        local par = tonumber(t.parent) or 0
+        if par > 0 then
+            local px = par % 100
+            local py = math.floor(par / 100)
+            local pt = getTileSafe(px, py)
+            local pfg = tonumber(pt and pt.fg) or 0
+            if pfg ~= 0 and pfg ~= 242 and LOCK_IDS[pfg] then
+                return true
+            end
+        end
+        -- Cek cepat 4 arah tetangga kalau-kalau ada Lock/Penghalang baru terpasang
+        local dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+        for _, d in ipairs(dirs) do
+            local nt = getTileSafe(tx + d[1], ty + d[2])
+            local nfg = tonumber(nt and nt.fg) or 0
+            if nfg ~= 0 and (LOCK_IDS[nfg] or BLOCKER_DOOR_IDS[nfg]) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function isEmptyTile(tx, ty)
+    if isProtectedLockOrBlocker(tx, ty, false) then return false end
     local t = getTileSafe(tx, ty)
     return t and (tonumber(t.fg) or 0) == 0
 end
@@ -607,13 +726,15 @@ local function tileHasWater(t)
     return (math.floor(fl / 1024) % 2) == 1
 end
 
--- VALIDASI KETAT PUT WATER 1x PER TILE (Anti-Spam & Anti-Ambil Balik!)
+-- VALIDASI KETAT PUT WATER 1x PER TILE (Anti-Spam, Anti-Ambil Balik & Hindari Area Lock/Penghalang!)
 -- Put #1 memunculkan air (flag bit 1024 ON & stok Water Bucket berkurang 1).
 -- Put #2 pada tile basah akan MENGAMBIL air balik, sehingga fungsi ini WAJIB menunggu
 -- konfirmasi server (flag/water/stok) hingga 850ms sebelum berani retry maks 1x!
 local function placeWaterOnceSafe(tx, ty, waterID, prefDir)
     if not SB.STATE.running then return false end
     if tx < 0 or tx > 99 or ty < 0 or ty > 53 then return false end
+    -- GUARD KERAS: Jangan pernah put water di area Penghalang, Door, Jammer, atau Lock!
+    if isProtectedLockOrBlocker(tx, ty, true) then return true end
     local t = getTileSafe(tx, ty)
     if not t then return false end
     -- Skip jika tile tidak kosong (ada block/bedrock/door) atau SUDAH ada air!
@@ -624,6 +745,7 @@ local function placeWaterOnceSafe(tx, ty, waterID, prefDir)
     local pDelay = math.max(140, tonumber(SB.CFG.place_delay) or 180)
 
     local function attemptSingleWaterPut()
+        if isProtectedLockOrBlocker(tx, ty, true) then return true end
         local tPre = getTileSafe(tx, ty)
         if not tPre or (tonumber(tPre.fg) or 0) ~= 0 or tileHasWater(tPre) then return true end
         local flagBefore = tonumber(tPre.flag or tPre.flags) or 0
@@ -673,7 +795,7 @@ local function placeWaterOnceSafe(tx, ty, waterID, prefDir)
     return attemptSingleWaterPut()
 end
 
--- Pasang Water Pojok Kiri (X=0) & Pojok Kanan (X=99) dari atas sampai bawah (Y=0..53)
+-- Pasang Water Pojok Kiri (X=0) & Pojok Kanan (X=99) dari atas sampai bawah (Y=0..53), HINDARI area Lock & Penghalang!
 local function putWaterCorners(row)
     if not SB.CFG.enable_water then return true end
     local waterID = tonumber(SB.CFG.water_id) or 822
@@ -686,19 +808,22 @@ local function putWaterCorners(row)
         if not SB.STATE.running then return false end
         row.status = "Water " .. col.label .. "..."
         SB.STATE.status_text = row.name .. " Water " .. col.label
-        addLog(string.format("[Water] Pasang air pojok %s (X=%d, Y=0..53) — 1x tervalidasi/tile", col.label, col.x))
+        addLog(string.format("[Water] Pasang air pojok %s (X=%d, Y=0..53) — skip area Lock/Penghalang", col.label, col.x))
         for y = 0, 53 do
             if not SB.STATE.running then return false end
-            local t = getTileSafe(col.x, y)
-            if t and (tonumber(t.fg) or 0) == 0 and (not tileHasWater(t)) then
-                if getInvCount(waterID) <= 0 then
-                    if not restockItem(row, waterID) then
-                        row.status = "No Water"
-                        SB.saveData()
-                        return false
+            if not ensureSBOnline(row) then return false end
+            if not isProtectedLockOrBlocker(col.x, y, true) then
+                local t = getTileSafe(col.x, y)
+                if t and (tonumber(t.fg) or 0) == 0 and (not tileHasWater(t)) then
+                    if getInvCount(waterID) <= 0 then
+                        if not restockItem(row, waterID) then
+                            row.status = "No Water"
+                            SB.saveData()
+                            return false
+                        end
                     end
+                    placeWaterOnceSafe(col.x, y, waterID, col.dir)
                 end
-                placeWaterOnceSafe(col.x, y, waterID, col.dir)
             end
         end
     end
@@ -713,6 +838,9 @@ local function processSoilWorld(row)
         row.status = "Inaccessible"; SB.saveData(); return false
     end
     safeSleep(500)
+
+    -- 0. Pindai area Penghalang, Door, Jammer, & Lock agar 100% dihindari saat put water maupun soil!
+    scanProtectedAreas()
 
     -- 1. Pasang Water Pojok Kiri & Kanan (atas sampai bawah Y=0..53) jika aktif
     if SB.CFG.enable_water then
