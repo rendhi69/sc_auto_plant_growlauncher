@@ -355,10 +355,13 @@ local function styledBtn(label, width, isAccent, isMuted)
             pc(C.ButtonHovered, P.mutedBtnHover)
         end
     end
-    local clicked = width and fullBtn(label, width) or (function()
+    local clicked = false
+    if width and width > 10 then
+        clicked = fullBtn(label, width)
+    else
         local ok, res = pcall(ImGui.Button, label)
-        return ok and (res == true)
-    end)()
+        clicked = ok and (res == true)
+    end
     if pushed > 0 and ImGui and ImGui.PopStyleColor then
         pcall(ImGui.PopStyleColor, pushed)
     end
@@ -1284,7 +1287,7 @@ local function renderDashboardPanel()
         availW,
         anyRun and P.textActive or P.textMuted
     )
-    if uiNotice ~= "" then
+    if uiNotice ~= "" and uiNotice ~= updStatus then
         centeredText(uiNotice, availW, P.textPurple)
     end
     safeSpacing()
@@ -1334,13 +1337,23 @@ local function renderDashboardPanel()
     ImGui.Separator()
     safeSpacing()
 
-    -- 3. TOMBOL REFRESH / UPDATE SCRIPT (Rapi, Aksen BOREN & Terpusat)
-    local rlBtnW = math.min(240, math.max(170, math.floor(availW * 0.48)))
-    if centeredBtn(isReloading and "Updating...##dash_rl" or "Refresh / Update Script##dash_rl", rlBtnW, availW, true) then
+    -- 3. TOMBOL REFRESH / UPDATE SCRIPT (Rapi, Auto-Fit, Aksen BOREN & Terpusat)
+    local rlDisplay = isReloading and "Updating..." or "Refresh / Update Script"
+    local rlTextW = #rlDisplay * 10
+    if ImGui and ImGui.CalcTextSize then
+        local okS, sz = pcall(ImGui.CalcTextSize, rlDisplay)
+        if okS and sz then
+            local okW, w = pcall(function() return sz.x end)
+            if okW and type(w) == "number" and w > 0 then rlTextW = w end
+        end
+    end
+    local rlBtnW = math.min(math.max(220, availW - 24), math.max(280, math.floor(rlTextW + 56)))
+    if centeredBtn(rlDisplay .. "##dash_rl", rlBtnW, availW, true) then
         if not isReloading then
             triggerHotReloadAll()
         end
     end
+    safeSpacing()
     centeredText(updStatus, availW, P.textMuted)
 end
 
