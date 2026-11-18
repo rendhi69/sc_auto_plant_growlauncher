@@ -64,6 +64,26 @@ local BLOCKER_PRESETS = {
     { id = 544,  name = "Orange Portal" },
 }
 
+local PLATFORM_PRESETS = {
+    { id = 102,  name = "Wooden Platform" },
+    { id = 998,  name = "Fire Escape" },
+    { id = 1324, name = "Rock Platform" },
+    { id = 1616, name = "Staging Platform" },
+    { id = 3572, name = "Cave Platform" },
+    { id = 4546, name = "Hover Platform" },
+    { id = 8676, name = "Bamboo Platform" },
+}
+
+local PLATFORM_NAME_MAP = {
+    [102]  = "Wooden Platform",
+    [998]  = "Fire Escape",
+    [1324] = "Rock Platform",
+    [1616] = "Staging Platform",
+    [3572] = "Cave Platform",
+    [4546] = "Hover Platform",
+    [8676] = "Bamboo Platform",
+}
+
 local DOOR_NAME_MAP = {
     [12]   = "Door",
     [30]   = "Dungeon Door",
@@ -1839,6 +1859,11 @@ local function resolveDoorItemName(id)
     id = tonumber(id) or 0
     if id <= 0 then return "None" end
     if DOOR_NAME_MAP[id] then return DOOR_NAME_MAP[id] end
+    if PLATFORM_NAME_MAP[id] then return PLATFORM_NAME_MAP[id] end
+    if HUB_REF and HUB_REF.item_db and type(HUB_REF.item_db.resolveName) == "function" then
+        local nm = HUB_REF.item_db.resolveName(id)
+        if nm and nm ~= "" then return nm end
+    end
     if getItemInfoByID then
         local ok, info = pcall(getItemInfoByID, id)
         if ok and info and type(info.name) == "string" and info.name ~= "" then return info.name end
@@ -2920,6 +2945,17 @@ local function renderStorageSub()
     end
 end
 
+local function cyclePreset(presets, curId, delta)
+    local curIdx = 1
+    for i, p in ipairs(presets) do
+        if p.id == tonumber(curId) then curIdx = i; break end
+    end
+    local nextIdx = curIdx + delta
+    if nextIdx < 1 then nextIdx = #presets
+    elseif nextIdx > #presets then nextIdx = 1 end
+    return presets[nextIdx].id
+end
+
 local function renderSettingsSub()
     uiSection("Pengaturan Dirt Farm (Break & Build)", true)
 
@@ -2964,11 +3000,34 @@ local function renderSettingsSub()
                 DF.CFG.auto_farm_dirt = not DF.CFG.auto_farm_dirt; DF.saveData()
             end
         end)
-        renderOptRow("Pasang Platform (102)", function()
+        renderOptRow("Pasang Platform", function()
             if uiToggleBtn(DF.CFG.place_platform, "dfc3") then
                 DF.CFG.place_platform = not DF.CFG.place_platform; DF.saveData()
             end
+            if not DF.CFG.place_platform then
+                ImGui.SameLine()
+                ImGui.Text("  (OFF = pakai Dirt biasa)")
+            end
         end)
+        if DF.CFG.place_platform then
+            renderOptRow("ID Platform", function()
+                renderNumInput("df_plat_id", DF.CFG.platform_id, 1, 20000, 0, "", function(v)
+                    DF.CFG.platform_id = v; DF.saveData()
+                end)
+                ImGui.SameLine()
+                if autoBtn(" < ##dfp_1") then
+                    local nid = cyclePreset(PLATFORM_PRESETS, DF.CFG.platform_id, -1)
+                    DF.CFG.platform_id = nid; numBufs["df_plat_id"] = tostring(nid); DF.saveData()
+                end
+                ImGui.SameLine()
+                if autoBtn(" > ##dfp_2") then
+                    local nid = cyclePreset(PLATFORM_PRESETS, DF.CFG.platform_id, 1)
+                    DF.CFG.platform_id = nid; numBufs["df_plat_id"] = tostring(nid); DF.saveData()
+                end
+                ImGui.SameLine()
+                ImGui.Text(resolveDoorItemName(DF.CFG.platform_id))
+            end)
+        end
         renderOptRow("Auto Collect Drops", function()
             if uiToggleBtn(DF.CFG.auto_collect, "dfac") then
                 DF.CFG.auto_collect = not DF.CFG.auto_collect; DF.saveData()
@@ -3001,17 +3060,6 @@ local function renderSettingsSub()
         end)
         ImGui.EndTable()
     end
-end
-
-local function cyclePreset(presets, curId, delta)
-    local curIdx = 1
-    for i, p in ipairs(presets) do
-        if p.id == tonumber(curId) then curIdx = i; break end
-    end
-    local nextIdx = curIdx + delta
-    if nextIdx < 1 then nextIdx = #presets
-    elseif nextIdx > #presets then nextIdx = 1 end
-    return presets[nextIdx].id
 end
 
 local function renderLockDoorSub()
