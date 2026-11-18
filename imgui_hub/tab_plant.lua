@@ -463,14 +463,57 @@ local function tabBtn(label, isActive)
     return styledBtn(" " .. tostring(label) .. " ", nil, isActive == true, false)
 end
 
+-- Baca clipboard HP menjadi daftar baris bersih (non-empty) untuk Smart Paste
+local function readClipboardLines()
+    local clip = ""
+    if ImGui and ImGui.GetClipboardText then
+        local okC, resC = pcall(ImGui.GetClipboardText)
+        if okC and type(resC) == "string" then clip = resC end
+    end
+    local lines = {}
+    for line in clip:gmatch("[^\r\n]+") do
+        local s = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if s ~= "" then lines[#lines + 1] = s end
+    end
+    return lines
+end
+
+-- Grid 1 baris tombol aksi simetris sejajar (misal 4 kolom: + Tambah | World Ini | Paste | Hapus)
+local function renderActionBar(tableId, availW, buttons)
+    local cols = #buttons
+    if cols < 1 then return nil end
+    local btnW = math.max(76, math.floor((availW - (cols * 8)) / cols))
+    local clickedIdx = nil
+    if ImGui.BeginTable(tableId, cols) then
+        ImGui.TableNextRow()
+        for i = 1, cols do
+            ImGui.TableSetColumnIndex(i - 1)
+            local b = buttons[i]
+            local clicked = false
+            if b.style == "accent" then
+                clicked = styledBtn(b.label, btnW, true, false)
+            elseif b.style == "muted" then
+                clicked = styledBtn(b.label, btnW, false, true)
+            else
+                clicked = fullBtn(b.label, btnW)
+            end
+            if clicked then clickedIdx = i end
+        end
+        ImGui.EndTable()
+    end
+    return clickedIdx
+end
+
 local UI_KIT = {
-    gap        = uiGap,
-    section    = uiSection,
-    toggleBtn  = toggleBtn,
-    enableBtn  = enableBtn,
-    tabBtn     = tabBtn,
-    coloredText = coloredText,
-    getPal     = getBorenPal,
+    gap                = uiGap,
+    section            = uiSection,
+    toggleBtn          = toggleBtn,
+    enableBtn          = enableBtn,
+    tabBtn             = tabBtn,
+    coloredText        = coloredText,
+    getPal             = getBorenPal,
+    readClipboardLines = readClipboardLines,
+    renderActionBar    = renderActionBar,
 }
 
 -- ============================================================================
@@ -506,6 +549,11 @@ local function renderPlantWorldsSub()
     if autoBtn(" Remove Inaccessible ") then
         local removed = E.removeInaccessible()
         setNotice("Dihapus " .. tostring(removed) .. " world inaccessible.")
+    end
+    ImGui.SameLine()
+    if autoBtn(" Reset ") then
+        E.resetAllStatus()
+        setNotice("Semua status di-reset ke Ready.")
     end
 
     uiGap(4)
@@ -596,11 +644,17 @@ local function renderPlantWorldsSub()
     end
     uiGap(4)
 
-    if autoBtn(" + Add World ") then
+    local act = renderActionBar("BorenPlantActs", availW, {
+        { label = "+ Tambah##pl_add", style = "accent" },
+        { label = "World Ini##pl_cur" },
+        { label = "Paste##pl_pst" },
+        { label = "Hapus##pl_del",    style = "muted" },
+    })
+
+    if act == 1 then
         local rawW = tostring(addWorldBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
         local parsed = nil
         if rawW ~= "" then
-            -- Jika user ketik/paste lengkap world:door:seed:splice tetap didukung; jika world:door saja gabung dgn kotak Seed & Splice
             local norm = rawW:gsub("|", ":")
             local colons = 0
             for _ in norm:gmatch(":") do colons = colons + 1 end
@@ -624,14 +678,12 @@ local function renderPlantWorldsSub()
             addWorldBuf = ""
             E.saveData()
             logUI(E, "[+] World ditambah: " .. E.formatRowLine(parsed))
-            setNotice("Ditambahkan: " .. parsed.name .. " (Seed " .. tostring(parsed.seed_id) .. ", Splice " .. tostring(parsed.splice_id) .. ")")
+            setNotice("Tersimpan: " .. parsed.name .. " (Seed " .. tostring(parsed.seed_id) .. ", Splice " .. tostring(parsed.splice_id) .. ")")
         else
             setNotice("Isi World:DoorID dulu!")
         end
-    end
 
-    ImGui.SameLine()
-    if autoBtn(" + World Ini ") then
+    elseif act == 2 then
         local curW = ""
         if getCurrentWorldName then
             local okW, wn = pcall(getCurrentWorldName)
@@ -639,25 +691,70 @@ local function renderPlantWorldsSub()
         end
         if curW ~= "" and curW ~= "EXIT" then
             addWorldBuf = curW .. ":"
-            setNotice("Terisi " .. curW .. ": (tambahkan Door ID lalu klik + Add World)")
+            setNotice("Terisi " .. curW .. ": (tambahkan Door ID lalu klik + Tambah)")
         else
             setNotice("Masuk ke world terlebih dahulu!")
         end
-    end
 
-    ImGui.SameLine()
-    if autoBtn(" Paste ##pl_pw") then
-        if ImGui.GetClipboardText then
-            local okC, resC = pcall(ImGui.GetClipboardText)
-            if okC and type(resC) == "string" and resC ~= "" then
-                addWorldBuf = resC:match("^[^\r\n]+") or resC
-                setNotice("Paste ke World:DoorID")
-            else setNotice("Clipboard kosong!") end
+    elseif act == 3 then
+        -- Smart Paste: 1 baris -> isi form (+ pisah Seed/Splice); banyak baris -> langsung tambah & Auto-Save!
+        local lines = readClipboardLines()
+        if #lines == 0 then
+            setNotice("Clipboard kosong!")
+        elseif #lines == 1 then
+            local norm = lines[1]:gsub("|", ":")
+            local colons = 0
+            for _ in norm:gmatch(":") do colons = colons + 1 end
+            if colons >= 2 then
+                local p = E.parseRowLine(norm)
+                if p then
+                    addWorldBuf  = p.door ~= "" and (p.name .. ":" .. p.door) or p.name
+                    addSeedBuf   = tostring(p.seed_id)
+                    addSpliceBuf = tostring(p.splice_id)
+                    setNotice("Paste ke form (" .. p.name .. "). Klik + Tambah.")
+                else
+                    addWorldBuf = lines[1]
+                    setNotice("Paste ke kotak World:DoorID.")
+                end
+            else
+                addWorldBuf = lines[1]
+                setNotice("Paste ke form (" .. lines[1] .. "). Klik + Tambah.")
+            end
+        else
+            local added = 0
+            local defSd = math.floor(tonumber(addSeedBuf) or 4585)
+            local defSp = math.floor(tonumber(addSpliceBuf) or 0)
+            if defSd <= 0 then defSd = 4585 end
+            for _, ln in ipairs(lines) do
+                local norm = ln:gsub("|", ":")
+                local colons = 0
+                for _ in norm:gmatch(":") do colons = colons + 1 end
+                local p = nil
+                if colons >= 2 then
+                    p = E.parseRowLine(norm)
+                else
+                    local wPart, dPart = norm:match("^([^:]+):(.*)$")
+                    local wn = (wPart or norm):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+                    local di = (dPart or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+                    if wn ~= "" then
+                        p = { name = wn, door = di, seed_id = defSd, splice_id = defSp, status = "Ready" }
+                    end
+                end
+                if p then
+                    table.insert(E.STATE.rows, p)
+                    added = added + 1
+                end
+            end
+            if added > 0 then
+                E.saveData()
+                logUI(E, "[Smart Paste] +" .. tostring(added) .. " world ditambahkan.")
+                setNotice("Smart Paste: +" .. tostring(added) .. " world (otomatis tersimpan)!")
+            else
+                setNotice("Format clipboard tidak valid.")
+            end
         end
-    end
 
-    ImGui.SameLine()
-    if autoBtn(" - Hapus ") then
+    elseif act == 4 then
         local idx = E.STATE.selected_idx
         if idx < 1 or idx > #E.STATE.rows then idx = #E.STATE.rows end
         if idx >= 1 and idx <= #E.STATE.rows then
@@ -667,57 +764,6 @@ local function renderPlantWorldsSub()
             logUI(E, "[-] World dihapus: " .. tostring(rem and rem.name or ""))
             setNotice("Dihapus: " .. tostring(rem and rem.name or ""))
         end
-    end
-
-    ImGui.SameLine()
-    if autoBtn(" Save ") then
-        E.saveData()
-        setNotice("Tersimpan " .. tostring(#E.STATE.rows) .. " world!")
-    end
-
-    if autoBtn(" Import ") then
-        local clip = ""
-        if ImGui.GetClipboardText then
-            local okC, resC = pcall(ImGui.GetClipboardText)
-            if okC and type(resC) == "string" then clip = resC end
-        end
-        if clip == "" then
-            setNotice("Clipboard kosong!")
-        else
-            local added = 0
-            for line in clip:gmatch("[^\r\n]+") do
-                local parsed = E.parseRowLine(line)
-                if parsed then
-                    table.insert(E.STATE.rows, parsed)
-                    added = added + 1
-                end
-            end
-            if added > 0 then
-                E.saveData()
-                logUI(E, "[Import] " .. tostring(added) .. " world ditambahkan.")
-                setNotice("Import " .. tostring(added) .. " world!")
-            else
-                setNotice("Tidak ada baris valid di clipboard.")
-            end
-        end
-    end
-
-    ImGui.SameLine()
-    if autoBtn(" Export ") then
-        local out = {}
-        for _, row in ipairs(E.STATE.rows) do
-            table.insert(out, E.formatRowLine(row))
-        end
-        if ImGui.SetClipboardText then
-            pcall(ImGui.SetClipboardText, table.concat(out, "\n"))
-            setNotice("Export " .. tostring(#out) .. " world ke clipboard!")
-        end
-    end
-
-    ImGui.SameLine()
-    if autoBtn(" Reset Status ") then
-        E.resetAllStatus()
-        setNotice("Semua status di-reset ke Ready.")
     end
 end
 
@@ -784,7 +830,14 @@ local function renderPlantStorageSub()
     end
     uiGap(4)
 
-    if autoBtn(" + Add Storage ") then
+    local actSt = renderActionBar("BorenPlantStActs", availW, {
+        { label = "+ Tambah##plst_add", style = "accent" },
+        { label = "World Ini##plst_cur" },
+        { label = "Paste##plst_pst" },
+        { label = "Hapus##plst_del",    style = "muted" },
+    })
+
+    if actSt == 1 then
         local wStr = tostring(addStorageBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
         local dStr = tostring(addStorageDoorBuf or ""):gsub("^%s+", ""):gsub("%s+$", "")
         local combined = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
@@ -794,14 +847,12 @@ local function renderPlantStorageSub()
             E.setStorageList(storages)
             addStorageBuf = ""; addStorageDoorBuf = ""
             logUI(E, "[Storage +] " .. parsed.name .. (parsed.door ~= "" and (":" .. parsed.door) or ""))
-            setNotice("Storage ditambahkan: " .. parsed.name)
+            setNotice("Tersimpan storage: " .. parsed.name)
         else
             setNotice("Isi World Storage dulu!")
         end
-    end
 
-    ImGui.SameLine()
-    if autoBtn(" + World Ini ") then
+    elseif actSt == 2 then
         local curW = ""
         if getCurrentWorldName then
             local okW, wn = pcall(getCurrentWorldName)
@@ -809,14 +860,43 @@ local function renderPlantStorageSub()
         end
         if curW ~= "" and curW ~= "EXIT" then
             addStorageBuf = curW
-            setNotice("Terisi " .. curW .. " (isi Door ID di kanan jika ada)")
+            setNotice("Terisi " .. curW .. " (isi Door ID jika ada lalu klik + Tambah)")
         else
             setNotice("Masuk ke world terlebih dahulu!")
         end
-    end
 
-    ImGui.SameLine()
-    if autoBtn(" - Hapus ") then
+    elseif actSt == 3 then
+        local lines = readClipboardLines()
+        if #lines == 0 then
+            setNotice("Clipboard kosong!")
+        elseif #lines == 1 then
+            local norm = lines[1]:gsub("|", ":")
+            local wP, dP = norm:match("^([^:]+):(.*)$")
+            if wP then
+                addStorageBuf     = wP:gsub("^%s+", ""):gsub("%s+$", "")
+                addStorageDoorBuf = (dP or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            else
+                addStorageBuf = lines[1]
+            end
+            setNotice("Paste ke form storage. Klik + Tambah.")
+        else
+            local added = 0
+            for _, ln in ipairs(lines) do
+                local parsed = E.parseStorageLine and E.parseStorageLine(ln)
+                if parsed then
+                    table.insert(storages, parsed)
+                    added = added + 1
+                end
+            end
+            if added > 0 then
+                E.setStorageList(storages)
+                setNotice("Smart Paste: +" .. tostring(added) .. " storage (tersimpan)!")
+            else
+                setNotice("Format clipboard tidak valid.")
+            end
+        end
+
+    elseif actSt == 4 then
         local idx = selectedStorageIdx
         if idx < 1 or idx > #storages then idx = #storages end
         if idx >= 1 and idx <= #storages then
@@ -826,48 +906,6 @@ local function renderPlantStorageSub()
             logUI(E, "[Storage -] " .. tostring(rem and rem.name or ""))
             setNotice("Storage dihapus: " .. tostring(rem and rem.name or ""))
         end
-    end
-
-    if autoBtn(" Import ") then
-        local clip = ""
-        if ImGui.GetClipboardText then
-            local okC, resC = pcall(ImGui.GetClipboardText)
-            if okC and type(resC) == "string" then clip = resC end
-        end
-        if clip ~= "" then
-            local added = 0
-            for line in clip:gmatch("[^\r\n,]+") do
-                local parsed = E.parseStorageLine and E.parseStorageLine(line)
-                if parsed then
-                    table.insert(storages, parsed)
-                    added = added + 1
-                end
-            end
-            if added > 0 then
-                E.setStorageList(storages)
-                setNotice("Import " .. tostring(added) .. " storage!")
-            end
-        else
-            setNotice("Clipboard kosong!")
-        end
-    end
-
-    ImGui.SameLine()
-    if autoBtn(" Export ") then
-        local out = {}
-        for _, st in ipairs(storages) do
-            table.insert(out, st.door ~= "" and (st.name .. ":" .. st.door) or st.name)
-        end
-        if ImGui.SetClipboardText then
-            pcall(ImGui.SetClipboardText, table.concat(out, "\n"))
-            setNotice("Export " .. tostring(#out) .. " storage ke clipboard!")
-        end
-    end
-
-    ImGui.SameLine()
-    if autoBtn(" Save ") then
-        E.setStorageList(storages)
-        setNotice("Daftar storage tersimpan!")
     end
 end
 

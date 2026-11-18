@@ -1841,6 +1841,33 @@ local function uiNote(msg)
     end
 end
 
+local function uiReadClipLines()
+    local k = uiKit()
+    if k and k.readClipboardLines then return k.readClipboardLines() end
+    local clip = ""
+    if ImGui and ImGui.GetClipboardText then
+        local ok, c = pcall(ImGui.GetClipboardText)
+        if ok and type(c) == "string" then clip = c end
+    end
+    local lines = {}
+    for line in clip:gmatch("[^\r\n]+") do
+        local s = trimStr(line)
+        if s ~= "" then lines[#lines + 1] = s end
+    end
+    return lines
+end
+
+local function uiActionBar(id, w, buttons)
+    local k = uiKit()
+    if k and k.renderActionBar then return k.renderActionBar(id, w, buttons) end
+    local hit = nil
+    for i, b in ipairs(buttons) do
+        if i > 1 then ImGui.SameLine() end
+        if autoBtn(b.label) then hit = i end
+    end
+    return hit
+end
+
 local function availX()
     if ImGui and ImGui.GetContentRegionAvail then
         local ok, av = pcall(ImGui.GetContentRegionAvail)
@@ -1873,6 +1900,11 @@ local function renderWorldsSub()
         end
         DF.STATE.rows = kept; DF.STATE.selected_idx = 0; DF.saveData()
         uiNotice = "Dihapus " .. tostring(rem) .. " world inaccessible."
+    end
+    ImGui.SameLine()
+    if autoBtn(" Reset ##df_rst") then
+        for _, r in ipairs(DF.STATE.rows) do r.status = "Ready" end
+        DF.saveData(); uiNotice = "Status di-reset ke Ready."
     end
 
     uiGap(4)
@@ -1932,7 +1964,14 @@ local function renderWorldsSub()
     end
     uiGap(4)
 
-    if autoBtn(" + Add World ##df") then
+    local act = uiActionBar("BorenDFActs", w, {
+        { label = "+ Tambah##df_add", style = "accent" },
+        { label = "World Ini##df_cur" },
+        { label = "Paste##df_pst" },
+        { label = "Hapus##df_del",    style = "muted" },
+    })
+
+    if act == 1 then
         local wStr = trimStr(addWorldBuf)
         local dStr = trimStr(addDoorBuf)
         local comb = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
@@ -1940,25 +1979,38 @@ local function renderWorldsSub()
         if p then
             table.insert(DF.STATE.rows, p); addWorldBuf = ""; addDoorBuf = ""; DF.saveData()
             addLogUI("World DF ditambah: " .. p.name)
-            uiNotice = "Ditambahkan: " .. p.name
+            uiNotice = "Tersimpan: " .. p.name
         else uiNotice = "Isi World Name dulu!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" + World Ini ##df") then
+
+    elseif act == 2 then
         local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW; uiNotice = "Terisi " .. curW
+        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW; uiNotice = "Terisi " .. curW .. " (klik + Tambah)"
         else uiNotice = "Masuk ke world dulu!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Paste ##df_pw") then
-        if ImGui.GetClipboardText then
-            local okC, c = pcall(ImGui.GetClipboardText)
-            if okC and type(c) == "string" and c ~= "" then addWorldBuf = c:match("^[^\r\n]+") or c; uiNotice = "Paste ke World Name"
-            else uiNotice = "Clipboard kosong." end
+
+    elseif act == 3 then
+        local lines = uiReadClipLines()
+        if #lines == 0 then
+            uiNotice = "Clipboard kosong!"
+        elseif #lines == 1 then
+            local norm = lines[1]:gsub("|", ":")
+            local wP, dP = norm:match("^([^:]+):(.*)$")
+            if wP then
+                addWorldBuf = trimStr(wP); addDoorBuf = trimStr(dP or "")
+            else
+                addWorldBuf = lines[1]; addDoorBuf = ""
+            end
+            uiNotice = "Paste ke form (" .. addWorldBuf .. "). Klik + Tambah."
+        else
+            local n = 0
+            for _, ln in ipairs(lines) do
+                local p = parseWorldLine(ln)
+                if p then table.insert(DF.STATE.rows, p); n = n + 1 end
+            end
+            if n > 0 then DF.saveData(); uiNotice = "Smart Paste: +" .. tostring(n) .. " world (tersimpan)!"
+            else uiNotice = "Format clipboard tidak valid." end
         end
-    end
-    ImGui.SameLine()
-    if autoBtn(" - Hapus ##df") then
+
+    elseif act == 4 then
         local idx = DF.STATE.selected_idx
         if idx < 1 or idx > #DF.STATE.rows then idx = #DF.STATE.rows end
         if idx >= 1 and idx <= #DF.STATE.rows then
@@ -1966,31 +2018,6 @@ local function renderWorldsSub()
             DF.STATE.selected_idx = 0; DF.saveData()
             uiNotice = "Dihapus: " .. tostring(rem and rem.name or "")
         end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Save ##df") then DF.saveData(); uiNotice = "Tersimpan " .. tostring(#DF.STATE.rows) .. " world!" end
-
-    uiGap(4)
-    if autoBtn(" Import ##df") then
-        local clip = ""
-        if ImGui.GetClipboardText then local ok, c = pcall(ImGui.GetClipboardText); if ok and type(c) == "string" then clip = c end end
-        local n = 0
-        for line in clip:gmatch("[^\r\n]+") do
-            local p = parseWorldLine(line)
-            if p then table.insert(DF.STATE.rows, p); n = n + 1 end
-        end
-        if n > 0 then DF.saveData(); uiNotice = "Import " .. tostring(n) .. " world!" else uiNotice = "Clipboard kosong." end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Export ##df") then
-        local out = {}
-        for _, r in ipairs(DF.STATE.rows) do table.insert(out, r.door ~= "" and (r.name .. ":" .. r.door) or r.name) end
-        if ImGui.SetClipboardText then pcall(ImGui.SetClipboardText, table.concat(out, "\n")); uiNotice = "Export " .. tostring(#out) .. " world!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Reset Status ##df") then
-        for _, r in ipairs(DF.STATE.rows) do r.status = "Ready" end
-        DF.saveData(); uiNotice = "Status di-reset ke Ready."
     end
 end
 
@@ -2142,18 +2169,46 @@ local function renderStorageSub()
     end
     uiGap(4)
 
-    if autoBtn(" + Add Storage ##df") then
+    local actSt = uiActionBar("BorenDFStActs", w, {
+        { label = "+ Tambah##dfst_add", style = "accent" },
+        { label = "World Ini##dfst_cur" },
+        { label = "Paste##dfst_pst" },
+        { label = "Hapus##dfst_del",    style = "muted" },
+    })
+
+    if actSt == 1 then
         local wStr = trimStr(addStorageBuf)
         local dStr = trimStr(addStorageDoorBuf)
         local comb = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
         local p = parseWorldLine(comb)
         if p then
             table.insert(storages, { name = p.name, door = p.door })
-            setStorageList(storages); addStorageBuf = ""; addStorageDoorBuf = ""; uiNotice = "Storage ditambah: " .. p.name
+            setStorageList(storages); addStorageBuf = ""; addStorageDoorBuf = ""; uiNotice = "Tersimpan storage: " .. p.name
         else uiNotice = "Isi World Storage dulu!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" - Hapus ##dfst") then
+    elseif actSt == 2 then
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then addStorageBuf = curW; uiNotice = "Terisi " .. curW .. " (klik + Tambah)"
+        else uiNotice = "Masuk ke world dulu!" end
+    elseif actSt == 3 then
+        local lines = uiReadClipLines()
+        if #lines == 0 then
+            uiNotice = "Clipboard kosong!"
+        elseif #lines == 1 then
+            local norm = lines[1]:gsub("|", ":")
+            local wP, dP = norm:match("^([^:]+):(.*)$")
+            if wP then addStorageBuf = trimStr(wP); addStorageDoorBuf = trimStr(dP or "")
+            else addStorageBuf = lines[1]; addStorageDoorBuf = "" end
+            uiNotice = "Paste ke form storage. Klik + Tambah."
+        else
+            local n = 0
+            for _, ln in ipairs(lines) do
+                local p = parseWorldLine(ln)
+                if p then table.insert(storages, { name = p.name, door = p.door }); n = n + 1 end
+            end
+            if n > 0 then setStorageList(storages); uiNotice = "Smart Paste: +" .. tostring(n) .. " storage (tersimpan)!"
+            else uiNotice = "Format clipboard tidak valid." end
+        end
+    elseif actSt == 4 then
         local idx = DF.STATE.selected_st
         if idx < 1 or idx > #storages then idx = #storages end
         if idx >= 1 and idx <= #storages then

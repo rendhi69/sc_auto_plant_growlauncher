@@ -870,6 +870,33 @@ local function uiNote(msg)
     end
 end
 
+local function uiReadClipLines()
+    local k = uiKit()
+    if k and k.readClipboardLines then return k.readClipboardLines() end
+    local clip = ""
+    if ImGui and ImGui.GetClipboardText then
+        local ok, c = pcall(ImGui.GetClipboardText)
+        if ok and type(c) == "string" then clip = c end
+    end
+    local lines = {}
+    for line in clip:gmatch("[^\r\n]+") do
+        local s = trimStr(line)
+        if s ~= "" then lines[#lines + 1] = s end
+    end
+    return lines
+end
+
+local function uiActionBar(id, w, buttons)
+    local k = uiKit()
+    if k and k.renderActionBar then return k.renderActionBar(id, w, buttons) end
+    local hit = nil
+    for i, b in ipairs(buttons) do
+        if i > 1 then ImGui.SameLine() end
+        if autoBtn(b.label) then hit = i end
+    end
+    return hit
+end
+
 local function availX()
     if ImGui and ImGui.GetContentRegionAvail then
         local ok, av = pcall(ImGui.GetContentRegionAvail)
@@ -902,6 +929,11 @@ local function renderWorldsSub()
         end
         SB.STATE.rows = kept; SB.STATE.selected_idx = 0; SB.saveData()
         uiNotice = "Dihapus " .. tostring(rem) .. " world inaccessible."
+    end
+    ImGui.SameLine()
+    if autoBtn(" Reset ##sb_rst") then
+        for _, r in ipairs(SB.STATE.rows) do r.status = "Ready" end
+        SB.saveData(); uiNotice = "Status di-reset ke Ready."
     end
 
     uiGap(4)
@@ -961,7 +993,14 @@ local function renderWorldsSub()
     end
     uiGap(4)
 
-    if autoBtn(" + Add World ##sb") then
+    local act = uiActionBar("BorenSoilActs", w, {
+        { label = "+ Tambah##sb_add", style = "accent" },
+        { label = "World Ini##sb_cur" },
+        { label = "Paste##sb_pst" },
+        { label = "Hapus##sb_del",    style = "muted" },
+    })
+
+    if act == 1 then
         local rawW = trimStr(addWorldBuf)
         local p = nil
         if rawW ~= "" then
@@ -982,25 +1021,58 @@ local function renderWorldsSub()
         if p then
             table.insert(SB.STATE.rows, p); addWorldBuf = ""; SB.saveData()
             addLogUI("World Soil ditambah: " .. formatRowLine(p))
-            uiNotice = "Ditambahkan: " .. p.name .. " (ID " .. tostring(p.block_id) .. ")"
+            uiNotice = "Tersimpan: " .. p.name .. " (ID " .. tostring(p.block_id) .. ")"
         else uiNotice = "Isi World:DoorID dulu!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" + World Ini ##sb") then
+
+    elseif act == 2 then
         local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW .. ":"; uiNotice = "Terisi " .. curW .. ":"
+        if curW ~= "" and curW ~= "EXIT" then addWorldBuf = curW .. ":"; uiNotice = "Terisi " .. curW .. ": (klik + Tambah)"
         else uiNotice = "Masuk ke world dulu!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Paste ##sb_pw") then
-        if ImGui.GetClipboardText then
-            local okC, c = pcall(ImGui.GetClipboardText)
-            if okC and type(c) == "string" and c ~= "" then addWorldBuf = c:match("^[^\r\n]+") or c; uiNotice = "Paste ke World:DoorID"
-            else uiNotice = "Clipboard kosong." end
+
+    elseif act == 3 then
+        local lines = uiReadClipLines()
+        if #lines == 0 then
+            uiNotice = "Clipboard kosong!"
+        elseif #lines == 1 then
+            local norm = lines[1]:gsub("|", ":")
+            local colons = 0
+            for _ in norm:gmatch(":") do colons = colons + 1 end
+            if colons >= 2 then
+                local p = parseRowLine(norm)
+                if p then
+                    addWorldBuf = p.door ~= "" and (p.name .. ":" .. p.door) or p.name
+                    addBlockBuf = tostring(p.block_id)
+                    uiNotice = "Paste ke form (" .. p.name .. "). Klik + Tambah."
+                else
+                    addWorldBuf = lines[1]; uiNotice = "Paste ke form."
+                end
+            else
+                addWorldBuf = lines[1]; uiNotice = "Paste ke form (" .. lines[1] .. "). Klik + Tambah."
+            end
+        else
+            local n = 0
+            local defBid = math.floor(tonumber(addBlockBuf) or tonumber(SB.CFG.default_block) or 8772)
+            if defBid <= 0 then defBid = 8772 end
+            for _, ln in ipairs(lines) do
+                local norm = ln:gsub("|", ":")
+                local colons = 0
+                for _ in norm:gmatch(":") do colons = colons + 1 end
+                local p = nil
+                if colons >= 2 then
+                    p = parseRowLine(norm)
+                else
+                    local wP, dP = norm:match("^([^:]+):(.*)$")
+                    local wn = trimStr(wP or norm):upper()
+                    local di = trimStr(dP or ""):upper()
+                    if wn ~= "" then p = { name = wn, door = di, block_id = defBid, status = "Ready" } end
+                end
+                if p then table.insert(SB.STATE.rows, p); n = n + 1 end
+            end
+            if n > 0 then SB.saveData(); uiNotice = "Smart Paste: +" .. tostring(n) .. " world (tersimpan)!"
+            else uiNotice = "Format clipboard tidak valid." end
         end
-    end
-    ImGui.SameLine()
-    if autoBtn(" - Hapus ##sb") then
+
+    elseif act == 4 then
         local idx = SB.STATE.selected_idx
         if idx < 1 or idx > #SB.STATE.rows then idx = #SB.STATE.rows end
         if idx >= 1 and idx <= #SB.STATE.rows then
@@ -1008,31 +1080,6 @@ local function renderWorldsSub()
             SB.STATE.selected_idx = 0; SB.saveData()
             uiNotice = "Dihapus: " .. tostring(rem and rem.name or "")
         end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Save ##sb") then SB.saveData(); uiNotice = "Tersimpan " .. tostring(#SB.STATE.rows) .. " world!" end
-
-    uiGap(4)
-    if autoBtn(" Import ##sb") then
-        local clip = ""
-        if ImGui.GetClipboardText then local ok, c = pcall(ImGui.GetClipboardText); if ok and type(c) == "string" then clip = c end end
-        local n = 0
-        for line in clip:gmatch("[^\r\n]+") do
-            local p = parseRowLine(line)
-            if p then table.insert(SB.STATE.rows, p); n = n + 1 end
-        end
-        if n > 0 then SB.saveData(); uiNotice = "Import " .. tostring(n) .. " world!" else uiNotice = "Clipboard kosong." end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Export ##sb") then
-        local out = {}
-        for _, r in ipairs(SB.STATE.rows) do table.insert(out, formatRowLine(r)) end
-        if ImGui.SetClipboardText then pcall(ImGui.SetClipboardText, table.concat(out, "\n")); uiNotice = "Export " .. tostring(#out) .. " world!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" Reset Status ##sb") then
-        for _, r in ipairs(SB.STATE.rows) do r.status = "Ready" end
-        SB.saveData(); uiNotice = "Status di-reset ke Ready."
     end
 end
 
@@ -1085,18 +1132,46 @@ local function renderStorageSub()
     end
     uiGap(4)
 
-    if autoBtn(" + Add Storage ##sb") then
+    local actSt = uiActionBar("BorenSoilStActs", w, {
+        { label = "+ Tambah##sbst_add", style = "accent" },
+        { label = "World Ini##sbst_cur" },
+        { label = "Paste##sbst_pst" },
+        { label = "Hapus##sbst_del",    style = "muted" },
+    })
+
+    if actSt == 1 then
         local wStr = trimStr(addStorageBuf)
         local dStr = trimStr(addStorageDoorBuf)
         local comb = (wStr:find(":", 1, true) or wStr:find("|", 1, true) or dStr == "") and wStr or (wStr .. ":" .. dStr)
         local p = parseStorageLine(comb)
         if p then
             table.insert(storages, p); setStorageList(storages); addStorageBuf = ""; addStorageDoorBuf = ""
-            uiNotice = "Storage ditambah: " .. p.name
+            uiNotice = "Tersimpan storage: " .. p.name
         else uiNotice = "Isi World Storage dulu!" end
-    end
-    ImGui.SameLine()
-    if autoBtn(" - Hapus ##sbst") then
+    elseif actSt == 2 then
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then addStorageBuf = curW; uiNotice = "Terisi " .. curW .. " (klik + Tambah)"
+        else uiNotice = "Masuk ke world dulu!" end
+    elseif actSt == 3 then
+        local lines = uiReadClipLines()
+        if #lines == 0 then
+            uiNotice = "Clipboard kosong!"
+        elseif #lines == 1 then
+            local norm = lines[1]:gsub("|", ":")
+            local wP, dP = norm:match("^([^:]+):(.*)$")
+            if wP then addStorageBuf = trimStr(wP); addStorageDoorBuf = trimStr(dP or "")
+            else addStorageBuf = lines[1]; addStorageDoorBuf = "" end
+            uiNotice = "Paste ke form storage. Klik + Tambah."
+        else
+            local n = 0
+            for _, ln in ipairs(lines) do
+                local p = parseStorageLine(ln)
+                if p then table.insert(storages, p); n = n + 1 end
+            end
+            if n > 0 then setStorageList(storages); uiNotice = "Smart Paste: +" .. tostring(n) .. " storage (tersimpan)!"
+            else uiNotice = "Format clipboard tidak valid." end
+        end
+    elseif actSt == 4 then
         local idx = SB.STATE.selected_st
         if idx < 1 or idx > #storages then idx = #storages end
         if idx >= 1 and idx <= #storages then

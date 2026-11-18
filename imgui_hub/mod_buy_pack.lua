@@ -566,6 +566,33 @@ local function uiNote(msg)
     end
 end
 
+local function uiReadClipLines()
+    local k = uiKit()
+    if k and k.readClipboardLines then return k.readClipboardLines() end
+    local clip = ""
+    if ImGui and ImGui.GetClipboardText then
+        local ok, c = pcall(ImGui.GetClipboardText)
+        if ok and type(c) == "string" then clip = c end
+    end
+    local lines = {}
+    for line in clip:gmatch("[^\r\n]+") do
+        local s = trimStr(line)
+        if s ~= "" then lines[#lines + 1] = s end
+    end
+    return lines
+end
+
+local function uiActionBar(id, w, buttons)
+    local k = uiKit()
+    if k and k.renderActionBar then return k.renderActionBar(id, w, buttons) end
+    local hit = nil
+    for i, b in ipairs(buttons) do
+        if i > 1 then ImGui.SameLine() end
+        if autoBtn(b.label) then hit = i end
+    end
+    return hit
+end
+
 local function availX()
     if ImGui and ImGui.GetContentRegionAvail then
         local ok, av = pcall(ImGui.GetContentRegionAvail)
@@ -698,17 +725,31 @@ local function renderMainSub()
     end
     uiGap(5)
 
-    if autoBtn(" + World Ini ##bp") then
+    local actBp = uiActionBar("BorenPackActs", w, {
+        { label = "World Ini##bp_cur" },
+        { label = "Paste##bp_pst" },
+        { label = "Cari Pack (" .. tostring(#BP.STATE.pack_db) .. ")##bp_src", style = "accent" },
+    })
+
+    if actBp == 1 then
         local curW = getCurrentWorldSafe()
         if curW ~= "" and curW ~= "EXIT" then
             BP.CFG.save_world = (swDoor ~= "") and (curW .. ":" .. swDoor) or curW
-            BP.saveData(); uiNotice = "Save World: " .. curW
+            BP.saveData(); uiNotice = "Save World tersimpan: " .. curW
         else uiNotice = "Masuk ke world dulu!" end
+    elseif actBp == 2 then
+        local lines = uiReadClipLines()
+        if #lines == 0 then
+            uiNotice = "Clipboard kosong!"
+        else
+            local norm = lines[1]:gsub("|", ":")
+            BP.CFG.save_world = norm:upper()
+            BP.saveData()
+            uiNotice = "Paste Save World: " .. BP.CFG.save_world
+        end
+    elseif actBp == 3 then
+        activeSub = "search"
     end
-    ImGui.SameLine()
-    if autoBtn(" Cari Pack (" .. tostring(#BP.STATE.pack_db) .. ") ") then activeSub = "search" end
-    ImGui.SameLine()
-    if autoBtn(" Save Config ##bp") then BP.saveData(); uiNotice = "Konfigurasi Buy Pack tersimpan!" end
 end
 
 local function renderSearchSub()
