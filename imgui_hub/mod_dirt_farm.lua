@@ -818,14 +818,16 @@ local function rawAction(tx, ty, val)
     })
 end
 
+-- Tarik (vacuum) item/seed/gems di sekitar karakter dengan packet type=11 TANPA teleport ke objek!
 local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, forceCollect)
     if DF.STATE.anti_take_active or DF.STATE.in_storage then return 0 end
     if (not DF.CFG.auto_collect) and (not forceCollect) then return 0 end
+    if not sendPacketRaw then return 0 end
     local px, py = getPlayerPos()
-    local refX = centerX or px
-    local refY = centerY or py
+    local refX = px or centerX
+    local refY = py or centerY
     if not refX or not refY then return 0 end
-    local radius = customRadius or tonumber(DF.CFG.collect_range) or 3
+    local radius = math.max(2, tonumber(customRadius) or tonumber(DF.CFG.collect_range) or 3)
     local collected = 0
 
     forEachWorldObject(function(itemid, uid, amt, oxPx, oyPx)
@@ -833,20 +835,12 @@ local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, 
         if itemid == ITEM.LAVA then return end
         local ox = math.floor((oxPx + 10) / 32)
         local oy = math.floor((oyPx + 10) / 32)
-        local dist = math.max(math.abs(ox - refX), math.abs(oy - refY))
-        if dist <= radius and (itemid == 112 or getInvCount(itemid) < 200) then
-            local cpx, cpy = getPlayerPos()
-            local dx = cpx and math.abs(ox - cpx) or 99
-            local dy = cpy and math.abs(oy - cpy) or 99
-            -- Growtopia menolak pickup bila jarak Euclidean > 2 tile (misal diagonal 1x2 = 2.23 di mode 3-Break)
-            local needWalk = ((not quickMode) and (dx > 1 or dy > 1)) or ((dx * dx + dy * dy) > 4)
-            if needWalk and isTileSafeToStand(ox, oy) then
-                moveSafeTo(ox, oy)
-            end
-            if sendPacketRaw then
-                pcall(sendPacketRaw, false, { type = 11, value = uid, x = oxPx, y = oyPx })
-            end
-            if not quickMode then safeSleep(20) end
+        local distP = math.max(math.abs(ox - refX), math.abs(oy - refY))
+        local distC = (centerX and centerY) and math.max(math.abs(ox - centerX), math.abs(oy - centerY)) or distP
+        if (distP <= radius or distC <= radius) and (itemid == 112 or getInvCount(itemid) < 200) then
+            -- Langsung kirim packet type=11 untuk menarik item dari tempat berdiri (JANGAN moveSafeTo/teleport!)
+            pcall(sendPacketRaw, false, { type = 11, value = uid, x = oxPx, y = oyPx })
+            if not quickMode then safeSleep(15) end
             collected = collected + 1
         end
     end)
