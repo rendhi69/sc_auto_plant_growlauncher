@@ -2281,6 +2281,14 @@ function UI.init(hubCtx)
     OnDrawImGui = renderFrame
     onDrawImGui = renderFrame
 
+    -- Pasang juga global callback onVariant/OnVariant sebagai backup bila APK tidak meneruskan addHook("onvariant")
+    local function variantProxy(var)
+        local u = _G.__BOREN_HUB_UI
+        return (u and u.onVariant) and u.onVariant(var) or false
+    end
+    onVariant = variantProxy
+    OnVariant = variantProxy
+
     -- Pasang proxy hook 1x saja agar Hot-Reload tidak pernah menduplikasi hook!
     if not _G.__BOREN_HUB_HOOKS_INSTALLED then
         _G.__BOREN_HUB_HOOKS_INSTALLED = true
@@ -2293,10 +2301,7 @@ function UI.init(hubCtx)
                 local u = _G.__BOREN_HUB_UI
                 return (u and u.onSendPacketRaw) and u.onSendPacketRaw(pkt) or false
             end, "onsendpacketraw")
-            pcall(addHook, function(var)
-                local u = _G.__BOREN_HUB_UI
-                return (u and u.onVariant) and u.onVariant(var) or false
-            end, "onvariant")
+            pcall(addHook, variantProxy, "onvariant")
         end
         if applyHook then
             pcall(applyHook)

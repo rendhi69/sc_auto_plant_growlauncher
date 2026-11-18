@@ -1321,6 +1321,62 @@ local function moveToTopStorageDropArea(shiftOffset)
     return dx, dy
 end
 
+local function waitInvDropTo(itemID, targetMax, maxWaitMs)
+    local waited = 0
+    local lim = maxWaitMs or 1000
+    while waited < lim and isActive() do
+        safeSleep(80)
+        waited = waited + 80
+        if getInvCount(itemID) <= targetMax then
+            return true
+        end
+    end
+    return (getInvCount(itemID) <= targetMax)
+end
+
+-- Parse field OnDialogRequest asli Growtopia (support dialog_name "drop" & "drop_item", embed_data dinamis, & text input dinamis)
+local function buildDropDialogReturn(dlgText, fallbackItemID, dropAmt)
+    local dName = "drop_item"
+    local embedLines = {}
+    local hasItemEmbed = false
+    local countField = "count"
+    local foundInput = false
+
+    if type(dlgText) == "string" and dlgText ~= "" then
+        for line in dlgText:gmatch("[^\r\n]+") do
+            local parts = {}
+            for part in (line .. "|"):gmatch("([^|]*)|") do
+                parts[#parts + 1] = part
+            end
+            local cmd = parts[1]
+            if cmd == "end_dialog" and parts[2] and parts[2] ~= "" then
+                dName = trimStr(parts[2])
+            elseif cmd == "embed_data" and parts[2] and parts[2] ~= "" then
+                local ek = trimStr(parts[2])
+                local ev = trimStr(parts[3] or "")
+                if ek:lower() == "itemid" or ek:lower() == "item_id" then hasItemEmbed = true end
+                embedLines[#embedLines + 1] = ek .. "|" .. ev .. "|"
+            elseif cmd == "add_text_input" and parts[2] and parts[2] ~= "" and (not foundInput) then
+                countField = trimStr(parts[2])
+                foundInput = true
+            end
+        end
+    end
+
+    local lines = {
+        "action|dialog_return",
+        "dialog_name|" .. dName,
+    }
+    for _, el in ipairs(embedLines) do
+        lines[#lines + 1] = el
+    end
+    if not hasItemEmbed then
+        lines[#lines + 1] = "itemID|" .. tostring(fallbackItemID) .. "|"
+    end
+    lines[#lines + 1] = countField .. "|" .. tostring(dropAmt)
+    return table.concat(lines, "\n") .. "\n"
+end
+
 -- Drop kelebihan item di area paling atas Storage (Y=1..2, gaya Lucifer) hingga tersisa TEPAT keepAmt (1)
 local function dropExcessItemAtStorage(itemID, keepAmt, label)
     itemID = math.floor(tonumber(itemID) or 0)
@@ -1357,33 +1413,52 @@ local function dropExcessItemAtStorage(itemID, keepAmt, label)
         DF.STATE.pending_drop_amt = excess
         DF.STATE.drop_confirmed   = false
         DF.STATE.status_text = string.format("Drop Atas %s (%d)...", tostring(label or itemID), excess)
-        addLog(string.format("[Storage Drop Atas] Drop kelebihan %s (ID %d): %d (sisakan %d) di Y=1..2...",
-            tostring(label or itemID), itemID, excess, keepAmt))
+        addLog(string.format("[Storage Drop Atas #%d] %s (ID %d): drop %d (tas %d -> target %d)",
+            attempt, tostring(label or itemID), itemID, excess, cur, keepAmt))
 
+        local okDropped = false
+
+        -- Metode 1: API Native GrowLauncher confirmDropItem (TANPA elseif agar selalu jatuh ke fallback bila gagal!)
         if growtopia and growtopia.confirmDropItem then
             pcall(growtopia.confirmDropItem, itemID, excess)
-        elseif sendPacket then
-            pcall(sendPacket, 2, string.format("action|drop\n|itemID|%d\n", itemID))
-            safeSleep(320)
-            if (not DF.STATE.drop_confirmed) and isActive() then
-                pcall(sendPacket, 2, string.format(
-                    "action|dialog_return\ndialog_name|drop_item\nitemID|%d|\ncount|%d\n",
-                    itemID, excess
-                ))
-            end
+            okDropped = waitInvDropTo(itemID, keepAmt, 950)
         end
 
-        -- Tunggu sinkronisasi backpack hingga jumlah benar-benar <= keepAmt (maks 1.8 detik)
-        local waited = 0
-        while waited < 1800 and isActive() do
-            safeSleep(150)
-            waited = waited + 150
-            if getInvCount(itemID) <= keepAmt then break end
+        -- Metode 2: Packet standar action|drop -> ditangkap OnDialogRequest oleh DF.handleVariant!
+        if (not okDropped) and isActive() and sendPacket then
+            DF.STATE.drop_confirmed = false
+            pcall(sendPacket, 2, "action|drop\n|itemID|" .. tostring(itemID))
+            okDropped = waitInvDropTo(itemID, keepAmt, 1000)
+        end
+
+        -- Metode 3: API Native growtopia.dropItem (memicu OnDialogRequest -> DF.handleVariant)
+        if (not okDropped) and isActive() and growtopia and growtopia.dropItem then
+            DF.STATE.drop_confirmed = false
+            pcall(growtopia.dropItem, itemID)
+            okDropped = waitInvDropTo(itemID, keepAmt, 900)
+        end
+
+        -- Metode 4: Direct dialog_return untuk KEDUA nama dialog Growtopia ("drop_item" & "drop")
+        if (not okDropped) and isActive() and sendPacket then
+            for _, dlgName in ipairs({ "drop_item", "drop" }) do
+                if not isActive() then break end
+                local remNow = getInvCount(itemID) - keepAmt
+                if remNow <= 0 then okDropped = true; break end
+                pcall(sendPacket, 2, string.format(
+                    "action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n",
+                    dlgName, itemID, remNow
+                ))
+                if waitInvDropTo(itemID, keepAmt, 750) then
+                    okDropped = true
+                    break
+                end
+            end
         end
 
         DF.STATE.pending_drop_id  = 0
         DF.STATE.pending_drop_amt = 0
-        if getInvCount(itemID) <= keepAmt then
+        if okDropped or getInvCount(itemID) <= keepAmt then
+            addLog(string.format("[Storage Drop OK] %s tersisa %d di tas.", tostring(label or itemID), getInvCount(itemID)))
             return true
         end
         safeSleep(250)
@@ -2199,24 +2274,38 @@ function DF.stop()
     DF.STATE.status_text = "Stopped"
 end
 
--- Auto-confirm dialog drop_item saat membuang kelebihan alat di Storage
+-- Auto-confirm dialog drop / drop_item saat membuang kelebihan alat di Storage
+-- Mendukung format VariantList v0/v1 maupun v1/v2 serta dialog "drop" & "drop_item" Growtopia V5.x!
 function DF.handleVariant(var)
     if (not isActive()) or DF.STATE.pending_drop_id <= 0 then return false end
     if type(var) ~= "table" and type(var) ~= "userdata" then return false end
-    local v0, v1 = nil, nil
-    pcall(function() v0 = var.v1 or var[0] or var[1] end)
-    pcall(function() v1 = var.v2 or var[1] or var[2] end)
-    if tostring(v0 or "") ~= "OnDialogRequest" then return false end
-    local payload = tostring(v1 or "")
+
+    local v0, v1, v2 = nil, nil, nil
+    pcall(function() v0 = var.v0 or var[0] end)
+    pcall(function() v1 = var.v1 or var[1] end)
+    pcall(function() v2 = var.v2 or var[2] end)
+
+    local fn, payload = "", ""
+    if tostring(v0 or "") == "OnDialogRequest" then
+        fn = "OnDialogRequest"
+        payload = tostring(v1 or "")
+    elseif tostring(v1 or "") == "OnDialogRequest" then
+        fn = "OnDialogRequest"
+        payload = tostring(v2 or "")
+    end
+    if fn ~= "OnDialogRequest" or payload == "" then return false end
+
     local low = payload:lower()
-    if low:find("drop_item", 1, true) then
-        local dName = payload:match("end_dialog|([^|\r\n]+)") or "drop_item"
-        DF.STATE.drop_confirmed = true
-        if sendPacket then
-            pcall(sendPacket, 2, string.format(
-                "action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n",
-                trimStr(dName), DF.STATE.pending_drop_id, DF.STATE.pending_drop_amt
-            ))
+    local endDlg = (payload:match("end_dialog|([^|\r\n]+)") or ""):lower()
+    if endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
+        or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true)
+    then
+        if not DF.STATE.drop_confirmed then
+            DF.STATE.drop_confirmed = true
+            if sendPacket then
+                local pktStr = buildDropDialogReturn(payload, DF.STATE.pending_drop_id, DF.STATE.pending_drop_amt)
+                pcall(sendPacket, 2, pktStr)
+            end
         end
         return true
     end
