@@ -1452,6 +1452,15 @@ local function getBGDrawList()
     return nil
 end
 
+local function getWindowDrawListSafe()
+    if not ImGui then return nil end
+    if type(ImGui.GetWindowDrawList) == "function" then
+        local ok, dl = pcall(ImGui.GetWindowDrawList)
+        if ok and dl then return dl end
+    end
+    return getFGDrawList()
+end
+
 -- Frame neon TEBAL (3px Cyan -> Ungu sekeliling 4 sisi) + latar HITAM PEKAT 100% solid (bukan transparan!)
 local function drawWindowNeonChrome()
     if not (ImGui and ImVec2 and ImGui.GetWindowPos and ImGui.GetWindowSize) then return end
@@ -1522,10 +1531,28 @@ local function getLastItemRect()
 end
 
 local function drawRasterTileOnLastItem(rasterRuns, bgCol, borderCol)
-    local dl = getFGDrawList()
-    if not dl or not ImVec2 then return false, "DrawList FG tidak tersedia" end
+    -- 1. Jangan gambar jika item sedang ter-scroll keluar layar (out of view)
+    if ImGui and ImGui.IsItemVisible then
+        local okV, vis = pcall(ImGui.IsItemVisible)
+        if okV and vis == false then return true end
+    end
+
+    -- 2. Dapatkan bounding box item tombol
     local x1, y1, x2, y2 = getLastItemRect()
     if not x1 then return false, "GetItemRect gagal" end
+
+    -- 3. Batas jendela (window boundaries) agar raster TIDAK PERNAH tembus keluar frame
+    local wx, wy, ww, wh = 0, 0, 9999, 9999
+    if ImGui and ImGui.GetWindowPos and ImGui.GetWindowSize then
+        local okP, wp = pcall(ImGui.GetWindowPos)
+        local okS, ws = pcall(ImGui.GetWindowSize)
+        if okP and okS and wp and ws then
+            local okC, px, py, pw, ph = pcall(function() return wp.x, wp.y, ws.x, ws.y end)
+            if okC and type(px) == "number" then
+                wx, wy, ww, wh = px, py, pw, ph
+            end
+        end
+    end
 
     local cardW = x2 - x1
     local cardH = y2 - y1
@@ -1534,6 +1561,30 @@ local function drawRasterTileOnLastItem(rasterRuns, bgCol, borderCol)
     local px    = boxSz / 64.0
     local ox    = (x1 + x2 - boxSz) * 0.5
     local oy    = y1 + (topH - boxSz) * 0.5
+
+    -- Cek jika kotak logo berada di luar frame jendela (atas, bawah, kiri, kanan)
+    local clipLeft   = wx + 6
+    local clipTop    = wy + 26  -- batas bawah title bar agar tidak tembus ke title bar
+    local clipRight  = wx + ww - 6
+    local clipBottom = wy + wh - 6
+
+    if (ox + boxSz) <= clipLeft or ox >= clipRight or (oy + boxSz) <= clipTop or oy >= clipBottom then
+        return true
+    end
+
+    -- 4. Gunakan GetWindowDrawList (BUKAN Foreground ImGui.FG!) agar ter-clip oleh jendela
+    local dl = getWindowDrawListSafe()
+    if not dl or not ImVec2 then return false, "DrawList tidak tersedia" end
+
+    -- Aktifkan clip rect jika didukung oleh ImDrawList agar anti-tembus frame 100%
+    local hasClip = false
+    if dl.PushClipRect and dl.PopClipRect then
+        local okClip = pcall(dl.PushClipRect, dl, ImVec2(clipLeft, clipTop), ImVec2(clipRight, clipBottom), true)
+        if not okClip then
+            okClip = pcall(function() dl:PushClipRect(ImVec2(clipLeft, clipTop), ImVec2(clipRight, clipBottom), true) end)
+        end
+        hasClip = okClip
+    end
 
     local function drawAll(withRound)
         if withRound then
@@ -1561,6 +1612,11 @@ local function drawRasterTileOnLastItem(rasterRuns, bgCol, borderCol)
     if not ok then
         ok, err = pcall(drawAll, true)
     end
+
+    if hasClip then
+        pcall(dl.PopClipRect, dl)
+    end
+
     return ok, err
 end
 
@@ -1820,7 +1876,7 @@ local function drawSwitchEffect(sideW)
     local p = getSwitchProgress()
     if p >= 1.0 then return end
     if not (ImGui and ImVec2 and ImGui.GetWindowPos and ImGui.GetWindowSize) then return end
-    local fg = getFGDrawList()
+    local fg = getWindowDrawListSafe()
     if not fg then return end
 
     local okP, wp = pcall(ImGui.GetWindowPos)
@@ -1869,7 +1925,7 @@ local function drawSidebarDivider(width)
     if ImGui and ImGui.Dummy and ImVec2 then
         pcall(ImGui.Dummy, ImVec2(w, 2))
         local x1, y1, x2, y2 = getLastItemRect()
-        local fg = getFGDrawList()
+        local fg = getWindowDrawListSafe()
         if x1 and fg then
             local cy = (y1 + y2) * 0.5
             local drew = false
