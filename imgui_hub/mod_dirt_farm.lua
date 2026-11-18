@@ -96,16 +96,16 @@ DF.CFG = {
     find_name_len       = 7,
     find_use_num        = false,
     find_target_cnt     = 1,
-    -- Security: Lock, Jammer, Door ID & Penghalang (Blocker)
+    -- Security: Lock, Jammer, Door ID & Penghalang (Blocker) — Default SEMUA ON (Add World & Find World)
     auto_lock_wl        = true,
     wl_public           = true,
-    auto_place_sl       = false,
-    auto_place_jammer   = false,
-    use_id_door         = false,
+    auto_place_sl       = true,
+    auto_place_jammer   = true,
+    use_id_door         = true,
     id_door_itemid      = 12,     -- Default Door (12)
     door_id             = "DF123",
     door_label          = "BOREN STORE",
-    use_blocker_door    = false,
+    use_blocker_door    = true,
     blocker_door_itemid = 2810,   -- Default Air Vent (2810)
     -- Break & Build Options
     break_3_mode      = true,   -- Mode Break 3 Tile (y-2, y, y+2 sekaligus)
@@ -280,7 +280,7 @@ end
 
 function DF.saveData()
     local lines = {
-        "CFGVER=2",
+        "CFGVER=3",
         "STORAGE=" .. tostring(DF.CFG.storage_raw or ""),
         "LOOP=" .. (DF.CFG.loop_enabled and "1" or "0"),
         "FINDMODE=" .. (DF.CFG.find_world_mode and "1" or "0"),
@@ -374,6 +374,14 @@ function DF.loadData()
     end
     if cfgVer < 2 then
         DF.CFG.place_platform = false
+    end
+    if cfgVer < 3 then
+        DF.CFG.auto_lock_wl      = true
+        DF.CFG.auto_place_sl     = true
+        DF.CFG.auto_place_jammer = true
+        DF.CFG.use_blocker_door  = true
+        DF.CFG.use_id_door       = true
+        DF.saveData()
     end
 end
 
