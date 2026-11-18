@@ -484,6 +484,10 @@ local function isPermanentObstacle(t)
     return (fg == 6 or fg == 242 or fg == 202 or fg == 204 or fg == 206 or fg == 226 or fg == 828 or fg == 12 or fg == 18)
 end
 
+-- CATATAN PENTING GROWTOPIA:
+-- JANGAN mengecek t.extra.fruitcount > 0 di sini! Di Growtopia, seed yang BARU
+-- ditanam (belum di-splice!) langsung punya fruitcount 1..4 sejak detik ke-0.
+-- Hanya cek readyharvest / canHarvest untuk memastikan pohon benar-benar matang!
 local function isTileTree(t)
     if not t then return false end
     local fg = tonumber(t.fg) or 0
@@ -492,10 +496,6 @@ local function isTileTree(t)
     if t.canHarvest and type(t.canHarvest) == "function" then
         local okH, resH = pcall(t.canHarvest, t)
         if okH and resH == true then return true end
-    end
-    if t.extra and type(t.extra) == "table" then
-        local fruits = tonumber(t.extra.fruitcount) or 0
-        if fruits > 0 then return true end
     end
     return false
 end
@@ -1178,11 +1178,24 @@ local function sendPlantPacket(tx, ty, itemID)
     return ok
 end
 
+local function sendPunchPacket(tx, ty)
+    if not sendPacketRaw then return false end
+    local p = getLocalSafe()
+    local px = (p and (p.posX or (p.pos and p.pos.x))) or (tx * 32)
+    local py = (p and (p.posY or (p.pos and p.pos.y))) or (ty * 32)
+    local state = (px > (tx * 32)) and 48 or 32
+    local ok = pcall(sendPacketRaw, false, {
+        type = 3, value = 18, px = tx, py = ty, x = px, y = py, state = state,
+    })
+    return ok
+end
+
+-- Mengembalikan "OK" atau "RESTOCK" jika kehabisan salah satu seed di tengah section
 local function plantTileSection(spotList, plantY, s1, s2)
-    if not Engine.STATE.running or not spotList or #spotList == 0 then return true end
+    if not Engine.STATE.running or not spotList or #spotList == 0 then return "OK" end
     local isSplice = (s1 > 0 and s2 > 0 and s1 ~= s2)
-    local delayPlant  = tonumber(Engine.CFG.plant_delay) or 180
-    local delaySplice = tonumber(Engine.CFG.splice_delay) or 180
+    local delayPlant  = math.max(60, tonumber(Engine.CFG.plant_delay) or 180)
+    local delaySplice = math.max(60, tonumber(Engine.CFG.splice_delay) or 180)
     local blocked     = Engine.STATE.blocked_tiles
     local failCounts  = Engine.STATE.plant_fail_count
 
@@ -1191,24 +1204,26 @@ local function plantTileSection(spotList, plantY, s1, s2)
             if not Engine.STATE.running then break end
             local k = sx .. "_" .. plantY
             if not blocked[k] and getTilePlantStatus(sx, plantY, s1, s2) == "EMPTY" then
+                if getInvCount(s1) <= 0 then return "RESTOCK" end
                 sendPlantPacket(sx, plantY, s1)
                 safeSleep(delayPlant)
             end
         end
 
-        safeSleep(60)
+        safeSleep(80)
         for _ = 1, 3 do
             local needRetry = false
             for _, sx in ipairs(spotList) do
                 local k = sx .. "_" .. plantY
                 if not blocked[k] and getTilePlantStatus(sx, plantY, s1, s2) == "EMPTY" then
+                    if getInvCount(s1) <= 0 then return "RESTOCK" end
                     needRetry = true
                     sendPlantPacket(sx, plantY, s1)
                     safeSleep(delayPlant)
                     local tNow = getTileSafe(sx, plantY)
                     local cpx, cpy = getPlayerTilePos()
                     local isNear = cpx and cpy and math.abs(cpx - sx) <= 2 and math.abs(cpy - plantY) <= 2
-                    if isNear and tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack(s1, s2) then
+                    if isNear and tNow and tonumber(tNow.fg) == 0 and getInvCount(s1) > 0 then
                         failCounts[k] = (failCounts[k] or 0) + 1
                         if failCounts[k] >= 4 then
                             blocked[k] = true
@@ -1220,60 +1235,107 @@ local function plantTileSection(spotList, plantY, s1, s2)
                 end
             end
             if not needRetry then break end
-            safeSleep(80)
+            safeSleep(90)
         end
-        return true
+        return "OK"
     end
 
-    -- Mode Splice 2 Seed
-    local plantedS1 = {}
-    for _, sx in ipairs(spotList) do
-        if not Engine.STATE.running then break end
-        local k = sx .. "_" .. plantY
-        if not blocked[k] and getTilePlantStatus(sx, plantY, s1, s2) == "EMPTY" then
-            sendPlantPacket(sx, plantY, s1)
-            plantedS1[sx] = true
-            safeSleep(delayPlant)
-        end
-    end
+    -- ========================================================================
+    -- MODE SPLICE 2 SEED (STRICT STATE-VERIFIED + ANTI-UNSPLICED RECOVERY)
+    -- ========================================================================
+    local plantedInSection = {}
+    local plantedAnyS1 = false
 
-    safeSleep(delaySplice)
-
+    -- Fase 1: Tanam seed 1 HANYA pada petak EMPTY (dan hanya jika stok s1 & s2 tersedia)
     for _, sx in ipairs(spotList) do
         if not Engine.STATE.running then break end
         local k = sx .. "_" .. plantY
         if not blocked[k] then
             local st = getTilePlantStatus(sx, plantY, s1, s2)
-            if plantedS1[sx] or st == "NEEDS_SPLICE_2" or st == "EMPTY" then
-                sendPlantPacket(sx, plantY, s2)
-                safeSleep(delayPlant)
-            elseif st == "NEEDS_SPLICE_1" then
+            if st == "EMPTY" then
+                if getInvCount(s1) <= 0 or getInvCount(s2) <= 0 then return "RESTOCK" end
                 sendPlantPacket(sx, plantY, s1)
+                plantedInSection[sx] = true
+                plantedAnyS1 = true
                 safeSleep(delayPlant)
             end
         end
     end
 
-    safeSleep(120)
-    for _ = 1, 3 do
+    -- Tunggu cooldown server Growtopia agar s1 benar-benar terdaftar di tile sebelum timpa s2
+    if plantedAnyS1 then
+        safeSleep(math.max(delaySplice, 180))
+    end
+
+    -- Fase 2: Timpa seed pasangan sesuai status AKTUAL tile (JANGAN timpa s2 ke petak EMPTY!)
+    for _, sx in ipairs(spotList) do
+        if not Engine.STATE.running then break end
+        local k = sx .. "_" .. plantY
+        if not blocked[k] then
+            local st = getTilePlantStatus(sx, plantY, s1, s2)
+            if st == "NEEDS_SPLICE_2" then
+                if getInvCount(s2) <= 0 then return "RESTOCK" end
+                sendPlantPacket(sx, plantY, s2)
+                plantedInSection[sx] = true
+                safeSleep(delayPlant)
+            elseif st == "NEEDS_SPLICE_1" then
+                if getInvCount(s1) <= 0 then return "RESTOCK" end
+                sendPlantPacket(sx, plantY, s1)
+                plantedInSection[sx] = true
+                safeSleep(delayPlant)
+            elseif st == "EMPTY" then
+                -- Packet s1 sebelumnya ter-drop -> tanam s1 dulu, tunggu delaySplice, baru timpa s2!
+                if getInvCount(s1) <= 0 or getInvCount(s2) <= 0 then return "RESTOCK" end
+                sendPlantPacket(sx, plantY, s1)
+                plantedInSection[sx] = true
+                safeSleep(math.max(delaySplice, 180))
+                sendPlantPacket(sx, plantY, s2)
+                safeSleep(delayPlant)
+            end
+        end
+    end
+
+    -- Fase 3: Verifikasi ketat hingga 5x retry sampai SEMUA petak berubah menjadi hasil splice
+    -- (fg ~= 0 dan fg ~= s1 dan fg ~= s2), bukan masih tertinggal sebagai seed mentah s1/s2!
+    local verifyWait = math.max(180, delaySplice)
+    safeSleep(verifyWait)
+
+    for _ = 1, 5 do
         if not Engine.STATE.running then break end
         local allDone = true
         for _, sx in ipairs(spotList) do
+            if not Engine.STATE.running then break end
             local k = sx .. "_" .. plantY
             if not blocked[k] then
+                local tNow = getTileSafe(sx, plantY)
+                local fgNow = tonumber(tNow and tNow.fg) or 0
                 local st = getTilePlantStatus(sx, plantY, s1, s2)
+
                 if st == "NEEDS_SPLICE_2" then
-                    allDone = false; sendPlantPacket(sx, plantY, s2); safeSleep(delayPlant)
-                elseif st == "NEEDS_SPLICE_1" then
-                    allDone = false; sendPlantPacket(sx, plantY, s1); safeSleep(delayPlant)
-                elseif st == "EMPTY" then
+                    if getInvCount(s2) <= 0 then return "RESTOCK" end
                     allDone = false
-                    sendPlantPacket(sx, plantY, s1); safeSleep(delaySplice)
-                    sendPlantPacket(sx, plantY, s2); safeSleep(delayPlant)
-                    local tNow = getTileSafe(sx, plantY)
+                    sendPlantPacket(sx, plantY, s2)
+                    safeSleep(math.max(delayPlant, 160))
+
+                elseif st == "NEEDS_SPLICE_1" then
+                    if getInvCount(s1) <= 0 then return "RESTOCK" end
+                    allDone = false
+                    sendPlantPacket(sx, plantY, s1)
+                    safeSleep(math.max(delayPlant, 160))
+
+                elseif st == "EMPTY" then
+                    if getInvCount(s1) <= 0 or getInvCount(s2) <= 0 then return "RESTOCK" end
+                    allDone = false
+                    sendPlantPacket(sx, plantY, s1)
+                    plantedInSection[sx] = true
+                    safeSleep(math.max(delaySplice, 180))
+                    sendPlantPacket(sx, plantY, s2)
+                    safeSleep(math.max(delayPlant, 160))
+
+                    local tChk = getTileSafe(sx, plantY)
                     local cpx, cpy = getPlayerTilePos()
                     local isNear = cpx and cpy and math.abs(cpx - sx) <= 2 and math.abs(cpy - plantY) <= 2
-                    if isNear and tNow and tonumber(tNow.fg) == 0 and hasEnoughSeedInBackpack(s1, s2) then
+                    if isNear and tChk and tonumber(tChk.fg) == 0 and getInvCount(s1) > 0 and getInvCount(s2) > 0 then
                         failCounts[k] = (failCounts[k] or 0) + 1
                         if failCounts[k] >= 4 then
                             blocked[k] = true
@@ -1282,13 +1344,21 @@ local function plantTileSection(spotList, plantY, s1, s2)
                     else
                         failCounts[k] = 0
                     end
+
+                elseif st == "DONE" and plantedInSection[sx] and Engine.CFG.auto_clear_failed_splice
+                    and (fgNow == s1 or fgNow == s2) and isTileTree(tNow)
+                then
+                    -- Recovery otomatis: seed cepat-tumbuh yg baru kita tanam telanjur bertunas sebelum ter-splice
+                    allDone = false
+                    sendPunchPacket(sx, plantY)
+                    safeSleep(math.max(delayPlant, 180))
                 end
             end
         end
         if allDone then break end
-        safeSleep(100)
+        safeSleep(verifyWait)
     end
-    return true
+    return "OK"
 end
 
 local function findRowPlantPlan(plantY, curPx, s1, s2)
@@ -1360,7 +1430,14 @@ local function executePlantRow(row, plantY, goingRight, startX, s1, s2)
                     if a >= 0 and a <= 99 and isTilePlantable(a, plantY, s1, s2) then table.insert(spots, a) end
                     if isTilePlantable(b, plantY, s1, s2) then table.insert(spots, b) end
                     if c >= 0 and c <= 99 and isTilePlantable(c, plantY, s1, s2) then table.insert(spots, c) end
-                    if #spots > 0 then plantTileSection(spots, plantY, s1, s2) end
+                    if #spots > 0 then
+                        local res = plantTileSection(spots, plantY, s1, s2)
+                        if res == "RESTOCK" then
+                            if not restockFromStorage(row, s1, s2) then return false end
+                            -- Jangan geser standX dulu! Ulangi section yang sama agar tidak ada seed tertinggal!
+                            standX = standX - step
+                        end
+                    end
                 end
             end
             standX = standX + step
@@ -1369,16 +1446,20 @@ local function executePlantRow(row, plantY, goingRight, startX, s1, s2)
         -- Tangani tepi x=98/99 atau x=0
         local edgeList = goingRight and { 98, 99 } or { 0 }
         local edgeTarget = goingRight and 98 or 0
-        local edgeSpots = {}
-        for _, ex in ipairs(edgeList) do
-            if isTilePlantable(ex, plantY, s1, s2) then table.insert(edgeSpots, ex) end
-        end
-        if #edgeSpots > 0 then
+        for _ = 1, 2 do
+            local edgeSpots = {}
+            for _, ex in ipairs(edgeList) do
+                if isTilePlantable(ex, plantY, s1, s2) then table.insert(edgeSpots, ex) end
+            end
+            if #edgeSpots == 0 then break end
             if not hasEnoughSeedInBackpack(s1, s2) then
                 if not restockFromStorage(row, s1, s2) then return false end
             end
             if moveSafeTo(edgeTarget, plantY) then
-                plantTileSection(edgeSpots, plantY, s1, s2)
+                local resE = plantTileSection(edgeSpots, plantY, s1, s2)
+                if resE ~= "RESTOCK" then break end
+            else
+                break
             end
         end
     else
@@ -1387,16 +1468,22 @@ local function executePlantRow(row, plantY, goingRight, startX, s1, s2)
         local eX = goingRight and 99 or 0
         local step = goingRight and 1 or -1
         moveSafeTo(bX, plantY)
-        for curX = bX, eX, step do
+        local curX = bX
+        while (goingRight and curX <= eX) or ((not goingRight) and curX >= eX) do
             if not Engine.STATE.running then return false end
             if isTilePlantable(curX, plantY, s1, s2) then
                 if not hasEnoughSeedInBackpack(s1, s2) then
                     if not restockFromStorage(row, s1, s2) then return false end
                 end
                 if moveSafeTo(curX, plantY) then
-                    plantTileSection({ curX }, plantY, s1, s2)
+                    local res1 = plantTileSection({ curX }, plantY, s1, s2)
+                    if res1 == "RESTOCK" then
+                        if not restockFromStorage(row, s1, s2) then return false end
+                        curX = curX - step
+                    end
                 end
             end
+            curX = curX + step
         end
     end
     return true
@@ -1470,33 +1557,47 @@ local function processWorldRow(row)
     end
 
     row.status = "Planting..."
-    local activeRows = {}
-    for y = 0, 53 do
-        for x = 0, 99 do
-            if isTilePlantable(x, y, s1, s2) then
-                table.insert(activeRows, y)
-                break
+    local maxPasses = (s2 > 0 and s1 ~= s2) and 3 or 2
+    for sweepPass = 1, maxPasses do
+        if not Engine.STATE.running then return false end
+        local activeRows = {}
+        for y = 0, 53 do
+            for x = 0, 99 do
+                if isTilePlantable(x, y, s1, s2) then
+                    table.insert(activeRows, y)
+                    break
+                end
             end
         end
-    end
-
-    for idx, plantY in ipairs(activeRows) do
-        if not Engine.STATE.running then return false end
-        if not isWorldProperlyLoaded(row.name) then
-            row.status = "Disconnected"
-            return false
+        if #activeRows == 0 then break end
+        if sweepPass > 1 then
+            addLog(string.format("[Sweep %d/%d] Membersihkan %d baris yang masih ada petak kosong / belum ter-splice...",
+                sweepPass, maxPasses, #activeRows))
         end
-        local curPx = getPlayerTilePos()
-        local goingRight, startX, lastSeedX, holes = findRowPlantPlan(plantY, curPx, s1, s2)
-        if goingRight ~= nil then
-            Engine.STATE.status_text = string.format("%s Y=%d (%d/%d)", row.name, plantY, idx, #activeRows)
-            row.status = string.format("Y=%d (%d/%d)", plantY, idx, #activeRows)
-            addLog(string.format("[Plant] %s Y=%d [%s] Mulai X=%d (Last: %s | Sisa: %d)",
-                row.name, plantY, goingRight and "L->R" or "R->L", startX or 0, tostring(lastSeedX or "Fresh"), holes or 0))
-            if not executePlantRow(row, plantY, goingRight, startX, s1, s2) then
+
+        for idx, plantY in ipairs(activeRows) do
+            if not Engine.STATE.running then return false end
+            if not isWorldProperlyLoaded(row.name) then
+                row.status = "Disconnected"
                 return false
             end
+            local curPx = getPlayerTilePos()
+            local goingRight, startX, lastSeedX, holes = findRowPlantPlan(plantY, curPx, s1, s2)
+            -- Pada sweep pembersihan (pass > 1), sapu seluruh baris dari ujung ke ujung agar petak di tengah ikut tuntas!
+            if sweepPass > 1 and goingRight ~= nil then
+                startX = goingRight and 0 or 99
+            end
+            if goingRight ~= nil then
+                Engine.STATE.status_text = string.format("%s Y=%d (%d/%d)", row.name, plantY, idx, #activeRows)
+                row.status = string.format("Y=%d (%d/%d)", plantY, idx, #activeRows)
+                addLog(string.format("[Plant] %s Y=%d [%s] Mulai X=%d (Last: %s | Sisa: %d)",
+                    row.name, plantY, goingRight and "L->R" or "R->L", startX or 0, tostring(lastSeedX or "Fresh"), holes or 0))
+                if not executePlantRow(row, plantY, goingRight, startX, s1, s2) then
+                    return false
+                end
+            end
         end
+        safeSleep(250)
     end
 
     local rem = countPlantableSpots(s1, s2)
