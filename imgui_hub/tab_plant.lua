@@ -2224,8 +2224,8 @@ local function handleSendPacketRaw(pkt)
                 return true
             end
         end
-        -- Ignore Gems untuk Auto Plant
-        if HUB.plant and HUB.plant.CFG and HUB.plant.CFG.ignore_gems then
+        -- Ignore Gems KHUSUS saat Auto Plant sedang berjalan (jangan blokir gems saat Dirt Farm break!)
+        if HUB.plant and HUB.plant.STATE and HUB.plant.STATE.running and HUB.plant.CFG and HUB.plant.CFG.ignore_gems then
             local objUID = tonumber(pkt.value) or 0
             local getObjsFn = getObjects or getObjectList
             if getObjsFn then

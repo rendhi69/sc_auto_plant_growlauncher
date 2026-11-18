@@ -564,15 +564,30 @@ local function forEachWorldObject(fn)
     return seen
 end
 
+local function setAutoCollectActive(enabled)
+    if not editToggle then return end
+    if enabled then
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+    else
+        pcall(editToggle, "Auto Collect", false)
+        pcall(editToggle, "AutoCollect", false)
+        pcall(editToggle, "Anti Collect", true)
+        pcall(editToggle, "Anti-Collect", true)
+    end
+end
+
 local function applyCheats()
     if not editToggle then return end
     if DF.CFG.use_modfly then pcall(editToggle, "ModFly", true) end
     pcall(editToggle, "Anti Lava", true)
     pcall(editToggle, "No Lava", true)
-    if DF.CFG.auto_collect then
-        pcall(editToggle, "Anti Collect", false)
-        pcall(editToggle, "Auto Collect", true)
+    if DF.STATE.in_storage or DF.STATE.anti_take_active then
+        return
     end
+    setAutoCollectActive(DF.CFG.auto_collect == true)
 end
 
 local function findMainDoor()
@@ -784,7 +799,7 @@ local function rawAction(tx, ty, val)
 end
 
 local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, forceCollect)
-    if DF.STATE.anti_take_active then return 0 end
+    if DF.STATE.anti_take_active or DF.STATE.in_storage then return 0 end
     if (not DF.CFG.auto_collect) and (not forceCollect) then return 0 end
     local px, py = getPlayerPos()
     local refX = centerX or px
@@ -799,10 +814,12 @@ local function collectNearbyFloating(centerX, centerY, customRadius, quickMode, 
         local ox = math.floor((oxPx + 10) / 32)
         local oy = math.floor((oyPx + 10) / 32)
         local dist = math.max(math.abs(ox - refX), math.abs(oy - refY))
-        if dist <= radius and getInvCount(itemid) < 200 then
+        if dist <= radius and (itemid == 112 or getInvCount(itemid) < 200) then
             local cpx, cpy = getPlayerPos()
-            local pDist = (cpx and cpy) and math.max(math.abs(ox - cpx), math.abs(oy - cpy)) or 99
-            local needWalk = ((not quickMode) and pDist > 1) or (pDist > 2)
+            local dx = cpx and math.abs(ox - cpx) or 99
+            local dy = cpy and math.abs(oy - cpy) or 99
+            -- Growtopia menolak pickup bila jarak Euclidean > 2 tile (misal diagonal 1x2 = 2.23 di mode 3-Break)
+            local needWalk = ((not quickMode) and (dx > 1 or dy > 1)) or ((dx * dx + dy * dy) > 4)
             if needWalk and isTileSafeToStand(ox, oy) then
                 moveSafeTo(ox, oy)
             end
@@ -1022,10 +1039,7 @@ local function breakTileCompletely(tx, ty, breakFg, breakBg, prefDir, skipCollec
     end
 
     if DF.CFG.auto_collect and (not skipCollect) and DF.STATE.running then
-        breakCollectCounter = breakCollectCounter + 1
-        if (breakCollectCounter % 2) == 0 then
-            collectNearbyFloating(tx, ty, DF.CFG.collect_range, true, false)
-        end
+        collectNearbyFloating(tx, ty, DF.CFG.collect_range, true, false)
     end
     return fgDone and bgDone
 end
@@ -1131,6 +1145,7 @@ local function standAndBreak3AtCol(doorX, doorY, x, centerY, safeStandDir)
     end
 
     if DF.CFG.auto_collect then
+        safeSleep(45)
         collectNearbyFloating(x, centerY, DF.CFG.collect_range, true, false)
     end
     checkAutoTrash()
@@ -1396,11 +1411,8 @@ local function dropExcessItemAtStorage(itemID, keepAmt, label)
     if cur <= keepAmt then return true end
 
     DF.STATE.anti_take_active = true
-    if editToggle then
-        pcall(editToggle, "Auto Collect", false)
-        pcall(editToggle, "Anti Collect", true)
-        pcall(editToggle, "ModFly", true)
-    end
+    setAutoCollectActive(false)
+    if editToggle then pcall(editToggle, "ModFly", true) end
     safeSleep(180)
 
     -- Terbang ke baris paling atas storage (Y=1..2) SEBELUM mulai drop!
@@ -1617,8 +1629,10 @@ local function findOneFreeWorld()
         addLog(string.format("[Find World #%d] Mengecek %s...", attempt, cand))
 
         if warpToWorld(cand, "") then
+            DF.STATE.in_storage = false
             DF.STATE.anti_take_active = false
             activeTargetWorld = cleanWorldName(cand)
+            setAutoCollectActive(DF.CFG.auto_collect == true)
             safeSleep(700)
             local okFree, reason, dx, dy = isCurrentWorldFreeForDF()
             if okFree then
@@ -1739,12 +1753,14 @@ local function restockItem(farmRow, itemID, wantAmt, exactCap)
         DF.STATE.anti_take_active = false
         if okBack then
             activeTargetWorld = cleanWorldName(farmRow.name)
+            setAutoCollectActive(DF.CFG.auto_collect == true)
             return true
         end
     end
 
     -- Pastikan TIDAK pernah diam di storage sambil mengembalikan kontrol ke break loop!
     DF.STATE.anti_take_active = false
+    setAutoCollectActive(DF.CFG.auto_collect == true)
     activeTargetWorld = prevTarget
     return false
 end
@@ -2049,6 +2065,7 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
     DF.STATE.anti_take_active = false
     DF.STATE.in_storage = false
     activeTargetWorld = targetName
+    setAutoCollectActive(DF.CFG.auto_collect == true)
     safeSleep(550)
 
     local doorX, doorY = findMainDoor()
@@ -2074,6 +2091,11 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
         safeSleep(550)
         doorX, doorY = findMainDoor()
     end
+
+    -- Pastikan Auto Collect BENAR-BENAR ON & Anti Collect OFF tepat sebelum mulai break dirt!
+    DF.STATE.anti_take_active = false
+    DF.STATE.in_storage = false
+    setAutoCollectActive(DF.CFG.auto_collect == true)
 
     -- 1. CLEAR SISI PINGGIR (0,99 atau 1,0,98,99 jika Platform ON | Y=24..53, FG + Cave BG!)
     if DF.CFG.clear_side and #sideCols > 0 then
