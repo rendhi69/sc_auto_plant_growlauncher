@@ -13,7 +13,7 @@ local CS = {
         id      = "chemsynth",
         label   = "Chemsynth",
         order   = 45,
-        enabled = true,
+        enabled = false,
     },
 }
 
