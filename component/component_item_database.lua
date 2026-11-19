@@ -48,8 +48,7 @@ local ANDROID_SEARCH_PATHS = {
     "script/component/" .. DEFAULT_CACHE_FILENAME,
     "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/" .. DEFAULT_CACHE_FILENAME,
     "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/" .. DEFAULT_CACHE_FILENAME,
-    "/storage/emulated/0/Download/" .. DEFAULT_CACHE_FILENAME,
-    "d:/rotasi 2026/SC LAMA OLD JUTUN/sc growlauncher/" .. DEFAULT_CACHE_FILENAME
+    "/storage/emulated/0/Download/" .. DEFAULT_CACHE_FILENAME
 }
 
 -- Preset Kategori Pintu Populer
