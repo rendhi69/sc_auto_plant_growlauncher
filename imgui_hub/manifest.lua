@@ -14,6 +14,7 @@ return {
     },
     features = {
         { id = "harvest", label = "Harvest", order = 15, path = "imgui_hub/mod_harvest.lua" },
+        { id = "transfer", label = "Transfer", order = 18, path = "imgui_hub/mod_transfer.lua" },
         { id = "dirt_farm", label = "Dirt Farm", order = 20, path = "imgui_hub/mod_dirt_farm.lua" },
         { id = "build_soil", label = "Build Soil", order = 30, path = "imgui_hub/mod_soil_builder.lua" },
         { id = "buy_pack", label = "Buy Pack", order = 40, path = "imgui_hub/mod_buy_pack.lua" },
