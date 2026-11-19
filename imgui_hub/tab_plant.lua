@@ -1296,11 +1296,12 @@ local function triggerHotReloadAll()
                 if okO and tonumber(ot) then tNowMs = math.floor(tonumber(ot)) end
             end
             local freshTag = tostring(tNowMs or math.random(100000, 999999)) .. "_" .. tostring(math.random(100, 999))
-            for _, k in ipairs({ "plant", "dirt_farm", "build_soil", "buy_pack" }) do
+            for _, k in ipairs({ "plant", "harvest", "dirt_farm", "build_soil", "buy_pack" }) do
                 if HUB[k] and type(HUB[k].stop) == "function" then pcall(HUB[k].stop) end
             end
             local mods = {
                 { key = "plant",      path = "imgui_hub/plant_engine.lua" },
+                { key = "harvest",    path = "imgui_hub/mod_harvest.lua" },
                 { key = "dirt_farm",  path = "imgui_hub/mod_dirt_farm.lua" },
                 { key = "build_soil", path = "imgui_hub/mod_soil_builder.lua" },
                 { key = "buy_pack",   path = "imgui_hub/mod_buy_pack.lua" },
@@ -1621,6 +1622,7 @@ local function drawRasterTileOnLastItem(rasterRuns, bgCol, borderCol)
 end
 
 local FALLBACK_FEATURES = {
+    { id = "harvest",     label = "Harvest",     order = 15, path = "imgui_hub/mod_harvest.lua" },
     { id = "dirt_farm",   label = "Dirt Farm",   order = 20, path = "imgui_hub/mod_dirt_farm.lua" },
     { id = "build_soil",  label = "Build Soil",  order = 30, path = "imgui_hub/mod_soil_builder.lua" },
     { id = "buy_pack",    label = "Buy Pack",    order = 40, path = "imgui_hub/mod_buy_pack.lua" },

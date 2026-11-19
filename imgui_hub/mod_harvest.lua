@@ -108,11 +108,11 @@ end
 local ITEM = {
     PUNCH     = 18,
     GEMS      = 112,
-    MAGNI     = resolveItemID("Magnifying Glass", 1252),
-    DCS       = resolveItemID("Dreamcatcher Staff", 6840),
-    HARVESTER = resolveItemID("Harvester", 1830),
-    SORROWS   = resolveItemID("Harvester of Sorrows", 1966),
-    FUEL_PACK = resolveItemID("Fuel Pack", 1746),
+    MAGNI     = 1252,
+    DCS       = 6840,
+    HARVESTER = 1830,
+    SORROWS   = 1966,
+    FUEL_PACK = 1746,
 }
 
 local LOCK_OR_DOOR_IDS = {
@@ -1175,14 +1175,83 @@ end
 -- ============================================================================
 -- 7. UI RENDERER (TERINTEGRASI DENGAN UI_KIT BOREN STORE HUB)
 -- ============================================================================
-local function uiKit() return HUB_REF and HUB_REF.ui_kit or nil end
-local function autoBtn(lbl) local ok, r = pcall(ImGui.Button, lbl); return ok and r == true end
-local function uiSection(t, skip) local k = uiKit(); if k and k.section then k.section(t, skip) else if not skip then ImGui.Separator() end; ImGui.Text(t) end end
-local function uiSectionKetik(t, id, fn, skip) local k = uiKit(); if k and k.sectionWithKetik and k.openInputDialog then k.sectionWithKetik(t, id, fn, skip) else uiSection(t, skip) end end
-local function uiOpenDlg(id, t, flds, lbl, fn) local k = uiKit(); if k and k.openInputDialog then k.openInputDialog(id, t, flds, lbl, fn) end end
-local function uiEnableBtn(on, id) local k = uiKit(); if k and k.enableBtn then return k.enableBtn(on, id) end; return autoBtn((on and "ON##" or "OFF##") .. id) end
-local function uiToggleBtn(on, id, a, b) local k = uiKit(); if k and k.toggleBtn then return k.toggleBtn(on, id, a, b) end; return autoBtn((on and (a or "ON") or (b or "OFF")) .. "##" .. id) end
-local function uiTabBtn(lbl, act) local k = uiKit(); if k and k.tabBtn then return k.tabBtn(lbl, act) end; return autoBtn(act and ("[" .. lbl .. "]") or lbl) end
+local function uiKit()
+    return HUB_REF and HUB_REF.ui_kit or nil
+end
+
+local function autoBtn(lbl)
+    local ok, r = pcall(ImGui.Button, lbl)
+    return ok and (r == true)
+end
+
+local function uiGap(px)
+    local k = uiKit()
+    if k and k.gap then k.gap(px); return end
+    if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
+end
+
+local function uiSection(title, skipTopSep)
+    local k = uiKit()
+    if k and k.section then k.section(title, skipTopSep); return end
+    if not skipTopSep then ImGui.Separator() end
+    if title and title ~= "" then ImGui.Text(title) end
+end
+
+local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+    local k = uiKit()
+    if k and k.sectionWithKetik and k.openInputDialog then
+        k.sectionWithKetik(title, btnId, onKetikClick, skipTopSep)
+        return
+    end
+    uiSection(title, skipTopSep)
+end
+
+local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
+    local k = uiKit()
+    if k and k.openInputDialog then
+        k.openInputDialog(id, title, fields, submitLbl, onSubmit)
+    end
+end
+
+local function uiEnableBtn(isOn, id)
+    local k = uiKit()
+    if k and k.enableBtn then return k.enableBtn(isOn, id) end
+    return autoBtn((isOn and "ON##" or "OFF##") .. tostring(id))
+end
+
+local function uiToggleBtn(isOn, id, onLbl, offLbl)
+    local k = uiKit()
+    if k and k.toggleBtn then return k.toggleBtn(isOn, id, onLbl, offLbl) end
+    return autoBtn(" " .. (isOn and (onLbl or "ON") or (offLbl or "OFF")) .. " ##" .. tostring(id))
+end
+
+local function uiTabBtn(label, isActive)
+    local k = uiKit()
+    if k and k.tabBtn then return k.tabBtn(label, isActive) end
+    return autoBtn(isActive and ("[ " .. label .. " ]") or label)
+end
+
+local function uiNote(msg)
+    if not msg or msg == "" then return end
+    local k = uiKit()
+    if k and k.coloredText and k.getPal then
+        k.coloredText(k.getPal().textPurple, "Info: " .. tostring(msg))
+    else
+        ImGui.Text("Info: " .. tostring(msg))
+    end
+end
+
+local function uiActionBar(id, w, buttons)
+    local k = uiKit()
+    if k and k.renderActionBar then return k.renderActionBar(id, w, buttons) end
+    local hit = nil
+    for i, b in ipairs(buttons) do
+        if i > 1 then ImGui.SameLine() end
+        if autoBtn(b.label) then hit = i end
+    end
+    return hit
+end
+
 local function safeInput(id, val, maxL)
     local k = uiKit()
     if k and k.safeInputText then return k.safeInputText(id, val, maxL) end
@@ -1194,6 +1263,7 @@ local function safeInput(id, val, maxL)
     elseif type(r2) == "string" and r2 ~= s then return true, r2 end
     return false, s
 end
+
 local function readClipLines()
     local k = uiKit()
     if k and k.readClipboardLines then return k.readClipboardLines() end
@@ -1209,15 +1279,31 @@ local function readClipLines()
     return out
 end
 
+local function availX()
+    if ImGui and ImGui.GetContentRegionAvail then
+        local ok, av = pcall(ImGui.GetContentRegionAvail)
+        if ok and av then
+            if type(av) == "number" and av > 40 then return av end
+            local okX, x = pcall(function() return av.x end)
+            if okX and type(x) == "number" and x > 40 then return x end
+        end
+    end
+    return 480
+end
+
 local function renderFarmsSub()
     local c, st = HV.CFG, HV.STATE
+    local w = availX()
+
     uiSection("Kontrol Auto Harvest", true)
-    ImGui.Text("Status Bot :"); ImGui.SameLine()
+    ImGui.Text("Status Bot  :"); ImGui.SameLine()
     if uiEnableBtn(st.enabled, "hv_en") then
         if st.enabled then HV.stop() else HV.start() end
     end
-    ImGui.SameLine(); ImGui.Text("   Loop :"); ImGui.SameLine()
-    if uiToggleBtn(c.loop_enabled, "hv_lp") then c.loop_enabled = not c.loop_enabled; HV.saveData() end
+    ImGui.SameLine(); ImGui.Text("    Loop  :"); ImGui.SameLine()
+    if uiToggleBtn(c.loop_enabled, "hv_lp") then
+        c.loop_enabled = not c.loop_enabled; HV.saveData()
+    end
     ImGui.SameLine()
     if autoBtn(" Reset ##hv_rst") then
         for _, r in ipairs(st.rows) do r.status = "Ready" end
@@ -1228,274 +1314,467 @@ local function renderFarmsSub()
         st.rows = {}; st.selected_idx = 0; HV.saveData(); uiNotice = "Daftar farm dikosongkan."
     end
 
-    ImGui.Text(string.format("Status: %s | Farm: %d | Tree: %d | Drop: %d", st.status_text, #st.rows, st.total_harvested, st.total_dropped))
-    if uiNotice ~= "" then ImGui.Text("Info: " .. uiNotice) end
+    uiGap(4)
+    ImGui.Text(string.format("Status: %s   |   Farm: %d   |   Tree: %d   |   Drop: %d",
+        tostring(st.status_text), #st.rows, st.total_harvested, st.total_dropped))
+    uiNote(uiNotice)
 
-    uiSection("Daftar World Farm (" .. #st.rows .. ")")
+    uiSection("Daftar World Farm (" .. tostring(#st.rows) .. ")")
+
     if ImGui.BeginTable("BorenHarvestTable", 4) then
         ImGui.TableSetupColumn("World")
-        ImGui.TableSetupColumn("Door")
-        ImGui.TableSetupColumn("Block/Seed")
+        ImGui.TableSetupColumn("Door ID")
+        ImGui.TableSetupColumn("Block/Seed ID")
         ImGui.TableSetupColumn("Status")
         ImGui.TableHeadersRow()
+
         if #st.rows == 0 then
             ImGui.TableNextRow()
             ImGui.TableSetColumnIndex(0); ImGui.Text("(Kosong)")
             ImGui.TableSetColumnIndex(1); ImGui.Text("-")
             ImGui.TableSetColumnIndex(2); ImGui.Text(tostring(c.default_item_id))
-            ImGui.TableSetColumnIndex(3); ImGui.Text("Tambah / Paste")
+            ImGui.TableSetColumnIndex(3); ImGui.Text("Tambah di bawah")
         else
             for i, r in ipairs(st.rows) do
                 local bID, sID = normalizeHarvestPair(r.item_id)
                 ImGui.TableNextRow()
                 ImGui.TableSetColumnIndex(0)
                 local sel = (st.selected_idx == i)
-                if autoBtn((sel and "> " or "") .. r.name .. "##hvr" .. i) then st.selected_idx = sel and 0 or i end
-                ImGui.TableSetColumnIndex(1); ImGui.Text(r.door ~= "" and r.door or "-")
-                ImGui.TableSetColumnIndex(2); ImGui.Text(string.format("%d/%d", bID, sID))
+                if autoBtn((sel and "> " or "") .. tostring(r.name) .. "##hvr" .. tostring(i)) then
+                    st.selected_idx = sel and 0 or i
+                end
+                ImGui.TableSetColumnIndex(1); ImGui.Text((r.door and r.door ~= "") and r.door or "-")
+                ImGui.TableSetColumnIndex(2); ImGui.Text(string.format("%d / %d", bID, sID))
                 ImGui.TableSetColumnIndex(3); ImGui.Text(tostring(r.status or "Ready"))
             end
         end
         ImGui.EndTable()
     end
 
-    uiSectionKetik("Tambah Farm (Ketik / Paste)", "hv_ktk_f", function()
-        local wPre, dPre = addFarmWorldBuf:gsub("|", ":"):match("^([^:]+):(.*)$")
-        if not wPre then wPre, dPre = addFarmWorldBuf, "" end
-        uiOpenDlg("boren_in_hv_f", "Tambah Farm Harvest", {
-            { id = "w", label = "Nama World", default = wPre, maxLen = 32 },
-            { id = "d", label = "Door ID (opsional)", default = dPre, maxLen = 32 },
-            { id = "id", label = "Block/Seed ID", default = addFarmItemBuf, maxLen = 12 },
-        }, "Tambah", function(v)
-            local wn = cleanWorldName(v.w or ""); local dn = cleanWorldName(v.d or "")
-            local iid = math.floor(tonumber(v.id) or c.default_item_id or 4584)
+    uiSectionWithKetik("Tambah World Farm Baru", "hv_ktk_w", function()
+        local wPre, dPre = tostring(addFarmWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
+        if not wPre then wPre = tostring(addFarmWorldBuf or ""); dPre = "" end
+        uiOpenDialog("boren_in_hv_w", "Tambah World Harvest", {
+            { id = "f_world", label = "Nama World", default = wPre, maxLen = 32 },
+            { id = "f_door",  label = "Door ID (opsional)", default = dPre, maxLen = 32 },
+            { id = "f_item",  label = "Block / Seed ID", default = addFarmItemBuf, maxLen = 12 },
+        }, "Tambah & Simpan", function(vals)
+            local wn = trimStr(vals.f_world or ""):upper()
+            local dn = trimStr(vals.f_door or ""):upper()
+            local iid = math.floor(tonumber(vals.f_item) or tonumber(c.default_item_id) or 4584)
             if iid <= 0 then iid = 4584 end
-            c.default_item_id = iid; addFarmItemBuf = tostring(iid)
+            c.default_item_id = iid
+            addFarmItemBuf = tostring(iid)
             if wn ~= "" then
-                table.insert(st.rows, { name = wn, door = dn, item_id = iid, status = "Ready" })
-                HV.saveData(); uiNotice = "Ditambah: " .. wn .. " (ID " .. iid .. ")"
+                local p = { name = wn, door = dn, item_id = iid, status = "Ready" }
+                table.insert(st.rows, p); addFarmWorldBuf = ""; HV.saveData()
+                uiNotice = "Tersimpan: " .. wn .. " (ID " .. tostring(iid) .. ")"
             end
         end)
     end)
 
-    local chW, vW = safeInput("World:Door##hvw", addFarmWorldBuf, 96)
-    if chW then addFarmWorldBuf = vW end
-    local chI, vI = safeInput("Item ID##hvi", addFarmItemBuf, 16)
-    if chI then addFarmItemBuf = vI; local n = tonumber(vI); if n and n > 0 then c.default_item_id = math.floor(n); HV.saveData() end end
+    if ImGui.BeginTable("BorenHarvestAddW", 2) then
+        ImGui.TableSetupColumn("World:DoorID")
+        ImGui.TableSetupColumn("Item ID (Block/Seed)")
+        ImGui.TableHeadersRow()
+        ImGui.TableNextRow()
+        ImGui.TableSetColumnIndex(0)
+        ImGui.PushItemWidth(math.max(120, math.floor(w * 0.56)))
+        local chW, nvW = safeInput("##hv_add_w", addFarmWorldBuf, 256)
+        ImGui.PopItemWidth()
+        if chW then addFarmWorldBuf = nvW end
 
-    if autoBtn("+ Add##hv_add") then
-        local iid = math.floor(tonumber(addFarmItemBuf) or c.default_item_id or 4584)
-        c.default_item_id = iid
-        local p = parseFarmRow(addFarmWorldBuf .. ":" .. tostring(iid))
-        if p then table.insert(st.rows, p); addFarmWorldBuf = ""; HV.saveData(); uiNotice = "Tambah " .. p.name end
+        ImGui.TableSetColumnIndex(1)
+        ImGui.PushItemWidth(math.max(80, math.floor(w * 0.34)))
+        local chI, nvI = safeInput("##hv_add_item", addFarmItemBuf, 64)
+        ImGui.PopItemWidth()
+        if chI then
+            addFarmItemBuf = nvI:gsub("[^0-9]", "")
+            local n = tonumber(addFarmItemBuf)
+            if n and n > 0 then c.default_item_id = math.floor(n); HV.saveData() end
+        end
+        ImGui.EndTable()
     end
-    ImGui.SameLine()
-    if autoBtn("+ World Ini##hv_cw") then
-        runAsync(function()
-            local cw = getCurrentWorldSafe()
-            if cw ~= "" then
-                local iid = math.floor(tonumber(addFarmItemBuf) or c.default_item_id or 4584)
-                table.insert(st.rows, { name = cw, door = "", item_id = iid, status = "Ready" })
-                HV.saveData(); uiNotice = "Tambah world aktif: " .. cw
+    uiGap(4)
+
+    local act = uiActionBar("BorenHarvestActs", w, {
+        { label = "+ Tambah##hv_add", style = "accent" },
+        { label = "World Ini##hv_cur" },
+        { label = "Paste List##hv_pst" },
+        { label = "Copy List##hv_cpy" },
+        { label = "Hapus##hv_del",    style = "muted" },
+    })
+
+    if act == 1 then
+        local rawW = trimStr(addFarmWorldBuf)
+        local p = nil
+        if rawW ~= "" then
+            local norm = rawW:gsub("|", ":")
+            local colons = 0
+            for _ in norm:gmatch(":") do colons = colons + 1 end
+            if colons >= 2 then
+                p = parseFarmRow(norm)
+            else
+                local wPart, dPart = norm:match("^([^:]+):(.*)$")
+                local wName = trimStr(wPart or norm):upper()
+                local dId   = trimStr(dPart or ""):upper()
+                local iid   = math.floor(tonumber(addFarmItemBuf) or tonumber(c.default_item_id) or 4584)
+                if iid <= 0 then iid = 4584 end
+                if wName ~= "" then p = { name = wName, door = dId, item_id = iid, status = "Ready" } end
             end
+        end
+        if p then
+            table.insert(st.rows, p); addFarmWorldBuf = ""; HV.saveData()
+            uiNotice = "Tersimpan: " .. p.name .. " (ID " .. tostring(p.item_id) .. ")"
+        else uiNotice = "Isi World:DoorID dulu!" end
+
+    elseif act == 2 then
+        runAsync(function()
+            local curW = getCurrentWorldSafe()
+            if curW ~= "" and curW ~= "EXIT" then
+                local iid = math.floor(tonumber(addFarmItemBuf) or tonumber(c.default_item_id) or 4584)
+                table.insert(st.rows, { name = curW, door = "", item_id = iid, status = "Ready" })
+                HV.saveData(); uiNotice = "World aktif ditambah: " .. curW
+            else uiNotice = "Masuk ke world dulu!" end
         end)
-    end
-    ImGui.SameLine()
-    if autoBtn("Paste List##hv_pst") then
+
+    elseif act == 3 then
         local added = 0
         for _, line in ipairs(readClipLines()) do
             local p = parseFarmRow(line)
             if p then table.insert(st.rows, p); added = added + 1 end
         end
         if added > 0 then HV.saveData() end
-        uiNotice = "Paste berhasil: +" .. added .. " world."
-    end
-    ImGui.SameLine()
-    if autoBtn("Copy List##hv_cpy") and ImGui.SetClipboardText then
-        local out = {}
-        for _, r in ipairs(st.rows) do table.insert(out, string.format("%s:%s:%d", r.name, r.door or "", r.item_id or c.default_item_id)) end
-        pcall(ImGui.SetClipboardText, table.concat(out, "\n"))
-        uiNotice = "Copied " .. #out .. " world."
-    end
-    ImGui.SameLine()
-    if autoBtn("Hapus Dipilih##hv_del") and st.selected_idx > 0 and st.rows[st.selected_idx] then
-        table.remove(st.rows, st.selected_idx); st.selected_idx = 0; HV.saveData(); uiNotice = "Baris dihapus."
+        uiNotice = "Paste berhasil: +" .. tostring(added) .. " world."
+
+    elseif act == 4 then
+        if ImGui and ImGui.SetClipboardText then
+            local out = {}
+            for _, r in ipairs(st.rows) do
+                table.insert(out, string.format("%s:%s:%d", r.name, r.door or "", r.item_id or c.default_item_id))
+            end
+            pcall(ImGui.SetClipboardText, table.concat(out, "\n"))
+            uiNotice = "Disalin " .. tostring(#out) .. " world ke clipboard."
+        end
+
+    elseif act == 5 then
+        if st.selected_idx > 0 and st.rows[st.selected_idx] then
+            table.remove(st.rows, st.selected_idx); st.selected_idx = 0; HV.saveData()
+            uiNotice = "World terpilih dihapus."
+        else
+            uiNotice = "Pilih baris world di tabel dulu!"
+        end
     end
 end
 
 local function renderSaveSub()
     local c, st = HV.CFG, HV.STATE
-    uiSectionKetik("Multi-World Save Block/Seed (WORLD:DOOR, ...)", "hv_ktk_sw", function()
-        uiOpenDlg("boren_in_hv_sw", "Save Worlds Block/Seed", {
-            { id = "sw", label = "List Save World (pisah koma)", default = c.save_worlds_raw, maxLen = 512 },
-            { id = "lim", label = "Limit Item/World (0=unlimited)", default = tostring(c.save_limit), maxLen = 16 },
+    local w = availX()
+
+    uiSection("Multi-World Save Block / Seed", true)
+    uiNote(uiNotice)
+
+    uiSectionWithKetik("Daftar Save World Block (Koma / Baris)", "hv_ktk_sw", function()
+        uiOpenDialog("boren_in_hv_sw", "Save Worlds Block / Seed", {
+            { id = "sw", label = "List Save World (WORLD:DOOR, ...)", default = c.save_worlds_raw, maxLen = 512 },
+            { id = "lim", label = "Limit Item/World (0 = tanpa limit)", default = tostring(c.save_limit), maxLen = 16 },
         }, "Simpan", function(v)
             c.save_worlds_raw = trimStr(v.sw or "")
-            local n = tonumber(v.lim); if n and n >= 0 then c.save_limit = math.floor(n); saveLimitBuf = tostring(c.save_limit) end
-            HV.saveData(); uiNotice = "Save World diperbarui."
+            local n = tonumber(v.lim)
+            if n and n >= 0 then c.save_limit = math.floor(n); saveLimitBuf = tostring(c.save_limit) end
+            HV.saveData(); uiNotice = "Save World berhasil disimpan."
         end)
-    end, true)
+    end)
 
-    local chSW, vSW = safeInput("Save Worlds##hv_sw", c.save_worlds_raw, 512)
+    ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
+    local chSW, vSW = safeInput("##hv_sw", c.save_worlds_raw, 512)
+    ImGui.PopItemWidth()
     if chSW then c.save_worlds_raw = vSW; HV.saveData() end
-    ImGui.SameLine()
-    if autoBtn("Paste##hv_swp") then
+
+    uiGap(3)
+    local actSw = uiActionBar("BorenHarvestSwActs", w, {
+        { label = "Paste Save##hv_swp", style = "accent" },
+        { label = "+ World Ini##hv_swc" },
+        { label = "Reset Status Penuh##hv_rfull" },
+    })
+    if actSw == 1 then
         local list = parseWorldList(c.save_worlds_raw)
         for _, ln in ipairs(readClipLines()) do
             local p = parseWorldDoor(ln); if p then table.insert(list, p) end
         end
-        c.save_worlds_raw = joinWorldList(list); HV.saveData(); uiNotice = "Paste Save World OK (" .. #list .. ")."
-    end
-
-    ImGui.Text("Pisah Save World Seed :"); ImGui.SameLine()
-    if uiToggleBtn(c.separate_seed_save, "hv_seps", "PISAH", "GABUNG") then
-        c.separate_seed_save = not c.separate_seed_save; HV.saveData()
-    end
-    if c.separate_seed_save then
-        local chSS, vSS = safeInput("Save Seed Worlds##hv_ssw", c.seed_save_raw, 512)
-        if chSS then c.seed_save_raw = vSS; HV.saveData() end
-    end
-
-    local chL, vL = safeInput("Limit Item / World##hv_lim", saveLimitBuf, 16)
-    if chL then
-        saveLimitBuf = vL
-        local n = tonumber(vL); if n and n >= 0 then c.save_limit = math.floor(n); HV.saveData() end
-    end
-    ImGui.Text("Hitung Limit :"); ImGui.SameLine()
-    if uiToggleBtn(c.limit_block_only, "hv_lblk", "BLOCK SAJA", "BLOCK + SEED") then
-        c.limit_block_only = not c.limit_block_only; HV.saveData()
-    end
-    ImGui.Text("Drop saat tas >= " .. tostring(c.drop_threshold))
-    ImGui.SameLine()
-    if autoBtn("-20##hv_dt1") then c.drop_threshold = math.max(20, c.drop_threshold - 20); HV.saveData() end
-    ImGui.SameLine()
-    if autoBtn("+20##hv_dt2") then c.drop_threshold = math.min(200, c.drop_threshold + 20); HV.saveData() end
-    ImGui.SameLine()
-    if autoBtn("Reset Penuh##hv_rfull") then
+        c.save_worlds_raw = joinWorldList(list); HV.saveData(); uiNotice = "Paste Save World OK (" .. tostring(#list) .. " world)."
+    elseif actSw == 2 then
+        runAsync(function()
+            local cw = getCurrentWorldSafe()
+            if cw ~= "" and cw ~= "EXIT" then
+                local list = parseWorldList(c.save_worlds_raw)
+                table.insert(list, { name = cw, door = "" })
+                c.save_worlds_raw = joinWorldList(list); HV.saveData(); uiNotice = "Save World ditambah: " .. cw
+            else uiNotice = "Masuk ke world dulu!" end
+        end)
+    elseif actSw == 3 then
         st.full_save_map = {}; st.full_seed_map = {}; st.save_world_idx = 1; st.seed_world_idx = 1
         uiNotice = "Penanda save world penuh di-reset."
     end
+
+    uiGap(4)
+    uiSection("Opsi Pemisahan Seed & Limit Drop")
+
+    ImGui.Text("Pisah Save World Seed  :"); ImGui.SameLine()
+    if uiToggleBtn(c.separate_seed_save, "hv_seps", "PISAH (SEPARATE)", "GABUNG (1 WORLD)") then
+        c.separate_seed_save = not c.separate_seed_save; HV.saveData()
+    end
+
+    if c.separate_seed_save then
+        uiGap(2)
+        ImGui.Text("Save World Khusus Seed (WORLD:DOOR, ...):")
+        ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
+        local chSS, vSS = safeInput("##hv_ssw", c.seed_save_raw, 512)
+        ImGui.PopItemWidth()
+        if chSS then c.seed_save_raw = vSS; HV.saveData() end
+    end
+
+    uiGap(3)
+    ImGui.Text("Hitung Limit Drop      :"); ImGui.SameLine()
+    if uiToggleBtn(c.limit_block_only, "hv_lblk", "BLOCK SAJA", "BLOCK + SEED") then
+        c.limit_block_only = not c.limit_block_only; HV.saveData()
+    end
+
+    uiGap(3)
+    ImGui.Text("Limit Item per World   : " .. (c.save_limit == 0 and "Unlimited" or (tostring(c.save_limit) .. " item")))
+    ImGui.SameLine()
+    if autoBtn(" 10.000 ##hv_l10k") then c.save_limit = 10000; saveLimitBuf = "10000"; HV.saveData() end
+    ImGui.SameLine()
+    if autoBtn(" 20.000 ##hv_l20k") then c.save_limit = 20000; saveLimitBuf = "20000"; HV.saveData() end
+    ImGui.SameLine()
+    if autoBtn(" Unlimited ##hv_lunl") then c.save_limit = 0; saveLimitBuf = "0"; HV.saveData() end
+
+    uiGap(3)
+    ImGui.Text("Drop saat tas penuh    : >= " .. tostring(c.drop_threshold) .. " item")
+    ImGui.SameLine()
+    if autoBtn(" -20 ##hv_dt1") then c.drop_threshold = math.max(20, c.drop_threshold - 20); HV.saveData() end
+    ImGui.SameLine()
+    if autoBtn(" +20 ##hv_dt2") then c.drop_threshold = math.min(200, c.drop_threshold + 20); HV.saveData() end
 end
 
 local function renderEventSub()
     local c, st = HV.CFG, HV.STATE
-    uiSectionKetik("Event / Mooncake Save Worlds", "hv_ktk_ev", function()
-        uiOpenDlg("boren_in_hv_ev", "Event Save & Custom Item ID", {
-            { id = "ew", label = "Event Save Worlds (WORLD:DOOR,...)", default = c.event_worlds_raw, maxLen = 512 },
+    local w = availX()
+
+    uiSection("Save Khusus Event & Mooncake", true)
+    uiNote(uiNotice)
+
+    uiSectionWithKetik("Daftar Save World Event (Koma / Baris)", "hv_ktk_ev", function()
+        uiOpenDialog("boren_in_hv_ev", "Event Save & Custom Item ID", {
+            { id = "ew", label = "Event Save Worlds (WORLD:DOOR, ...)", default = c.event_worlds_raw, maxLen = 512 },
             { id = "ids", label = "List ID Item Event (pisah koma)", default = c.event_ids_raw, maxLen = 512 },
         }, "Simpan", function(v)
             c.event_worlds_raw = trimStr(v.ew or "")
             c.event_ids_raw    = trimStr(v.ids or "")
-            HV.saveData(); uiNotice = "Config Event disimpan."
+            HV.saveData(); uiNotice = "Konfigurasi Event berhasil disimpan."
         end)
-    end, true)
+    end)
 
-    local chEW, vEW = safeInput("Event Worlds##hv_ew", c.event_worlds_raw, 512)
+    ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
+    local chEW, vEW = safeInput("##hv_ew", c.event_worlds_raw, 512)
+    ImGui.PopItemWidth()
     if chEW then c.event_worlds_raw = vEW; HV.saveData() end
-    local chEI, vEI = safeInput("Event Item IDs##hv_ei", c.event_ids_raw, 512)
+
+    uiGap(3)
+    local actEv = uiActionBar("BorenHarvestEvActs", w, {
+        { label = "Paste Event##hv_evp", style = "accent" },
+        { label = "+ World Ini##hv_evc" },
+        { label = "Reset Penuh Event##hv_rev" },
+    })
+    if actEv == 1 then
+        local list = parseWorldList(c.event_worlds_raw)
+        for _, ln in ipairs(readClipLines()) do
+            local p = parseWorldDoor(ln); if p then table.insert(list, p) end
+        end
+        c.event_worlds_raw = joinWorldList(list); HV.saveData(); uiNotice = "Paste Event World OK (" .. tostring(#list) .. ")."
+    elseif actEv == 2 then
+        runAsync(function()
+            local cw = getCurrentWorldSafe()
+            if cw ~= "" and cw ~= "EXIT" then
+                local list = parseWorldList(c.event_worlds_raw)
+                table.insert(list, { name = cw, door = "" })
+                c.event_worlds_raw = joinWorldList(list); HV.saveData(); uiNotice = "Event World ditambah: " .. cw
+            else uiNotice = "Masuk ke world dulu!" end
+        end)
+    elseif actEv == 3 then
+        st.full_event_map = {}; st.event_world_idx = 1; uiNotice = "Status penuh save event di-reset."
+    end
+
+    uiGap(4)
+    uiSection("Daftar ID Item Event (Disimpan ke World Event)")
+    ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
+    local chEI, vEI = safeInput("##hv_ei", c.event_ids_raw, 512)
+    ImGui.PopItemWidth()
     if chEI then c.event_ids_raw = vEI; HV.saveData() end
-    ImGui.Text("Default Mooncake: 1058,1094,1096,1098,1828")
-    ImGui.Text("Drop Event saat tas >= " .. tostring(c.event_threshold))
+
+    uiGap(3)
+    ImGui.Text("Preset Cepat :")
     ImGui.SameLine()
-    if autoBtn("-20##hv_et1") then c.event_threshold = math.max(10, c.event_threshold - 20); HV.saveData() end
+    if autoBtn(" Preset Mooncake ##hv_pmc") then
+        c.event_ids_raw = "1058,1094,1096,1098,1828"
+        HV.saveData(); uiNotice = "Preset Mooncake (1058, 1094, 1096, 1098, 1828) diterapkan."
+    end
     ImGui.SameLine()
-    if autoBtn("+20##hv_et2") then c.event_threshold = math.min(200, c.event_threshold + 20); HV.saveData() end
+    if autoBtn(" Kosongkan ID ##hv_ceid") then
+        c.event_ids_raw = ""; HV.saveData(); uiNotice = "List ID event dikosongkan."
+    end
+
+    uiGap(3)
+    ImGui.Text("Drop Event saat tas    : >= " .. tostring(c.event_threshold) .. " item")
     ImGui.SameLine()
-    if autoBtn("Reset Penuh Event##hv_rev") then st.full_event_map = {}; st.event_world_idx = 1; uiNotice = "Reset penuh event OK." end
+    if autoBtn(" -20 ##hv_et1") then c.event_threshold = math.max(10, c.event_threshold - 20); HV.saveData() end
+    ImGui.SameLine()
+    if autoBtn(" +20 ##hv_et2") then c.event_threshold = math.min(200, c.event_threshold + 20); HV.saveData() end
 end
 
 local function renderGearSub()
     local c = HV.CFG
-    uiSectionKetik("Gear World (Magni / DCS / Harvester / Fuel)", "hv_ktk_gw", function()
-        uiOpenDlg("boren_in_hv_gw", "Setting Gear World", {
+    local w = availX()
+
+    uiSection("Gear World (Magni / DCS / Harvester / Fuel)", true)
+    uiNote(uiNotice)
+
+    uiSectionWithKetik("World Ambil Alat & Fuel (WORLD:DOOR)", "hv_ktk_gw", function()
+        uiOpenDialog("boren_in_hv_gw", "Setting Gear World", {
             { id = "gw", label = "Gear World (WORLD:DOOR)", default = c.gear_world, maxLen = 64 },
             { id = "fa", label = "Target Ambil Fuel Pack", default = tostring(c.fuel_target_amt), maxLen = 8 },
         }, "Simpan", function(v)
             c.gear_world = trimStr(v.gw or "")
             local n = tonumber(v.fa); if n and n >= 1 then c.fuel_target_amt = math.min(200, math.floor(n)) end
-            HV.saveData(); uiNotice = "Gear World disimpan."
+            HV.saveData(); uiNotice = "Gear World berhasil disimpan."
         end)
-    end, true)
+    end)
 
-    local chGW, vGW = safeInput("Gear World##hv_gw", c.gear_world, 128)
+    ImGui.PushItemWidth(math.max(160, math.floor(w * 0.72)))
+    local chGW, vGW = safeInput("##hv_gw", c.gear_world, 128)
+    ImGui.PopItemWidth()
     if chGW then c.gear_world = vGW; HV.saveData() end
+    ImGui.SameLine()
+    if autoBtn(" World Ini ##hv_gwc") then
+        runAsync(function()
+            local cw = getCurrentWorldSafe()
+            if cw ~= "" and cw ~= "EXIT" then
+                c.gear_world = cw .. ":"; HV.saveData(); uiNotice = "Gear World diset ke: " .. cw
+            else uiNotice = "Masuk ke world dulu!" end
+        end)
+    end
 
-    ImGui.Text("Magnifying Glass (" .. ITEM.MAGNI .. ") :"); ImGui.SameLine()
+    uiGap(4)
+    uiSection("Opsi Alat (Auto Equip)")
+
+    ImGui.Text("Magnifying Glass (1252)    :"); ImGui.SameLine()
     if uiToggleBtn(c.use_magni, "hv_mag") then c.use_magni = not c.use_magni; HV.saveData() end
 
-    ImGui.Text("Dreamcatcher Staff (" .. ITEM.DCS .. ") :"); ImGui.SameLine()
+    uiGap(2)
+    ImGui.Text("Dreamcatcher Staff (6840)  :"); ImGui.SameLine()
     if uiToggleBtn(c.use_dcs, "hv_dcs") then c.use_dcs = not c.use_dcs; HV.saveData() end
 
-    ImGui.Text("Harvester :"); ImGui.SameLine()
+    uiGap(2)
+    ImGui.Text("Harvester Tractor          :"); ImGui.SameLine()
     if uiToggleBtn(c.use_harvester, "hv_harv") then c.use_harvester = not c.use_harvester; HV.saveData() end
     if c.use_harvester then
         ImGui.SameLine()
         local isSor = (tonumber(c.harvester_id) == ITEM.SORROWS)
-        if autoBtn(isSor and "Sorrows (1966)##hv_ht" or "Normal (1830)##hv_ht") then
+        if autoBtn(isSor and " Tipe: Sorrows (1966) ##hv_ht" or " Tipe: Normal (1830) ##hv_ht") then
             c.harvester_id = isSor and ITEM.HARVESTER or ITEM.SORROWS; HV.saveData()
         end
     end
 
-    ImGui.Text("Auto Fuel Pack (" .. ITEM.FUEL_PACK .. ") :"); ImGui.SameLine()
-    if uiToggleBtn(c.use_fuel_pack, "hv_fuel") then c.use_fuel_pack = not c.use_fuel_pack; HV.saveData() end
-    ImGui.SameLine(); ImGui.Text("  Stop jika habis :"); ImGui.SameLine()
-    if uiToggleBtn(c.stop_if_no_fuel, "hv_stpf") then c.stop_if_no_fuel = not c.stop_if_no_fuel; HV.saveData() end
+    uiGap(4)
+    uiSection("Auto Fuel Pack (1746) & Fuel Guard")
 
-    ImGui.Text("Target Ambil Fuel: " .. tostring(c.fuel_target_amt))
+    ImGui.Text("Auto Ambil Fuel Pack       :"); ImGui.SameLine()
+    if uiToggleBtn(c.use_fuel_pack, "hv_fuel") then c.use_fuel_pack = not c.use_fuel_pack; HV.saveData() end
+
+    uiGap(2)
+    ImGui.Text("Proteksi Fuel Guard        :"); ImGui.SameLine()
+    if uiToggleBtn(c.stop_if_no_fuel, "hv_stpf", "STOP AMAN", "TERUSKAN") then
+        c.stop_if_no_fuel = not c.stop_if_no_fuel; HV.saveData()
+    end
+
+    uiGap(2)
+    ImGui.Text("Target Ambil Fuel          : " .. tostring(c.fuel_target_amt) .. " pack")
     ImGui.SameLine()
-    if autoBtn("-25##hv_fa1") then c.fuel_target_amt = math.max(25, c.fuel_target_amt - 25); HV.saveData() end
+    if autoBtn(" -25 ##hv_fa1") then c.fuel_target_amt = math.max(25, c.fuel_target_amt - 25); HV.saveData() end
     ImGui.SameLine()
-    if autoBtn("+25##hv_fa2") then c.fuel_target_amt = math.min(200, c.fuel_target_amt + 25); HV.saveData() end
+    if autoBtn(" +25 ##hv_fa2") then c.fuel_target_amt = math.min(200, c.fuel_target_amt + 25); HV.saveData() end
 end
 
 local function renderSettingsSub()
     local c = HV.CFG
-    uiSection("Pengaturan Harvest", true)
-    ImGui.Text("Ignore Gems (112) :"); ImGui.SameLine()
+
+    uiSection("Pengaturan Navigasi & Collect", true)
+
+    ImGui.Text("Ignore Gems (ID 112)       :"); ImGui.SameLine()
     if uiToggleBtn(c.ignore_gems, "hv_ig") then c.ignore_gems = not c.ignore_gems; HV.saveData() end
-    ImGui.SameLine(); ImGui.Text("  Auto Collect :"); ImGui.SameLine()
+
+    uiGap(2)
+    ImGui.Text("Auto Collect Block/Seed    :"); ImGui.SameLine()
     if uiToggleBtn(c.auto_collect, "hv_ac") then c.auto_collect = not c.auto_collect; HV.saveData() end
 
-    ImGui.Text("Take Floating (setelah tree habis) :"); ImGui.SameLine()
+    uiGap(2)
+    ImGui.Text("Take Floating (Sapu Sisa)  :"); ImGui.SameLine()
     if uiToggleBtn(c.take_floating, "hv_tf") then c.take_floating = not c.take_floating; HV.saveData() end
 
-    ImGui.Text("Mode Harvest :"); ImGui.SameLine()
+    uiGap(2)
+    ImGui.Text("Mode Traversal             :"); ImGui.SameLine()
     if uiToggleBtn(c.harvest_mode == "3zigzag", "hv_md", "3-ZIGZAG", "1-BY-1") then
         c.harvest_mode = (c.harvest_mode == "3zigzag") and "1by1" or "3zigzag"; HV.saveData()
     end
-    ImGui.SameLine(); ImGui.Text("  ModFly :"); ImGui.SameLine()
+
+    uiGap(2)
+    ImGui.Text("ModFly                     :"); ImGui.SameLine()
     if uiToggleBtn(c.use_modfly, "hv_mf") then c.use_modfly = not c.use_modfly; HV.saveData() end
 
-    ImGui.Text("Harvest Delay: " .. tostring(c.harvest_delay) .. " ms")
-    ImGui.SameLine()
-    if autoBtn("-20##hv_hd1") then c.harvest_delay = math.max(90, c.harvest_delay - 20); HV.saveData() end
-    ImGui.SameLine()
-    if autoBtn("+20##hv_hd2") then c.harvest_delay = math.min(500, c.harvest_delay + 20); HV.saveData() end
+    uiGap(4)
+    uiSection("Pacing Delay Riil (Milidetik)")
 
-    ImGui.Text("Step Delay: " .. tostring(c.step_delay) .. " ms")
+    ImGui.Text("Delay Harvest              : " .. tostring(c.harvest_delay) .. " ms")
     ImGui.SameLine()
-    if autoBtn("-20##hv_sd1") then c.step_delay = math.max(50, c.step_delay - 20); HV.saveData() end
+    if autoBtn(" -20 ##hv_hd1") then c.harvest_delay = math.max(90, c.harvest_delay - 20); HV.saveData() end
     ImGui.SameLine()
-    if autoBtn("+20##hv_sd2") then c.step_delay = math.min(400, c.step_delay + 20); HV.saveData() end
+    if autoBtn(" +20 ##hv_hd2") then c.harvest_delay = math.min(500, c.harvest_delay + 20); HV.saveData() end
+
+    uiGap(2)
+    ImGui.Text("Delay Langkah Bot          : " .. tostring(c.step_delay) .. " ms")
+    ImGui.SameLine()
+    if autoBtn(" -20 ##hv_sd1") then c.step_delay = math.max(50, c.step_delay - 20); HV.saveData() end
+    ImGui.SameLine()
+    if autoBtn(" +20 ##hv_sd2") then c.step_delay = math.min(400, c.step_delay + 20); HV.saveData() end
 end
 
 local function renderLogsSub()
     local st = HV.STATE
-    uiSection("Log & Preview Tas", true)
-    ImGui.Text(string.format("Tas -> Block: %d | Seed: %d | Event: %d | Fuel: %d",
+    local w = availX()
+
+    uiSection("Live Preview Tas & Log Panen", true)
+    ImGui.Text(string.format("Tas Saat Ini -> Block: %d | Seed: %d | Event: %d | Fuel: %d",
         st.inv_preview.block, st.inv_preview.seed, st.inv_preview.ev, st.inv_preview.fuel))
-    if autoBtn("Clear Log##hv_clg") then st.logs = {} end
+
+    uiGap(3)
+    if autoBtn(" Bersihkan Log ##hv_clg") then st.logs = {} end
     ImGui.Separator()
-    for i = 1, math.min(12, #st.logs) do
+
+    for i = 1, math.min(14, #st.logs) do
         if ImGui.TextWrapped then ImGui.TextWrapped(st.logs[i]) else ImGui.Text(st.logs[i]) end
     end
 end
 
 function HV.render(hub)
     HUB_REF = hub or HUB_REF
+    local w = availX()
     local tabs = {
-        { "farms", "Farm" }, { "save", "Save" }, { "event", "Event" },
-        { "gear", "Gear" }, { "set", "Settings" }, { "logs", "Logs" },
+        { "farms", "Farm List" },
+        { "save",  "Save World" },
+        { "event", "Event Save" },
+        { "gear",  "Gear & Fuel" },
+        { "set",   "Settings" },
+        { "logs",  "Logs" },
     }
     for i, tb in ipairs(tabs) do
         if i > 1 then ImGui.SameLine() end
