@@ -1268,10 +1268,6 @@ local function renderMainPanel()
 
     uiGap(2)
     uiSection("Tambah World Input Baru")
-    ImGui.SameLine()
-    if autoBtn("+ Dialog / Ketik##tf_btn_dlg_in") then
-        openAddInputDialog()
-    end
 
     ImGui.PushItemWidth(math.max(160, math.floor(availW * 0.44)))
     local chInW, nvInW = safeInputText("##tf_add_in_buf", st.add_input_w_buf, 256)
@@ -1281,9 +1277,7 @@ local function renderMainPanel()
     ImGui.SameLine()
     if autoBtn("+ Tambah Input##tf_add_in_btn") then
         local textToAdd = trimStr(st.add_input_w_buf or "")
-        if textToAdd == "" then
-            openAddInputDialog()
-        else
+        if textToAdd ~= "" then
             local parsed = parseWorldList(textToAdd)
             for _, pw in ipairs(parsed) do table.insert(st.input_queue, pw) end
             c.input_world_raw = formatWorldList(st.input_queue)
@@ -1384,10 +1378,6 @@ local function renderMainPanel()
 
     uiGap(2)
     uiSection("Tambah World Output Baru")
-    ImGui.SameLine()
-    if autoBtn("+ Dialog / Ketik##tf_btn_dlg_out") then
-        openAddOutputDialog()
-    end
 
     ImGui.PushItemWidth(math.max(160, math.floor(availW * 0.44)))
     local chOutW, nvOutW = safeInputText("##tf_add_out_buf", st.add_output_w_buf, 256)
@@ -1397,9 +1387,7 @@ local function renderMainPanel()
     ImGui.SameLine()
     if autoBtn("+ Tambah Output##tf_add_out_btn") then
         local textToAdd = trimStr(st.add_output_w_buf or "")
-        if textToAdd == "" then
-            openAddOutputDialog()
-        else
+        if textToAdd ~= "" then
             local parsed = parseWorldList(textToAdd)
             for _, pw in ipairs(parsed) do table.insert(st.output_queue, pw) end
             c.output_world_raw = formatWorldList(st.output_queue)

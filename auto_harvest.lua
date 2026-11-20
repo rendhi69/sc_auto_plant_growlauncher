@@ -58,6 +58,7 @@ HV.CFG = {
     fuel_target_amt    = 100,
     stop_if_no_fuel    = true,          -- Proteksi: stop aman jika Fuel Pack habis di tas & Gear World
     gear_equip_ids     = "6840, 1966",  -- List ID alat/gear to equip (DCS, Harvester, dll.)
+    use_dcs_harvester  = false,          -- Default OFF: Gunakan DCS & Harvester (Hand/Back)
     take_floating      = true,          -- Sapu sisa block/seed/event setelah tree habis
 }
 
@@ -297,6 +298,7 @@ function HV.saveData()
         "EVTH="     .. tostring(c.event_threshold),
         "GEARW="    .. tostring(c.gear_world or ""),
         "AMAGFUEL=" .. (c.auto_magni_fuel and "1" or "0"),
+        "USEDCS="   .. (c.use_dcs_harvester and "1" or "0"),
         "GEAREQUIP=".. tostring(c.gear_equip_ids or ""),
         "FUELAMT="  .. tostring(c.fuel_target_amt),
         "STPFUEL="  .. (c.stop_if_no_fuel and "1" or "0"),
@@ -344,6 +346,7 @@ function HV.loadData()
         elseif k == "EVTH" then c.event_threshold = tonumber(v) or 150
         elseif k == "GEARW" then c.gear_world = trimStr(v)
         elseif k == "AMAGFUEL" then c.auto_magni_fuel = (v == "1")
+        elseif k == "USEDCS" then c.use_dcs_harvester = (v == "1")
         elseif k == "GEAREQUIP" then c.gear_equip_ids = trimStr(v)
         elseif k == "FUELAMT" then c.fuel_target_amt = tonumber(v) or 100
         elseif k == "STPFUEL" then c.stop_if_no_fuel = (v ~= "0")
@@ -925,8 +928,8 @@ local function ensureGearAndFuel(returnFarm)
         end
     end
 
-    -- 2. Daftar ID Alat untuk Di-equip (DCS, Harvester, dll.)
-    local equipIDs = parseEquipIDs(c.gear_equip_ids)
+    -- 2. Daftar ID Alat untuk Di-equip (DCS, Harvester, dll.) HANYA jika toggle Gunakan DCS aktif!
+    local equipIDs = c.use_dcs_harvester and parseEquipIDs(c.gear_equip_ids) or {}
     for _, eqID in ipairs(equipIDs) do
         if getInvCount(eqID) <= 0 then
             table.insert(needed, { id = eqID, amt = 1, equip = true, name = "Gear " .. tostring(eqID) })
@@ -936,7 +939,9 @@ local function ensureGearAndFuel(returnFarm)
     -- Jika semua perlengkapan sudah ada di tas
     if #needed == 0 then
         if c.auto_magni_fuel and getInvCount(ITEM.MAGNI) > 0 then equipItem(ITEM.MAGNI); safeSleep(100) end
-        for _, eqID in ipairs(equipIDs) do if getInvCount(eqID) > 0 then equipItem(eqID); safeSleep(100) end end
+        if c.use_dcs_harvester then
+            for _, eqID in ipairs(equipIDs) do if getInvCount(eqID) > 0 then equipItem(eqID); safeSleep(100) end end
+        end
         return true
     end
 
@@ -945,7 +950,9 @@ local function ensureGearAndFuel(returnFarm)
         -- Gear World opsional! Equip perlengkapan yang ada di tas bila tersedia
         if c.auto_magni_fuel and getInvCount(ITEM.MAGNI) > 0 then equipItem(ITEM.MAGNI); safeSleep(100) end
         if getInvCount(ITEM.FUEL_PACK) > 0 and HV.STATE.need_fuel then equipItem(ITEM.FUEL_PACK); HV.STATE.need_fuel = false; safeSleep(100) end
-        for _, eqID in ipairs(equipIDs) do if getInvCount(eqID) > 0 then equipItem(eqID); safeSleep(100) end end
+        if c.use_dcs_harvester then
+            for _, eqID in ipairs(equipIDs) do if getInvCount(eqID) > 0 then equipItem(eqID); safeSleep(100) end end
+        end
         return true
     end
 
@@ -1441,11 +1448,7 @@ local function renderFarmsSub()
         end)
     end
 
-    uiSection("Tambah World Farm Baru")
-    ImGui.SameLine()
-    if autoBtn("+ Dialog / Ketik##hv_btn_dlg_w") then
-        openAddFarmDialog()
-    end
+    uiSectionWithKetik("Tambah World Farm Baru", "hv_ktk_w", openAddFarmDialog)
 
     if ImGui.BeginTable("BorenHarvestAddW", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -1482,7 +1485,7 @@ local function renderFarmsSub()
     if act == 1 then
         local rawW = trimStr(addFarmWorldBuf)
         if rawW == "" then
-            openAddFarmDialog()
+            uiNotice = "Isi World:DoorID dulu!"
         else
             local norm = rawW:gsub("|", ":")
             local colons = 0
@@ -1611,11 +1614,7 @@ local function renderSaveSub()
         end)
     end
 
-    uiSection("Tambah Save World Baru")
-    ImGui.SameLine()
-    if autoBtn("+ Dialog / Ketik##hv_btn_dlg_sw") then
-        openAddSaveDialog()
-    end
+    uiSectionWithKetik("Tambah Save World Baru", "hv_ktk_sw", openAddSaveDialog)
 
     if ImGui.BeginTable("BorenHarvestAddSwTbl", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -1662,7 +1661,7 @@ local function renderSaveSub()
     if act == 1 then
         local rawW = trimStr(addSaveWorldBuf)
         if rawW == "" then
-            openAddSaveDialog()
+            uiNotice = "Isi World Save dulu!"
         else
             local norm = rawW:gsub("|", ":")
             local colons = 0
@@ -1790,11 +1789,7 @@ local function renderEventSub()
         end)
     end
 
-    uiSection("Tambah Event World Baru")
-    ImGui.SameLine()
-    if autoBtn("+ Dialog / Ketik##hv_btn_dlg_ew") then
-        openAddEventDialog()
-    end
+    uiSectionWithKetik("Tambah Event World Baru", "hv_ktk_ew", openAddEventDialog)
 
     if ImGui.BeginTable("BorenHarvestAddEwTbl", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -1840,7 +1835,7 @@ local function renderEventSub()
     if act == 1 then
         local rawW = trimStr(addEventWorldBuf)
         if rawW == "" then
-            openAddEventDialog()
+            uiNotice = "Isi World Event dulu!"
         else
             local norm = rawW:gsub("|", ":")
             local colons = 0
@@ -1984,26 +1979,35 @@ local function renderGearSub()
     end
 
     uiGap(4)
-    uiSection("Daftar ID Alat untuk Di-equip (Hand / Back)")
-    ImGui.Text("List ID Item Equip (DCS, Harvester, dll. pisah koma):")
-    ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
-    local chEq, vEq = safeInput("##hv_eq_ids", c.gear_equip_ids, 256)
-    ImGui.PopItemWidth()
-    if chEq then c.gear_equip_ids = vEq; HV.saveData() end
+    uiSection("Equip DCS & Harvester (Hand / Back)")
+    ImGui.Text("Gunakan DCS & Harvester :"); ImGui.SameLine()
+    if uiToggleBtn(c.use_dcs_harvester, "hv_use_dcs") then
+        c.use_dcs_harvester = not c.use_dcs_harvester
+        HV.saveData()
+    end
 
-    uiGap(2)
-    ImGui.Text("Preset Cepat :")
-    ImGui.SameLine()
-    if autoBtn(" DCS + Sorrows (6840, 1966) ##eq_p1") then
-        c.gear_equip_ids = "6840, 1966"; HV.saveData(); uiNotice = "Preset DCS + Sorrows diterapkan."
-    end
-    ImGui.SameLine()
-    if autoBtn(" DCS + Normal (6840, 1830) ##eq_p2") then
-        c.gear_equip_ids = "6840, 1830"; HV.saveData(); uiNotice = "Preset DCS + Normal diterapkan."
-    end
-    ImGui.SameLine()
-    if autoBtn(" Sorrows Saja (1966) ##eq_p3") then
-        c.gear_equip_ids = "1966"; HV.saveData(); uiNotice = "Preset Sorrows saja diterapkan."
+    if c.use_dcs_harvester then
+        uiGap(2)
+        ImGui.Text("List ID Item Equip (DCS, Harvester, dll. pisah koma):")
+        ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
+        local chEq, vEq = safeInput("##hv_eq_ids", c.gear_equip_ids, 256)
+        ImGui.PopItemWidth()
+        if chEq then c.gear_equip_ids = vEq; HV.saveData() end
+
+        uiGap(2)
+        ImGui.Text("Preset Cepat :")
+        ImGui.SameLine()
+        if autoBtn(" DCS + Sorrows (6840, 1966) ##eq_p1") then
+            c.gear_equip_ids = "6840, 1966"; HV.saveData(); uiNotice = "Preset DCS + Sorrows diterapkan."
+        end
+        ImGui.SameLine()
+        if autoBtn(" DCS + Normal (6840, 1830) ##eq_p2") then
+            c.gear_equip_ids = "6840, 1830"; HV.saveData(); uiNotice = "Preset DCS + Normal diterapkan."
+        end
+        ImGui.SameLine()
+        if autoBtn(" Sorrows Saja (1966) ##eq_p3") then
+            c.gear_equip_ids = "1966"; HV.saveData(); uiNotice = "Preset Sorrows saja diterapkan."
+        end
     end
 end
 
