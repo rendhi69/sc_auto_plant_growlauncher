@@ -1,53 +1,33 @@
 -- ============================================================================
--- BOREN STORE - AUTO TRANSFER PRO (STANDALONE SCRIPT)
--- File: script/script code/auto_transfer.lua
+-- AUTO TRANSFER PRO - BOREN STORE (GROWLAUNCHER STANDALONE)
+-- File: auto_transfer.lua
 -- Fitur:
---   1. Mode Move (Enable ON, Vend OFF, Restock OFF) -> Pindah item dari Input ke Output World
---   2. Mode Auto Vend (Enable ON, Auto Vend ON) -> Deteksi vend, cek harga, beli & drop
---   3. Mode Restock (Enable ON, Restock ON) -> Ambil item dari Input World lalu restock vend di Output World (hingga 5.000 / 5k item)
---   4. Opsi Per Item (ON = X WL per item, OFF = X item per 1 WL)
---   5. Opsi Vertical (ON = pola kolom vertikal atas-bawah, OFF = pola horizontal kiri-kanan)
---   6. Anti-Scam & Validasi ID Ketat sebelum Buy
---   7. Format Input & Output World: WORLD atau WORLD:DOOR
---   8. Kuota & Budget Limit (Max item / Max WL)
---   9. Dual UI: Dear ImGui Standalone Window + Native Growlauncher 5-Tab Menu
+--   1. Mode Move (Enable ON, Vend OFF, Restock OFF) -> Pindah item dari Multi Input ke Multi Output World
+--   2. Mode Auto Vend (Enable ON, Auto Vend ON) -> Deteksi vend di Multi Input, cek harga, beli & drop di Multi Output
+--   3. Mode Restock (Enable ON, Restock ON) -> Ambil item dari Multi Input World lalu restock vend di Multi Output World (hingga 5.000 / 5k item)
+--   4. Multi-World Queue: Mendukung beberapa world dipisah koma (WORLD1|DOOR, WORLD2|DOOR) dengan queue manager & status antrian.
+--   5. Toggle Per Item: ON = X WL / 1 item (<= item_buy_price WL), OFF = X items / 1 WL (>= item_buy_price)
+--   6. Toggle Vertical: Scan & Drop urut vertikal (kolom atas-bawah) vs horizontal (baris kiri-kanan)
+--   7. Proteksi Anti-Scam: Verifikasi kesesuaian item ID dan harga vending machine
+--   8. Dual UI Interface: Standalone Dear ImGui window + Native Growlauncher 5-Tab Menu (/transfer)
 -- ============================================================================
 
-local function logMsg(msg)
-    if LogToConsole then pcall(LogToConsole, "`e[BOREN TRANSFER] `w" .. tostring(msg)) end
-end
-
-local function notifyMsg(msg)
-    if sendNotification then pcall(sendNotification, tostring(msg))
-    elseif growtopia and growtopia.notify then pcall(growtopia.notify, tostring(msg)) end
-end
-local TF = {
-    id      = "transfer",
-    label   = "Transfer",
-    VERSION = "1.0.0",
-    META    = {
-        type    = "boren_gl_feature",
-        id      = "transfer",
-        label   = "Transfer",
-        order   = 18,
-        enabled = true,
-    },
-}
+local TF = {}
 
 TF.CFG = {
-    -- Top Checkboxes (Sesuai Gambar)
-    enabled          = false,       -- Master switch
-    auto_vend        = false,       -- Auto Buy dari Vend
-    restock          = false,       -- Auto Restock ke Vend
-    per_item         = false,       -- false = X item / 1 WL, true = X WL / item
-    vertical         = false,       -- false = Horizontal row-first, true = Vertical col-first
+    -- Master Switch & Mode Toggles (Sesuai Gambar)
+    enabled          = false,       -- Master switch (START / STOP)
+    auto_vend        = false,       -- Auto Vend (Beli dari vend toko di input world)
+    restock          = false,       -- Restock (Isi vend toko di output world hingga 5k)
+    per_item         = false,       -- Per Item (ON = X WL/item, OFF = X item/1 WL)
+    vertical         = false,       -- Vertical Traversal (ON = kolom, OFF = baris)
 
     -- Form Nilai Item (Sesuai Gambar)
     item_id          = 4584,        -- Item ID target (contoh: 4584 Pepper Tree Block)
     item_price       = 0,           -- Item Price (referensi harga jual)
     item_buy_price   = 200,         -- Item Buy Price (batas harga beli)
 
-    -- World Input/Output (Sesuai Gambar, support WORLD:DOOR)
+    -- World Input/Output (Mendukung Multi-World dipisah koma: WORLD1:DOOR, WORLD2:DOOR)
     input_world_raw  = "",          -- Input World [Required]
     output_world_raw = "",          -- Output World [Required]
 
@@ -74,6 +54,14 @@ TF.STATE = {
     total_wl_spent   = 0,
     logs             = {},
 
+    -- Multi-World Queues
+    input_queue      = {},          -- { { name="W", door="D", raw="W|D", status="Ready"|"Active"|"Done" }, ... }
+    output_queue     = {},          -- { { name="W", door="D", raw="W|D", status="Ready"|"Active"|"Done" }, ... }
+    input_idx        = 1,
+    output_idx       = 1,
+    show_input_queue = false,
+    show_output_queue= false,
+
     -- Cache Vend yang sudah full / kosong di world aktif
     full_vends       = {},          -- map [ "x,y" ] = true (sudah 5k)
     empty_vends      = {},          -- map [ "x,y" ] = true (stok habis)
@@ -89,42 +77,61 @@ TF.STATE = {
     max_quota_buf    = "0",
     max_budget_buf   = "0",
 
-    -- Dialog Hook State
+    -- Dialog Hook Capture
+    last_dlg_text    = "",
     pending_vend_x   = -1,
     pending_vend_y   = -1,
-    last_dlg_text    = "",
-    last_dlg_time    = 0,
 }
 
-local HUB_REF = nil
 local CACHED_PATH = nil
 
--- Item Constants
-local ITEM = {
-    WL     = 242,
-    DL     = 1796,
-    BGL    = 7188,
-    VEND   = 2978,
-    DVEND  = 3234,
-    CYVEND = 8898,
-}
-
-local VEND_FG_SET = {
-    [2978] = true,
-    [3234] = true,
-    [8898] = true,
-}
-
 -- ============================================================================
--- 1. UTILITY & SAFE PATH DISCOVERY (ZERO HARDCODED PATHS)
+-- 1. UTILITY & STRING HELPERS
 -- ============================================================================
 local function trimStr(s)
     return tostring(s or ""):match("^%s*(.-)%s*$") or ""
 end
 
-local function cleanWorldName(w)
-    local s = trimStr(w):upper()
-    return s:gsub("[^A-Z0-9_]", "")
+local function cleanWorldName(s)
+    local c = trimStr(s):upper():gsub("[^A-Z0-9_]", "")
+    return c
+end
+
+local function parseWorldEntry(raw)
+    local s = trimStr(raw):gsub("|", ":")
+    if s == "" or s:sub(1, 1) == "#" then return nil end
+    local parts = {}
+    for tok in s:gmatch("[^:]+") do
+        table.insert(parts, trimStr(tok))
+    end
+    local w = cleanWorldName(parts[1] or "")
+    if w == "" then return nil end
+    local d = cleanWorldName(parts[2] or "")
+    return {
+        name   = w,
+        door   = d,
+        raw    = (d ~= "" and (w .. "|" .. d) or w),
+        status = "Ready",
+    }
+end
+
+local function parseWorldList(raw)
+    local list = {}
+    for tok in tostring(raw or ""):gmatch("[^,\r\n;]+") do
+        local p = parseWorldEntry(tok)
+        if p then table.insert(list, p) end
+    end
+    return list
+end
+
+local function formatWorldList(list)
+    local parts = {}
+    for _, item in ipairs(list or {}) do
+        if type(item) == "table" and item.raw and item.raw ~= "" then
+            table.insert(parts, item.raw)
+        end
+    end
+    return table.concat(parts, ", ")
 end
 
 local function parseWorldDoor(raw)
@@ -173,7 +180,7 @@ local function addLog(msg)
     local entry = ts .. "[TRANSFER] " .. clean
     table.insert(TF.STATE.logs, 1, entry)
     if #TF.STATE.logs > 70 then table.remove(TF.STATE.logs) end
-    if HUB_REF and HUB_REF.addLog then HUB_REF.addLog(entry) end
+    if LogToConsole then pcall(LogToConsole, "`9[TRANSFER] `0" .. clean) end
 end
 
 local function safeSleep(ms)
@@ -183,8 +190,16 @@ local function safeSleep(ms)
 end
 
 local function runAsync(fn)
-    if runCoroutine then pcall(runCoroutine, fn)
-    else coroutine.resume(coroutine.create(fn)) end
+    if run_coroutine then
+        pcall(run_coroutine, fn)
+    elseif runThread then
+        pcall(runThread, fn)
+    elseif task and task.spawn then
+        pcall(task.spawn, fn)
+    else
+        local co = coroutine.create(fn)
+        coroutine.resume(co)
+    end
 end
 
 -- ============================================================================
@@ -245,10 +260,12 @@ function TF.loadData()
         end
     end
 
-    -- Sync UI Buffers
+    -- Sync UI Buffers & Queues
     local st = TF.STATE
     st.input_w_buf    = c.input_world_raw
     st.output_w_buf   = c.output_world_raw
+    st.input_queue    = parseWorldList(c.input_world_raw)
+    st.output_queue   = parseWorldList(c.output_world_raw)
     st.item_id_buf    = tostring(c.item_id)
     st.item_price_buf = tostring(c.item_price)
     st.buy_price_buf  = tostring(c.item_buy_price)
@@ -267,22 +284,21 @@ local function getInvCount(itemID)
         if ok and type(inv) == "table" then
             for _, it in ipairs(inv) do
                 if (it.id == itemID or it.item_id == itemID) then
-                    return tonumber(it.amount or it.count) or 0
-                end
-            end
-            for _, it in pairs(inv) do
-                if type(it) == "table" and (it.id == itemID or it.item_id == itemID) then
-                    return tonumber(it.amount or it.count) or 0
+                    return tonumber(it.count or it.amount) or 0
                 end
             end
         end
     end
+    if inventory and inventory.getItemCount then
+        local ok, cnt = pcall(inventory.getItemCount, itemID)
+        if ok and tonumber(cnt) then return tonumber(cnt) end
+    end
     if GetInventory then
         local ok, inv = pcall(GetInventory)
         if ok and type(inv) == "table" then
-            for _, it in pairs(inv) do
-                if type(it) == "table" and (it.id == itemID or it.item_id == itemID) then
-                    return tonumber(it.amount or it.count) or 0
+            for _, it in ipairs(inv) do
+                if (it.id == itemID or it.item_id == itemID) then
+                    return tonumber(it.count or it.amount) or 0
                 end
             end
         end
@@ -290,109 +306,71 @@ local function getInvCount(itemID)
     return 0
 end
 
-local function getTotalWLs()
-    local wls = getInvCount(ITEM.WL)
-    local dls = getInvCount(ITEM.DL)
-    local bgls = getInvCount(ITEM.BGL)
-    return wls + (dls * 100) + (bgls * 10000)
-end
-
-local function getCurrentWorld()
-    if getCurrentWorldName then
-        local ok, w = pcall(getCurrentWorldName)
-        if ok and type(w) == "string" and w ~= "" then return w:upper() end
-    end
-    if GetWorld then
-        local ok, w = pcall(GetWorld)
-        if ok and type(w) == "table" and w.name then return tostring(w.name):upper() end
-    end
-    return ""
-end
-
 local function getLocalPos()
-    if getLocal then
-        local ok, pl = pcall(getLocal)
-        if ok and type(pl) == "table" then
-            local x = tonumber(pl.pos_x or pl.x) or 0
-            local y = tonumber(pl.pos_y or pl.y) or 0
-            if x > 100 then x = math.floor(x / 32) end
-            if y > 100 then y = math.floor(y / 32) end
-            return x, y
+    if GetLocal then
+        local ok, me = pcall(GetLocal)
+        if ok and me and me.pos_x and me.pos_y then
+            return math.floor(me.pos_x / 32), math.floor(me.pos_y / 32)
         end
     end
-    if GetLocal then
-        local ok, pl = pcall(GetLocal)
-        if ok and type(pl) == "table" then
-            local x = tonumber(pl.pos_x or pl.x or pl.tileX) or 0
-            local y = tonumber(pl.pos_y or pl.y or pl.tileY) or 0
-            if x > 100 then x = math.floor(x / 32) end
-            if y > 100 then y = math.floor(y / 32) end
-            return x, y
+    if getLocal then
+        local ok, me = pcall(getLocal)
+        if ok and me and me.posX and me.posY then
+            return math.floor(me.posX / 32), math.floor(me.posY / 32)
         end
     end
     return 0, 0
 end
 
-local function findPathSafe(tx, ty)
-    if not TF.STATE.running then return false end
-    tx, ty = math.floor(tx), math.floor(ty)
-    if tx < 0 then tx = 0 elseif tx > 99 then tx = 99 end
-    if ty < 0 then ty = 0 elseif ty > 59 then ty = 59 end
-
-    if TF.CFG.use_modfly and setModFly then pcall(setModFly, true) end
-
-    if findPath then
-        local ok = pcall(findPath, tx, ty)
-        if ok then safeSleep(TF.CFG.step_delay or 110); return true end
+local function getCurrentWorld()
+    if GetWorld then
+        local ok, w = pcall(GetWorld)
+        if ok and w and w.name then return cleanWorldName(w.name) end
     end
-    if FindPath then
-        local ok = pcall(FindPath, tx, ty)
-        if ok then safeSleep(TF.CFG.step_delay or 110); return true end
+    if getWorld then
+        local ok, w = pcall(getWorld)
+        if ok and w and w.name then return cleanWorldName(w.name) end
     end
-    return false
+    return ""
 end
 
-local function enterDoor(doorID)
-    doorID = cleanWorldName(doorID)
-    if doorID == "" then return true end
-    safeSleep(150)
-    if sendPacket then
-        pcall(sendPacket, 2, "action|enter_door\ndoor_id|" .. doorID)
-    end
-    safeSleep(300)
+local function findPathSafe(tx, ty)
+    if not TF.STATE.running then return false end
+    if findPath then pcall(findPath, tx, ty)
+    elseif FindPath then pcall(FindPath, tx, ty) end
+    safeSleep(TF.CFG.step_delay or 110)
     return true
 end
 
 local function warpTo(worldRaw)
-    local wName, doorID = parseWorldDoor(worldRaw)
-    if wName == "" then return false end
-    if getCurrentWorld() == wName then
-        if doorID ~= "" then enterDoor(doorID) end
-        return true
-    end
+    local w, d = parseWorldDoor(worldRaw)
+    if w == "" then return false end
 
-    addLog("Warp ke " .. wName .. (doorID ~= "" and (":" .. doorID) or "") .. "...")
-    TF.STATE.status_text = "Warping " .. wName .. "..."
+    local cur = getCurrentWorld()
+    if cur == w and d == "" then return true end
 
-    for attempt = 1, 5 do
-        if not TF.STATE.running then return false end
-        if sendPacket then
-            pcall(sendPacket, 3, "action|join_request\nname|" .. wName .. "\ninvitedWorld|0")
-        elseif warp then
-            pcall(warp, wName)
+    local target = (d ~= "") and (w .. "|" .. d) or w
+    addLog("Warp ke " .. target .. "...")
+    TF.STATE.status_text = "Warping ke " .. target .. "..."
+
+    if warp then pcall(warp, target)
+    elseif Warp then pcall(Warp, target)
+    elseif SendPacket then pcall(SendPacket, 3, "action|join_request\nname|" .. target .. "\ninvitedWorld|0")
+    elseif sendPacket then pcall(sendPacket, 3, "action|join_request\nname|" .. target .. "\ninvitedWorld|0") end
+
+    local startWait = os.time and os.time() or 0
+    local timeout = (TF.CFG.warp_delay or 4500) / 1000 + 4
+    while TF.STATE.running do
+        safeSleep(500)
+        local nw = getCurrentWorld()
+        if nw == w then
+            safeSleep(1000)
+            return true
         end
-
-        local waited = 0
-        local targetWait = TF.CFG.warp_delay or 4500
-        while waited < targetWait do
-            if not TF.STATE.running then return false end
-            safeSleep(200)
-            waited = waited + 200
-            if getCurrentWorld() == wName then
-                safeSleep(800)
-                if doorID ~= "" then enterDoor(doorID) end
-                return true
-            end
+        local now = os.time and os.time() or 0
+        if (now - startWait) > timeout then
+            addLog("`4Warp timeout ke " .. target)
+            return false
         end
     end
     return false
@@ -401,44 +379,34 @@ end
 -- ============================================================================
 -- 4. DROP & COLLECT ENGINE
 -- ============================================================================
-local function collectFloatingItem(targetID, maxRange)
+local function collectFloatingItem(itemID, range)
     if not TF.STATE.running then return 0 end
-    targetID = tonumber(targetID) or 0
-    maxRange = tonumber(maxRange) or 3
-    local collected = 0
+    itemID = tonumber(itemID) or 0
+    range = range or 2
+    local px, py = getLocalPos()
 
     local objs = nil
-    if getObjects then
-        local ok, r = pcall(getObjects)
-        if ok and type(r) == "table" then objs = r end
-    end
-    if (not objs) and GetObjects then
-        local ok, r = pcall(GetObjects)
-        if ok and type(r) == "table" then objs = r end
-    end
+    if getObjects then pcall(function() objs = getObjects() end) end
+    if (not objs) and GetObjects then pcall(function() objs = GetObjects() end) end
     if type(objs) ~= "table" then return 0 end
 
-    local myX, myY = getLocalPos()
+    local collected = 0
     for _, o in pairs(objs) do
         if not TF.STATE.running then break end
         if type(o) == "table" then
             local oid = tonumber(o.id or o.item_id or o.itemID) or 0
-            if targetID <= 0 or oid == targetID then
+            if oid == itemID or itemID == 0 then
                 local ox = tonumber(o.pos_x or o.x) or 0
                 local oy = tonumber(o.pos_y or o.y) or 0
                 if ox > 100 then ox = math.floor(ox / 32) end
                 if oy > 100 then oy = math.floor(oy / 32) end
 
-                if math.abs(ox - myX) <= maxRange and math.abs(oy - myY) <= maxRange then
-                    if sendPacketRaw then
-                        pcall(sendPacketRaw, {
-                            type  = 11,
-                            value = tonumber(o.uid or o.obj_id or o.oid) or 0,
-                            x     = ox * 32,
-                            y     = oy * 32,
-                        })
-                        collected = collected + 1
-                    end
+                if math.abs(ox - px) <= range and math.abs(oy - py) <= range then
+                    local uid = tonumber(o.uid or o.object_id or o.id) or 0
+                    if collectObject then pcall(collectObject, uid)
+                    elseif CollectObject then pcall(CollectObject, uid) end
+                    collected = collected + 1
+                    safeSleep(60)
                 end
             end
         end
@@ -495,111 +463,81 @@ local function getTilesList()
     return list
 end
 
--- Cari semua vending machine di world aktif, urutkan sesuai toggle Vertical/Horizontal
-local function findVendingTiles(isVertical)
-    local vends = {}
+local function isVendingMachine(itemID)
+    itemID = tonumber(itemID) or 0
+    return (itemID == 2978 or itemID == 3234 or itemID == 8898)
+end
+
+local function findVendingTiles(vertical)
     local tiles = getTilesList()
-    for _, t in pairs(tiles) do
+    local vends = {}
+    for _, t in ipairs(tiles) do
         if type(t) == "table" then
             local fg = tonumber(t.fg or t.foreground) or 0
-            if VEND_FG_SET[fg] then
-                local tx = tonumber(t.x or t.pos_x) or 0
-                local ty = tonumber(t.y or t.pos_y) or 0
-                table.insert(vends, { x = tx, y = ty, fg = fg })
+            if isVendingMachine(fg) then
+                table.insert(vends, { x = t.x, y = t.y, fg = fg })
             end
         end
     end
-
-    if isVertical then
-        -- Vertical: urut kolom demi kolom (atas ke bawah, lalu kolom sebelah)
+    if vertical then
         table.sort(vends, function(a, b)
-            if a.x ~= b.x then return a.x < b.x end
-            return a.y < b.y
+            if a.x == b.x then return a.y < b.y end
+            return a.x < b.x
         end)
     else
-        -- Horizontal: urut baris demi baris (kiri ke kanan, lalu baris bawah)
         table.sort(vends, function(a, b)
-            if a.y ~= b.y then return a.y < b.y end
-            return a.x < b.x
+            if a.y == b.y then return a.x < b.x end
+            return a.y < b.y
         end)
     end
     return vends
 end
 
-local function wrenchTile(tx, ty)
+local function wrenchTile(x, y)
     if not TF.STATE.running then return false end
-    tx, ty = math.floor(tx), math.floor(ty)
-    if wrench then
-        pcall(wrench, tx, ty)
-        return true
+    if wrench then pcall(wrench, x, y)
+    elseif Wrench then pcall(Wrench, x, y)
+    elseif sendPacketRaw then
+        pcall(sendPacketRaw, false, { type = 7, value = 18, px = x * 32, py = y * 32, x = x * 32, y = y * 32 })
     end
-    if sendPacketRaw then
-        -- Send wrench / tool packet (type 3, value 32)
-        pcall(sendPacketRaw, {
-            type  = 3,
-            value = 32,
-            px    = tx,
-            py    = ty,
-            x     = tx * 32,
-            y     = ty * 32,
-        })
-        return true
-    end
-    return false
+    return true
 end
 
-local function punchTileWithItem(tx, ty, itemID)
+local function punchTileWithItem(x, y, itemID)
     if not TF.STATE.running then return false end
-    tx, ty = math.floor(tx), math.floor(ty)
-    -- Di Growtopia, memukul vend sambil memegang item akan otomatis merestock vend tsb
-    if sendPacketRaw then
-        pcall(sendPacketRaw, {
-            type  = 3,
-            value = tonumber(itemID) or 18,
-            px    = tx,
-            py    = ty,
-            x     = tx * 32,
-            y     = ty * 32,
-        })
-        return true
-    end
-    return false
-end
-
--- Hook Variant untuk menangkap OnDialogRequest dari Vending Machine
-function TF.handleVariant(var)
-    if not TF.STATE.running then return false end
-    if type(var) ~= "table" then return false end
-    local fn = tostring(var[0] or "")
-    if fn ~= "OnDialogRequest" then return false end
-
-    local payload = tostring(var[1] or "")
-    if payload:find("vending", 1, true) or payload:find("vend", 1, true) then
-        TF.STATE.last_dlg_text = payload
-        TF.STATE.last_dlg_time = os and os.time and os.time() or 0
-    end
-    return false
+    if punch then pcall(punch, x, y, itemID)
+    elseif Punch then pcall(Punch, x, y)
+    elseif placeTile then pcall(placeTile, x, y, itemID)
+    elseif PlaceTile then pcall(PlaceTile, x, y, itemID) end
+    return true
 end
 
 -- ============================================================================
--- 6. CORE LOGIC RUNNER (3 MODES)
+-- 6. CORE LOGIC RUNNER (MULTI-WORLD & 3 MODES)
 -- ============================================================================
 
--- MODE 1: PURE MOVE BLOCK / SEED (Input -> Output)
+-- MODE 1: PURE MOVE BLOCK / SEED (Multi-World Input -> Multi-World Output)
 local function runMoveBlockEngine()
-    addLog("`2[MODE 1] Move Item dimulai: " .. TF.CFG.input_world_raw .. " -> " .. TF.CFG.output_world_raw)
+    local inQ  = TF.STATE.input_queue
+    local outQ = TF.STATE.output_queue
     local targetID = TF.CFG.item_id
 
-    while TF.STATE.running do
-        -- 1. Pergi ke Input World
-        if not warpTo(TF.CFG.input_world_raw) then
-            addLog("`4Gagal masuk Input World, coba lagi...")
+    addLog(string.format("`2[MODE 1] Move Item Multi-World: %d Input World -> %d Output World", #inQ, #outQ))
+
+    while TF.STATE.running and TF.STATE.input_idx <= #inQ and TF.STATE.output_idx <= #outQ do
+        local curIn  = inQ[TF.STATE.input_idx]
+        local curOut = outQ[TF.STATE.output_idx]
+        curIn.status  = "Active"
+        curOut.status = "Active"
+
+        -- 1. Pergi ke Input World aktif
+        if not warpTo(curIn.raw) then
+            addLog(string.format("`4Gagal masuk Input World: %s, coba lagi...", curIn.raw))
             safeSleep(2000)
         else
-            TF.STATE.status_text = "Scanning item di Input World..."
+            TF.STATE.status_text = string.format("[%d/%d] Scan item di %s...", TF.STATE.input_idx, #inQ, curIn.name)
             safeSleep(800)
 
-            -- Scan & ambil item target
             local objs = nil
             if getObjects then pcall(function() objs = getObjects() end) end
             if (not objs) and GetObjects then pcall(function() objs = GetObjects() end) end
@@ -619,7 +557,7 @@ local function runMoveBlockEngine()
                             if ox > 100 then ox = math.floor(ox / 32) end
                             if oy > 100 then oy = math.floor(oy / 32) end
 
-                            TF.STATE.status_text = string.format("Mengambil item (%d,%d)...", ox, oy)
+                            TF.STATE.status_text = string.format("[%d/%d] Ambil item (%d,%d) di %s...", TF.STATE.input_idx, #inQ, ox, oy, curIn.name)
                             findPathSafe(ox, oy)
                             collectFloatingItem(targetID, 3)
                             safeSleep(150)
@@ -630,43 +568,66 @@ local function runMoveBlockEngine()
             end
 
             myBag = getInvCount(targetID)
+
+            -- Jika tidak ada floating item lagi di Input World ini dan tas kosong
             if myBag <= 0 and not foundAny then
-                addLog("`eSemua item target di Input World telah habis diambil!")
-                TF.STATE.status_text = "Input World Kosong"
-                break
+                addLog(string.format("`e[Multi World] Input World '%s' telah KOSONG!", curIn.name))
+                curIn.status = "Done"
+                TF.STATE.input_idx = TF.STATE.input_idx + 1
+                if TF.STATE.input_idx <= #inQ then
+                    addLog(string.format("`3[Multi World] Pindah ke Input World berikutnya (%d/%d): %s", TF.STATE.input_idx, #inQ, inQ[TF.STATE.input_idx].name))
+                end
             end
 
-            -- 2. Jika tas berisi item, bawa ke Output World
+            -- 2. Jika tas berisi item, bawa ke Output World aktif
             if myBag > 0 then
-                TF.STATE.status_text = "Membawa " .. myBag .. " item ke Output World..."
-                if warpTo(TF.CFG.output_world_raw) then
+                TF.STATE.status_text = string.format("[%d/%d] Bawa %d item ke Output: %s...", TF.STATE.output_idx, #outQ, myBag, curOut.name)
+                if warpTo(curOut.raw) then
                     safeSleep(800)
-                    -- Cari petak aman untuk drop (skip door spawn x=2)
                     local curX, curY = getLocalPos()
                     local dropX = (curX <= 3) and (curX + 3) or curX
                     local dropY = curY
                     findPathSafe(dropX, dropY)
                     safeSleep(200)
 
-                    TF.STATE.status_text = "Dropping item..."
-                    dropItemSafe(targetID, TF.CFG.drop_batch or 200)
+                    TF.STATE.status_text = "Dropping item di " .. curOut.name .. "..."
+                    local okDrop = dropItemSafe(targetID, TF.CFG.drop_batch or 200)
                     safeSleep(300)
+
+                    if not okDrop and getInvCount(targetID) > 0 then
+                        addLog(string.format("`e[Multi World] Output World '%s' gagal drop (Penuh/Batas). Pindah ke Output World berikutnya!", curOut.name))
+                        curOut.status = "Done/Full"
+                        TF.STATE.output_idx = TF.STATE.output_idx + 1
+                        if TF.STATE.output_idx <= #outQ then
+                            addLog(string.format("`3[Multi World] Pindah ke Output World (%d/%d): %s", TF.STATE.output_idx, #outQ, outQ[TF.STATE.output_idx].name))
+                        end
+                    end
                 end
             end
         end
         safeSleep(500)
     end
+
+    if TF.STATE.input_idx > #inQ then
+        addLog("`2[Multi World] Semua Input World telah selesai dipindahkan (Semua Kosong)!")
+        TF.STATE.status_text = "Semua Input World Selesai"
+    elseif TF.STATE.output_idx > #outQ then
+        addLog("`2[Multi World] Semua Output World telah terisi (Semua Selesai/Penuh)!")
+        TF.STATE.status_text = "Semua Output World Selesai"
+    end
 end
 
--- MODE 2: AUTO VEND (BUY & DROP)
+-- MODE 2: AUTO VEND (BUY & DROP DENGAN MULTI-WORLD)
 local function runAutoVendBuyEngine()
-    addLog("`2[MODE 2] Auto Vend Buy dimulai di " .. TF.CFG.input_world_raw)
+    local inQ  = TF.STATE.input_queue
+    local outQ = TF.STATE.output_queue
     local targetID = TF.CFG.item_id
     local maxBuyPrice = TF.CFG.item_buy_price
     local isPerItem = TF.CFG.per_item
 
-    while TF.STATE.running do
-        -- Cek budget limit
+    addLog(string.format("`2[MODE 2] Auto Vend Buy Multi-World: %d Input World -> %d Output World", #inQ, #outQ))
+
+    while TF.STATE.running and TF.STATE.input_idx <= #inQ and TF.STATE.output_idx <= #outQ do
         if TF.CFG.max_wl_budget > 0 and TF.STATE.total_wl_spent >= TF.CFG.max_wl_budget then
             addLog("`eBatas budget WL telah tercapai (" .. TF.STATE.total_wl_spent .. " WL). Berhenti.")
             break
@@ -676,10 +637,15 @@ local function runAutoVendBuyEngine()
             break
         end
 
-        if not warpTo(TF.CFG.input_world_raw) then
+        local curIn  = inQ[TF.STATE.input_idx]
+        local curOut = outQ[TF.STATE.output_idx]
+        curIn.status  = "Active"
+        curOut.status = "Active"
+
+        if not warpTo(curIn.raw) then
             safeSleep(2000)
         else
-            TF.STATE.status_text = "Memindai Vending Machine..."
+            TF.STATE.status_text = string.format("[%d/%d] Memindai Vend di %s...", TF.STATE.input_idx, #inQ, curIn.name)
             safeSleep(800)
             local vends = findVendingTiles(TF.CFG.vertical)
             local boughtInRound = 0
@@ -688,48 +654,39 @@ local function runAutoVendBuyEngine()
                 if not TF.STATE.running then break end
                 local key = v.x .. "," .. v.y
                 if not TF.STATE.empty_vends[key] and not TF.STATE.scam_vends[key] then
-                    -- Dekati vend
-                    TF.STATE.status_text = string.format("Cek vend (%d,%d)...", v.x, v.y)
+                    TF.STATE.status_text = string.format("[%d/%d] Cek vend (%d,%d) di %s...", TF.STATE.input_idx, #inQ, v.x, v.y, curIn.name)
                     findPathSafe(v.x, v.y - 1)
                     safeSleep(TF.CFG.step_delay or 110)
 
-                    -- Buka dialog vend
                     TF.STATE.last_dlg_text = ""
                     TF.STATE.pending_vend_x = v.x
                     TF.STATE.pending_vend_y = v.y
                     wrenchTile(v.x, v.y)
                     safeSleep(TF.CFG.vend_delay or 250)
 
-                    -- Validasi teks dialog
                     local dlg = TF.STATE.last_dlg_text
                     if dlg ~= "" then
-                        -- 1. Anti-scam: Cek apakah item_id cocok
                         local foundID = tonumber(dlg:match("embed_data|item_id|(%d+)") or dlg:match("embed_data|itemID|(%d+)"))
                         if foundID and foundID ~= targetID then
                             addLog(string.format("`4[ANTI-SCAM] Vend (%d,%d) menjual item ID %d (Bukan target %d)! Dilewati.", v.x, v.y, foundID, targetID))
                             TF.STATE.scam_vends[key] = true
                         else
-                            -- 2. Cek stok
                             local stock = tonumber(dlg:match("embed_data|stock|(%d+)") or dlg:match("embed_data|count|(%d+)")) or 0
                             if stock <= 0 then
                                 TF.STATE.empty_vends[key] = true
                             else
-                                -- 3. Cek harga
                                 local vPrice = tonumber(dlg:match("embed_data|price|(%d+)")) or 0
                                 local vCount = tonumber(dlg:match("embed_data|count|(%d+)") or dlg:match("embed_data|item_count|(%d+)")) or 1
 
                                 local priceOk = false
                                 if isPerItem then
-                                    -- Per item: harga harus <= maxBuyPrice WL
                                     if vPrice > 0 and vPrice <= maxBuyPrice then priceOk = true end
                                 else
-                                    -- X items / 1 WL: jumlah item per 1 WL harus >= maxBuyPrice
                                     if vCount >= maxBuyPrice then priceOk = true end
                                 end
 
                                 if priceOk then
-                                    -- Beli dari vend
-                                    addLog(string.format("Membeli item ID %d di vend (%d,%d)...", targetID, v.x, v.y))
+                                    addLog(string.format("Membeli item ID %d di vend (%d,%d) %s...", targetID, v.x, v.y, curIn.name))
                                     if sendPacket then
                                         pcall(sendPacket, 2, "action|dialog_return\ndialog_name|vending\nbuttonClicked|buy")
                                         safeSleep(300)
@@ -750,13 +707,21 @@ local function runAutoVendBuyEngine()
 
                     -- Jika tas penuh, pergi ke Output World untuk drop
                     if getInvCount(targetID) >= 200 then
-                        if warpTo(TF.CFG.output_world_raw) then
+                        if warpTo(curOut.raw) then
                             safeSleep(800)
                             local curX, curY = getLocalPos()
                             findPathSafe(curX + 3, curY)
-                            dropItemSafe(targetID, 200)
+                            local okDrop = dropItemSafe(targetID, 200)
                             safeSleep(300)
-                            warpTo(TF.CFG.input_world_raw)
+                            if not okDrop and getInvCount(targetID) > 0 then
+                                addLog(string.format("`e[Multi World] Output World '%s' penuh, pindah ke output berikutnya!", curOut.name))
+                                curOut.status = "Done/Full"
+                                TF.STATE.output_idx = TF.STATE.output_idx + 1
+                                if TF.STATE.output_idx <= #outQ then
+                                    curOut = outQ[TF.STATE.output_idx]
+                                end
+                            end
+                            warpTo(curIn.raw)
                             safeSleep(800)
                         end
                     end
@@ -764,27 +729,52 @@ local function runAutoVendBuyEngine()
             end
 
             if boughtInRound == 0 then
-                addLog("`eTidak ada lagi vend yang memenuhi kriteria harga/stok.")
-                TF.STATE.status_text = "Semua Vend Selesai"
-                break
+                addLog(string.format("`e[Multi World] Tidak ada lagi vend yang memenuhi kriteria di %s.", curIn.name))
+                curIn.status = "Done"
+                TF.STATE.input_idx = TF.STATE.input_idx + 1
+                TF.STATE.empty_vends = {}
+                TF.STATE.scam_vends  = {}
+                if TF.STATE.input_idx <= #inQ then
+                    addLog(string.format("`3[Multi World] Beralih ke Input World (%d/%d): %s", TF.STATE.input_idx, #inQ, inQ[TF.STATE.input_idx].name))
+                end
             end
         end
         safeSleep(500)
     end
+
+    local sisa = getInvCount(targetID)
+    if sisa > 0 and TF.STATE.output_idx <= #outQ then
+        local curOut = outQ[TF.STATE.output_idx]
+        if warpTo(curOut.raw) then
+            safeSleep(800)
+            local curX, curY = getLocalPos()
+            findPathSafe(curX + 3, curY)
+            dropItemSafe(targetID, sisa)
+            safeSleep(300)
+        end
+    end
 end
 
--- MODE 3: AUTO RESTOCK VEND (Input Storage -> Output Vend 5k Full)
+-- MODE 3: AUTO RESTOCK VEND (MULTI-WORLD INPUT STORAGE -> MULTI-WORLD OUTPUT VEND 5K FULL)
 local function runRestockEngine()
-    addLog("`2[MODE 3] Auto Restock dimulai ke " .. TF.CFG.output_world_raw .. " (Target Max: 5.000 / 5k per vend)")
+    local inQ  = TF.STATE.input_queue
+    local outQ = TF.STATE.output_queue
     local targetID = TF.CFG.item_id
     local maxCap = TF.CFG.vend_max_cap or 5000
 
-    while TF.STATE.running do
-        -- 1. Ambil item dari Input World jika tas kosong
+    addLog(string.format("`2[MODE 3] Auto Restock Multi-World: %d Input Storage -> %d Output Toko (Target Max: 5.000 / 5k per vend)", #inQ, #outQ))
+
+    while TF.STATE.running and TF.STATE.input_idx <= #inQ and TF.STATE.output_idx <= #outQ do
+        local curIn  = inQ[TF.STATE.input_idx]
+        local curOut = outQ[TF.STATE.output_idx]
+        curIn.status  = "Active"
+        curOut.status = "Active"
+
+        -- 1. Ambil stok dari curIn jika tas kurang dari 100
         local myBag = getInvCount(targetID)
         if myBag < 100 then
-            TF.STATE.status_text = "Mengambil stok di Input World..."
-            if not warpTo(TF.CFG.input_world_raw) then
+            TF.STATE.status_text = string.format("[%d/%d] Ambil stok di %s...", TF.STATE.input_idx, #inQ, curIn.name)
+            if not warpTo(curIn.raw) then
                 safeSleep(2000)
             else
                 safeSleep(800)
@@ -792,71 +782,86 @@ local function runRestockEngine()
                 safeSleep(300)
                 myBag = getInvCount(targetID)
                 if myBag <= 0 then
-                    addLog("`eStok item di Input World telah habis!")
-                    TF.STATE.status_text = "Stok Habis"
-                    break
+                    addLog(string.format("`e[Multi World] Stok di Input World '%s' telah HABIS!", curIn.name))
+                    curIn.status = "Done/Empty"
+                    TF.STATE.input_idx = TF.STATE.input_idx + 1
+                    if TF.STATE.input_idx <= #inQ then
+                        addLog(string.format("`3[Multi World] Pindah ambil stok di Input World (%d/%d): %s", TF.STATE.input_idx, #inQ, inQ[TF.STATE.input_idx].name))
+                    else
+                        addLog("`4[Multi World] Semua Input World kehabisan stok! Selesai.")
+                        break
+                    end
                 end
             end
         end
 
-        -- 2. Pergi ke Output World untuk mengisi vending machine
-        if not warpTo(TF.CFG.output_world_raw) then
-            safeSleep(2000)
-        else
-            TF.STATE.status_text = "Memindai Vending Machine toko..."
-            safeSleep(800)
-            local vends = findVendingTiles(TF.CFG.vertical)
-            local restockedInRound = 0
+        -- 2. Restock di curOut jika memiliki stok di tas
+        myBag = getInvCount(targetID)
+        if myBag > 0 then
+            TF.STATE.status_text = string.format("[%d/%d] Isi Vend di %s...", TF.STATE.output_idx, #outQ, curOut.name)
+            if not warpTo(curOut.raw) then
+                safeSleep(2000)
+            else
+                safeSleep(800)
+                local vends = findVendingTiles(TF.CFG.vertical)
+                local restockedInRound = 0
 
-            for _, v in ipairs(vends) do
-                if not TF.STATE.running then break end
-                local key = v.x .. "," .. v.y
-                if not TF.STATE.full_vends[key] then
-                    myBag = getInvCount(targetID)
-                    if myBag <= 0 then break end -- Kembali ambil stok
+                for _, v in ipairs(vends) do
+                    if not TF.STATE.running then break end
+                    local key = v.x .. "," .. v.y
+                    if not TF.STATE.full_vends[key] then
+                        myBag = getInvCount(targetID)
+                        if myBag <= 0 then break end
 
-                    TF.STATE.status_text = string.format("Restock vend (%d,%d)...", v.x, v.y)
-                    findPathSafe(v.x, v.y - 1)
-                    safeSleep(TF.CFG.step_delay or 110)
+                        TF.STATE.status_text = string.format("[%d/%d] Restock vend (%d,%d) di %s...", TF.STATE.output_idx, #outQ, v.x, v.y, curOut.name)
+                        findPathSafe(v.x, v.y - 1)
+                        safeSleep(TF.CFG.step_delay or 110)
 
-                    -- Pukul vend sambil memegang item untuk memasukkan stok
-                    local before = getInvCount(targetID)
-                    punchTileWithItem(v.x, v.y, targetID)
-                    safeSleep(TF.CFG.vend_delay or 250)
+                        local before = getInvCount(targetID)
+                        punchTileWithItem(v.x, v.y, targetID)
+                        safeSleep(TF.CFG.vend_delay or 250)
 
-                    -- Coba juga opsi dialog restock jika punch biasa tidak berkurang
-                    local after = getInvCount(targetID)
-                    if after == before then
-                        wrenchTile(v.x, v.y)
-                        safeSleep(200)
-                        if sendPacket then
-                            pcall(sendPacket, 2, "action|dialog_return\ndialog_name|vend_edit\nbuttonClicked|addstock")
-                            pcall(sendPacket, 2, "action|dialog_return\ndialog_name|vending\nbuttonClicked|addstock")
+                        local after = getInvCount(targetID)
+                        if after == before then
+                            wrenchTile(v.x, v.y)
+                            safeSleep(200)
+                            if sendPacket then
+                                pcall(sendPacket, 2, "action|dialog_return\ndialog_name|vend_edit\nbuttonClicked|addstock")
+                                pcall(sendPacket, 2, "action|dialog_return\ndialog_name|vending\nbuttonClicked|addstock")
+                            end
+                            safeSleep(250)
+                            after = getInvCount(targetID)
                         end
-                        safeSleep(250)
-                        after = getInvCount(targetID)
-                    end
 
-                    if after < before then
-                        local stocked = before - after
-                        TF.STATE.total_restocked = TF.STATE.total_restocked + stocked
-                        restockedInRound = restockedInRound + 1
-                        addLog(string.format("Restock +%d item ke vend (%d,%d). Total: %d", stocked, v.x, v.y, TF.STATE.total_restocked))
-                    else
-                        -- Jika tas tidak berkurang sama sekali, vend kemungkinan besar sudah FULL 5k
-                        TF.STATE.full_vends[key] = true
-                        addLog(string.format("Vend (%d,%d) terdeteksi PENUH (5k limit). Menandai FULL.", v.x, v.y))
+                        if after < before then
+                            local stocked = before - after
+                            TF.STATE.total_restocked = TF.STATE.total_restocked + stocked
+                            restockedInRound = restockedInRound + 1
+                            addLog(string.format("Restock +%d item ke vend (%d,%d) di %s. Total: %d", stocked, v.x, v.y, curOut.name, TF.STATE.total_restocked))
+                        else
+                            TF.STATE.full_vends[key] = true
+                            addLog(string.format("Vend (%d,%d) di %s terdeteksi PENUH (5k limit). Menandai FULL.", v.x, v.y, curOut.name))
+                        end
                     end
                 end
-            end
 
-            if restockedInRound == 0 and myBag > 0 then
-                addLog("`2Semua vending machine di Output World telah terisi PENUH (5.000 / 5k item)!")
-                TF.STATE.status_text = "Semua Vend Full 5k"
-                break
+                if restockedInRound == 0 and myBag > 0 then
+                    addLog(string.format("`2[Multi World] Semua vend di '%s' telah PENUH 5.000 (5k)!", curOut.name))
+                    curOut.status = "Done (5k Full)"
+                    TF.STATE.output_idx = TF.STATE.output_idx + 1
+                    TF.STATE.full_vends = {}
+                    if TF.STATE.output_idx <= #outQ then
+                        addLog(string.format("`3[Multi World] Beralih mengisi Output World berikutnya (%d/%d): %s", TF.STATE.output_idx, #outQ, outQ[TF.STATE.output_idx].name))
+                    end
+                end
             end
         end
         safeSleep(500)
+    end
+
+    if TF.STATE.output_idx > #outQ then
+        addLog("`2[Multi World] Semua Output World telah terisi PENUH 5.000 (5k) item!")
+        TF.STATE.status_text = "Semua Vend Toko Selesai (5k Full)"
     end
 end
 
@@ -868,7 +873,6 @@ local function mainTransferLoop()
     TF.STATE.empty_vends = {}
     TF.STATE.scam_vends  = {}
 
-    -- Tentukan mode berdasarkan kombinasi checkbox
     if TF.CFG.auto_vend then
         runAutoVendBuyEngine()
     elseif TF.CFG.restock then
@@ -886,14 +890,25 @@ end
 
 function TF.start()
     if TF.STATE.running then return false end
-    if trimStr(TF.CFG.input_world_raw) == "" then
+    local inQ  = parseWorldList(TF.CFG.input_world_raw)
+    local outQ = parseWorldList(TF.CFG.output_world_raw)
+
+    if #inQ == 0 then
         addLog("`4Input World [Required] belum diisi!")
         return false
     end
-    if trimStr(TF.CFG.output_world_raw) == "" then
+    if #outQ == 0 then
         addLog("`4Output World [Required] belum diisi!")
         return false
     end
+
+    for _, w in ipairs(inQ) do w.status = "Ready" end
+    for _, w in ipairs(outQ) do w.status = "Ready" end
+    TF.STATE.input_queue  = inQ
+    TF.STATE.output_queue = outQ
+    TF.STATE.input_idx    = 1
+    TF.STATE.output_idx   = 1
+
     TF.saveData()
     runAsync(mainTransferLoop)
     return true
@@ -911,42 +926,22 @@ function TF.stop()
     return true
 end
 
-function TF.init(hub)
-    HUB_REF = hub
-    TF.loadData()
-end
-
 -- ============================================================================
--- 7. IMGUI UI RENDERER (IDENTIK DENGAN GAMBAR & STANDAR BOREN STORE)
+-- 7. IMGUI UI RENDERER (STANDALONE WINDOW)
 -- ============================================================================
 local function autoBtn(lbl)
     local ok, r = pcall(ImGui.Button, lbl)
     return ok and (r == true)
 end
 
-local function uiKit()
-    return HUB_REF and HUB_REF.ui_kit or nil
-end
-
 local function uiGap(px)
-    local k = uiKit()
-    if k and k.gap then k.gap(px); return end
     if ImGui and ImGui.Spacing then pcall(ImGui.Spacing) end
-end
-
-local function uiSection(title, skipTop)
-    local k = uiKit()
-    if k and k.section then k.section(title, skipTop); return end
-    if not skipTop then ImGui.Separator() end
-    if title and title ~= "" then ImGui.Text(title) end
 end
 
 local function renderMainPanel()
     local c = TF.CFG
     local st = TF.STATE
 
-    -- BARIS TOP CHECKBOXES (PERSIS GAMBAR)
-    -- [ ] Enable   [ ] Auto Vend   [ ] Restock   [ ] Per Item   [ ] Vertical
     ImGui.Text("Pengaturan Mode:")
     uiGap(2)
 
@@ -961,7 +956,7 @@ local function renderMainPanel()
     local chAV, vAV = ImGui.Checkbox("Auto Vend##tf_av", c.auto_vend)
     if chAV then
         c.auto_vend = vAV
-        if c.auto_vend then c.restock = false end -- Mutually exclusive
+        if c.auto_vend then c.restock = false end
         TF.saveData()
     end
     ImGui.SameLine()
@@ -985,7 +980,6 @@ local function renderMainPanel()
     ImGui.Separator()
     uiGap(6)
 
-    -- PENJELASAN MODE AKTIF
     local modeDesc = "Move Block/Seed (Input -> Output)"
     if c.auto_vend then
         modeDesc = "Auto Vend Buy (Beli dari Toko -> Drop di Output)"
@@ -1001,9 +995,7 @@ local function renderMainPanel()
     ImGui.Separator()
     uiGap(6)
 
-    -- FORM ANGKA DENGAN TOMBOL [-] [+] (PERSIS GAMBAR)
-
-    -- 1. Item ID
+    -- Item ID
     ImGui.Text("Item ID:")
     ImGui.PushItemWidth(140)
     local chIID, vIID = ImGui.InputText("##tf_iid", st.item_id_buf, 10)
@@ -1026,10 +1018,8 @@ local function renderMainPanel()
         TF.saveData()
     end
 
-    uiGap(4)
-
-    -- 2. Item Price
-    ImGui.Text("Item Price (Referensi):")
+    -- Item Price
+    ImGui.Text("Item Price:")
     ImGui.PushItemWidth(140)
     local chIP, vIP = ImGui.InputText("##tf_ip", st.item_price_buf, 10)
     ImGui.PopItemWidth()
@@ -1051,10 +1041,8 @@ local function renderMainPanel()
         TF.saveData()
     end
 
-    uiGap(4)
-
-    -- 3. Item Buy Price
-    ImGui.Text(c.per_item and "Item Buy Price (Max WL/item):" or "Item Buy Price (Min item/WL):")
+    -- Item Buy Price
+    ImGui.Text("Item Buy Price:")
     ImGui.PushItemWidth(140)
     local chIBP, vIBP = ImGui.InputText("##tf_ibp", st.buy_price_buf, 10)
     ImGui.PopItemWidth()
@@ -1080,45 +1068,112 @@ local function renderMainPanel()
     ImGui.Separator()
     uiGap(6)
 
-    -- INPUT WORLD & OUTPUT WORLD (PERSIS GAMBAR)
-    ImGui.Text("Input World [Required]:")
+    -- INPUT WORLD (MULTI-WORLD)
+    ImGui.Text("Input World [Required] (Bisa multi world dipisah koma):")
     ImGui.PushItemWidth(260)
-    local chIW, vIW = ImGui.InputText("##tf_iw", st.input_w_buf, 30)
+    local chIW, vIW = ImGui.InputText("##tf_iw", st.input_w_buf, 1024)
     ImGui.PopItemWidth()
     if chIW then
         st.input_w_buf = vIW
         c.input_world_raw = trimStr(vIW)
+        st.input_queue = parseWorldList(c.input_world_raw)
         TF.saveData()
     end
     ImGui.SameLine()
-    if autoBtn("World Saat Ini##tf_cur_in") then
+    if autoBtn("+ World Saat Ini##tf_cur_in") then
         local cw = getCurrentWorld()
         if cw ~= "" and cw ~= "EXIT" then
-            c.input_world_raw = cw
-            st.input_w_buf = cw
+            if c.input_world_raw == "" then c.input_world_raw = cw
+            else c.input_world_raw = c.input_world_raw .. ", " .. cw end
+            st.input_w_buf = c.input_world_raw
+            st.input_queue = parseWorldList(c.input_world_raw)
             TF.saveData()
         end
     end
+    ImGui.SameLine()
+    local inCount = #st.input_queue
+    if autoBtn(st.show_input_queue and "▲ Tutup Antrian##tf_inq_btn" or ("▼ Antrian (" .. inCount .. ")##tf_inq_btn")) then
+        st.show_input_queue = not st.show_input_queue
+    end
 
-    uiGap(4)
+    if st.show_input_queue then
+        ImGui.TextColored(0.4, 0.8, 1.0, 1.0, string.format("--- Daftar Antrian Input World (%d World) ---", inCount))
+        if inCount == 0 then
+            ImGui.Text("Belum ada Input World. Masukkan nama world di atas (pisahkan koma).")
+        else
+            for i, w in ipairs(st.input_queue) do
+                local badge = (w.status == "Active") and "[PROSES]" or (w.status:match("^Done") and "[SELESAI]" or "[ANTRI]")
+                ImGui.Text(string.format(" %d. %s  %s", i, w.raw, badge))
+                ImGui.SameLine()
+                if autoBtn("Hapus##del_in_" .. i) then
+                    table.remove(st.input_queue, i)
+                    c.input_world_raw = formatWorldList(st.input_queue)
+                    st.input_w_buf = c.input_world_raw
+                    TF.saveData()
+                    break
+                end
+            end
+            if autoBtn("↺ Reset Status Antrian Input##reset_in_status") then
+                for _, w in ipairs(st.input_queue) do w.status = "Ready" end
+                st.input_idx = 1
+            end
+        end
+        uiGap(4)
+    end
 
-    ImGui.Text("Output World [Required]:")
+    uiGap(6)
+
+    -- OUTPUT WORLD (MULTI-WORLD)
+    ImGui.Text("Output World [Required] (Bisa multi world dipisah koma):")
     ImGui.PushItemWidth(260)
-    local chOW, vOW = ImGui.InputText("##tf_ow", st.output_w_buf, 30)
+    local chOW, vOW = ImGui.InputText("##tf_ow", st.output_w_buf, 1024)
     ImGui.PopItemWidth()
     if chOW then
         st.output_w_buf = vOW
         c.output_world_raw = trimStr(vOW)
+        st.output_queue = parseWorldList(c.output_world_raw)
         TF.saveData()
     end
     ImGui.SameLine()
-    if autoBtn("World Saat Ini##tf_cur_out") then
+    if autoBtn("+ World Saat Ini##tf_cur_out") then
         local cw = getCurrentWorld()
         if cw ~= "" and cw ~= "EXIT" then
-            c.output_world_raw = cw
-            st.output_w_buf = cw
+            if c.output_world_raw == "" then c.output_world_raw = cw
+            else c.output_world_raw = c.output_world_raw .. ", " .. cw end
+            st.output_w_buf = c.output_world_raw
+            st.output_queue = parseWorldList(c.output_world_raw)
             TF.saveData()
         end
+    end
+    ImGui.SameLine()
+    local outCount = #st.output_queue
+    if autoBtn(st.show_output_queue and "▲ Tutup Antrian##tf_outq_btn" or ("▼ Antrian (" .. outCount .. ")##tf_outq_btn")) then
+        st.show_output_queue = not st.show_output_queue
+    end
+
+    if st.show_output_queue then
+        ImGui.TextColored(0.4, 0.8, 1.0, 1.0, string.format("--- Daftar Antrian Output World (%d World) ---", outCount))
+        if outCount == 0 then
+            ImGui.Text("Belum ada Output World. Masukkan nama world di atas (pisahkan koma).")
+        else
+            for i, w in ipairs(st.output_queue) do
+                local badge = (w.status == "Active") and "[PROSES]" or (w.status:match("^Done") and "[SELESAI]" or "[ANTRI]")
+                ImGui.Text(string.format(" %d. %s  %s", i, w.raw, badge))
+                ImGui.SameLine()
+                if autoBtn("Hapus##del_out_" .. i) then
+                    table.remove(st.output_queue, i)
+                    c.output_world_raw = formatWorldList(st.output_queue)
+                    st.output_w_buf = c.output_world_raw
+                    TF.saveData()
+                    break
+                end
+            end
+            if autoBtn("↺ Reset Status Antrian Output##reset_out_status") then
+                for _, w in ipairs(st.output_queue) do w.status = "Ready" end
+                st.output_idx = 1
+            end
+        end
+        uiGap(4)
     end
 
     uiGap(10)
@@ -1138,321 +1193,173 @@ local function renderMainPanel()
     ImGui.SameLine()
     ImGui.Text("Status: " .. tostring(st.status_text))
 
-    -- STATISTIK REAL-TIME
     uiGap(4)
     ImGui.Text(string.format("Statistik -> Moved: %d | Bought: %d (%d WL) | Restocked: %d (Max Cap: 5k)",
         st.total_moved, st.total_bought, st.total_wl_spent, st.total_restocked))
 end
 
-local function renderAdvPanel()
+local function renderAdvancedPanel()
     local c = TF.CFG
     local st = TF.STATE
 
-    uiSection("Pengaturan Lanjutan & Batas Keamanan", true)
+    ImGui.Text("Pengaturan Lanjutan & Batas Pengaman:")
+    uiGap(4)
 
-    ImGui.Text("Target Batas Beli (Max Buy Quota, 0 = Tanpa Batas):")
+    ImGui.Text("Maksimal Kuota Pembelian (0 = Tanpa Batas):")
     ImGui.PushItemWidth(140)
-    local chQ, vQ = ImGui.InputText("##tf_quota", st.max_quota_buf, 10)
+    local chMQ, vMQ = ImGui.InputText("##tf_mq", st.max_quota_buf, 10)
     ImGui.PopItemWidth()
-    if chQ then
-        st.max_quota_buf = vQ
-        local n = tonumber(vQ)
+    if chMQ then
+        st.max_quota_buf = vMQ
+        local n = tonumber(vMQ)
         if n and n >= 0 then c.max_buy_quota = math.floor(n); TF.saveData() end
     end
 
-    uiGap(4)
-    ImGui.Text("Batas Maksimal Pengeluaran WL (Budget, 0 = Bebas):")
+    ImGui.Text("Maksimal Budget WL yang Dibelanjakan (0 = Tanpa Batas):")
     ImGui.PushItemWidth(140)
-    local chB, vB = ImGui.InputText("##tf_budget", st.max_budget_buf, 10)
+    local chMB, vMB = ImGui.InputText("##tf_mb", st.max_budget_buf, 10)
     ImGui.PopItemWidth()
-    if chB then
-        st.max_budget_buf = vB
-        local n = tonumber(vB)
+    if chMB then
+        st.max_budget_buf = vMB
+        local n = tonumber(vMB)
         if n and n >= 0 then c.max_wl_budget = math.floor(n); TF.saveData() end
     end
 
+    uiGap(6)
+    ImGui.Separator()
     uiGap(4)
+
     ImGui.Text("Kapasitas Maksimal Vending Machine: " .. tostring(c.vend_max_cap) .. " item (5k)")
     ImGui.Text("Ukuran Batch Drop per Petak: " .. tostring(c.drop_batch) .. " item")
 
-    uiGap(6)
-    ImGui.Separator()
-    uiGap(6)
-
-    local chMF, vMF = ImGui.Checkbox("Gunakan ModFly saat Bergerak##tf_mf", c.use_modfly)
+    local chMF, vMF = ImGui.Checkbox("Gunakan ModFly Saat Berpindah##tf_mf", c.use_modfly)
     if chMF then c.use_modfly = vMF; TF.saveData() end
 
-    local chAC, vAC = ImGui.Checkbox("Auto Collect Item Target##tf_ac", c.auto_collect)
+    local chAC, vAC = ImGui.Checkbox("Auto Collect Floating Item##tf_ac", c.auto_collect)
     if chAC then c.auto_collect = vAC; TF.saveData() end
-
-    uiGap(4)
-    ImGui.Text("Delay Langkah Bot : " .. tostring(c.step_delay) .. " ms")
-    ImGui.SameLine()
-    if autoBtn(" -20 ##tf_sd1") then c.step_delay = math.max(60, c.step_delay - 20); TF.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +20 ##tf_sd2") then c.step_delay = math.min(300, c.step_delay + 20); TF.saveData() end
-
-    uiGap(2)
-    ImGui.Text("Delay Warp World  : " .. tostring(c.warp_delay) .. " ms")
-    ImGui.SameLine()
-    if autoBtn(" -500 ##tf_wd1") then c.warp_delay = math.max(1500, c.warp_delay - 500); TF.saveData() end
-    ImGui.SameLine()
-    if autoBtn(" +500 ##tf_wd2") then c.warp_delay = math.min(10000, c.warp_delay + 500); TF.saveData() end
 end
 
 local function renderLogsPanel()
-    local st = TF.STATE
-    uiSection("Live Log Transfer", true)
-    if autoBtn(" Bersihkan Log ##tf_clg") then st.logs = {} end
-    ImGui.Separator()
-
-    for i = 1, math.min(16, #st.logs) do
-        if ImGui.TextWrapped then ImGui.TextWrapped(st.logs[i]) else ImGui.Text(st.logs[i]) end
+    ImGui.Text("Log Aktivitas Transfer:")
+    uiGap(2)
+    if autoBtn("Bersihkan Log##tf_clr_log") then
+        TF.STATE.logs = {}
+    end
+    uiGap(4)
+    if #TF.STATE.logs == 0 then
+        ImGui.Text("Belum ada log.")
+    else
+        for i, l in ipairs(TF.STATE.logs) do
+            ImGui.Text(l)
+            if i >= 35 then break end
+        end
     end
 end
 
+local function drawMainWindow()
+    if not ImGui then return end
+    ImGui.Begin("Boren Transfer Pro - Multi World", true)
 
-local function renderTransferBody()
-    local tabs = {
-        { "main", "Transfer Panel" },
-        { "adv",  "Advance & Budget" },
-        { "logs", "Logs" },
-    }
-    for i, tb in ipairs(tabs) do
-        if i > 1 then ImGui.SameLine() end
-        local active = (TF.STATE.active_sub == tb[1])
-        if autoBtn((active and "[ " or "  ") .. tb[2] .. (active and " ]" or "  ") .. "##tf_tab_" .. tb[1]) then
-            TF.STATE.active_sub = tb[1]
-        end
+    local sub = TF.STATE.active_sub or "main"
+    if autoBtn(sub == "main" and "[ Panel Utama ]##sub_main" or "Panel Utama##sub_main") then
+        TF.STATE.active_sub = "main"
     end
-    ImGui.Separator()
+    ImGui.SameLine()
+    if autoBtn(sub == "adv" and "[ Pengaturan Lanjut ]##sub_adv" or "Pengaturan Lanjut##sub_adv") then
+        TF.STATE.active_sub = "adv"
+    end
+    ImGui.SameLine()
+    if autoBtn(sub == "logs" and "[ Log Bot ]##sub_logs" or "Log Bot##sub_logs") then
+        TF.STATE.active_sub = "logs"
+    end
 
-    if TF.STATE.active_sub == "main" then
+    uiGap(6)
+    ImGui.Separator()
+    uiGap(6)
+
+    if sub == "main" then
         renderMainPanel()
-    elseif TF.STATE.active_sub == "adv" then
-        renderAdvPanel()
-    else
+    elseif sub == "adv" then
+        renderAdvancedPanel()
+    elseif sub == "logs" then
         renderLogsPanel()
     end
+
+    ImGui.End()
 end
 
 -- ============================================================================
--- 8. STANDALONE DEAR IMGUI WINDOW
+-- 8. NATIVE GROWLAUNCHER 5-TAB MENU INTEGRATION
 -- ============================================================================
-function onDrawImGui()
-    if not ImGui or not ImGui.Begin then return end
-    pcall(function()
-        local opened = ImGui.Begin("BOREN STORE - AUTO TRANSFER PRO v" .. TF.VERSION)
-        if opened then
-            renderTransferBody()
-            ImGui.End()
-        end
+local function setupNativeMenu()
+    if not interface or not interface.add_tab then return end
+
+    interface.add_tab("Transfer: Mode", function(ui)
+        ui:addLabel("=== AUTO TRANSFER PRO (BOREN STORE) ===")
+        ui:addLabel("Mode Operasi:")
+        ui:addToggle("Enable (START / STOP)", TF.CFG.enabled, "tf_toggle_en", false)
+        ui:addToggle("Auto Vend (Beli dari Toko)", TF.CFG.auto_vend, "tf_toggle_av", false)
+        ui:addToggle("Restock (Isi Vend sampai 5k Full)", TF.CFG.restock, "tf_toggle_rs", false)
+        ui:addToggle("Per Item (ON = X WL/item, OFF = Rate)", TF.CFG.per_item, "tf_toggle_pi", false)
+        ui:addToggle("Vertical Traversal (Kolom Atas-Bawah)", TF.CFG.vertical, "tf_toggle_vt", false)
+    end)
+
+    interface.add_tab("Transfer: Target", function(ui)
+        ui:addLabel("=== PENGATURAN TARGET ITEM ===")
+        ui:addInputInt("Item ID", 1, 999999, TF.CFG.item_id or 4584, "tf_input_item_id")
+        ui:addInputInt("Item Price (Referensi)", 0, 99999, TF.CFG.item_price or 0, "tf_input_price")
+        ui:addInputInt("Item Buy Price (Batas)", 1, 99999, TF.CFG.item_buy_price or 200, "tf_input_buy_price")
+    end)
+
+    interface.add_tab("Transfer: Worlds", function(ui)
+        ui:addLabel("=== DAFTAR MULTI-WORLD ===")
+        ui:addInputText("Input World (Pisahkan Koma)", TF.CFG.input_world_raw or "", "tf_in_world")
+        ui:addInputText("Output World (Pisahkan Koma)", TF.CFG.output_world_raw or "", "tf_out_world")
+        ui:addLabel(string.format("Antrian Saat Ini -> Input: %d World | Output: %d World", #TF.STATE.input_queue, #TF.STATE.output_queue))
+    end)
+
+    interface.add_tab("Transfer: Budget", function(ui)
+        ui:addLabel("=== PENGATURAN BUDGET & LIMIT ===")
+        ui:addInputInt("Maksimal Kuota Beli (0 = Unlimit)", 0, 999999, TF.CFG.max_buy_quota or 0, "tf_max_quota")
+        ui:addInputInt("Maksimal Budget WL (0 = Unlimit)", 0, 999999, TF.CFG.max_wl_budget or 0, "tf_max_budget")
+    end)
+
+    interface.add_tab("Transfer: Log", function(ui)
+        ui:addLabel("=== STATUS & LOG AKTIVITAS ===")
+        ui:addLabel("Status: " .. tostring(TF.STATE.status_text))
+        ui:addLabel(string.format("Moved: %d | Bought: %d | Restocked: %d (5k)", TF.STATE.total_moved, TF.STATE.total_bought, TF.STATE.total_restocked))
     end)
 end
-OnDrawImGui = onDrawImGui
 
 -- ============================================================================
--- 9. NATIVE GROWLAUNCHER MULTI-TAB MENU & ONVALUE HANDLER
+-- 9. HOOK PACKET / DIALOG CAPTURE
 -- ============================================================================
-local function createNativeUI(subName, icon)
-    if UserInterface and UserInterface.new then
-        local ok, ui = pcall(UserInterface.new, subName, icon or "PlayArrow")
-        if ok and ui then return ui end
-    end
-    local dummy = { items = {} }
-    function dummy:addLabelApp(t, ic) table.insert(self.items, string.format('{"type":"labelapp","text":"%s","icon":"%s"}', t, ic or "Storefront")) end
-    function dummy:addButton(t, al) table.insert(self.items, string.format('{"type":"button","text":"%s","alias":"%s"}', t, al)) end
-    function dummy:addToggleButton(t, d, al) table.insert(self.items, string.format('{"type":"toggle_button","text":"%s","default":%s,"alias":"%s"}', t, d and "true" or "false", al)) end
-    function dummy:addToggle(t, d, al, ov) table.insert(self.items, string.format('{"type":"toggle","text":"%s","default":%s,"alias":"%s"}', t, d and "true" or "false", al)) end
-    function dummy:addDivider() table.insert(self.items, '{"type":"divider"}') end
-    function dummy:addLabel(t) table.insert(self.items, string.format('{"type":"label","text":"%s"}', t)) end
-    function dummy:addInputString(t, v, l, h, ic, al) table.insert(self.items, string.format('{"type":"input_string","text":"%s","value":"%s","label":"%s","hint":"%s","icon":"%s","alias":"%s"}', t, v or "", l or "", h or "", ic or "Public", al)) end
-    function dummy:addInputInt(t, v, l, h, ic, al) table.insert(self.items, string.format('{"type":"input_int","text":"%s","value":"%s","label":"%s","hint":"%s","icon":"%s","alias":"%s"}', t, tostring(v or "0"), l or "", h or "", ic or "FormatListNumbered", al)) end
-    function dummy:addSlider(t, mn, mx, v, stp, f, al) table.insert(self.items, string.format('{"type":"slider","text":"%s","min":%d,"max":%d,"value":%d,"step":%d,"alias":"%s"}', t, mn, mx, v, stp or 1, al)) end
-    function dummy:generateJSON() return string.format('{"sub_name":"%s","icon":"%s","menu":[%s]}', subName, icon or "PlayArrow", table.concat(self.items, ",")) end
-    return dummy
-end
-
-local function registerNativeTransferUI()
-    if not addCategory or not addIntoModule then return end
-
-    -- TAB 1: START & MODE
-    local uiMode = createNativeUI("1. Start & Mode", "PlayArrow")
-    uiMode:addLabelApp("Boren Store - Auto Transfer v" .. TF.VERSION, "Storefront")
-    uiMode:addButton("▶ START TRANSFER BOT", "tf_btn_start")
-    uiMode:addButton("■ STOP TRANSFER BOT", "tf_btn_stop")
-    uiMode:addToggleButton("▶ START / ■ STOP TOGGLE", TF.STATE.running, "tf_run_power")
-    uiMode:addDivider()
-    uiMode:addLabel("Pilihan Mode (Sesuai Checkbox Gambar):")
-    uiMode:addToggle("Enable (Master Switch)", TF.CFG.enabled, "tf_toggle_enable", false)
-    uiMode:addToggle("Auto Vend (Beli dari Toko & Drop)", TF.CFG.auto_vend, "tf_toggle_auto_vend", false)
-    uiMode:addToggle("Restock (Isi Vend sampai 5k Full)", TF.CFG.restock, "tf_toggle_restock", false)
-    uiMode:addToggle("Per Item (ON = X WL/item, OFF = X item/WL)", TF.CFG.per_item, "tf_toggle_per_item", false)
-    uiMode:addToggle("Vertical (Pola Kolom Atas-Bawah)", TF.CFG.vertical, "tf_toggle_vertical", false)
-
-    -- TAB 2: ITEM & PRICE
-    local uiItem = createNativeUI("2. Item & Price", "Category")
-    uiItem:addLabelApp("Pengaturan Item ID & Harga", "Category")
-    uiItem:addInputInt("Item ID", tostring(TF.CFG.item_id), "Item ID", "4584", "Category", "tf_input_item_id")
-    uiItem:addInputInt("Item Price (Referensi)", tostring(TF.CFG.item_price), "Price", "0", "MonetizationOn", "tf_input_item_price")
-    uiItem:addInputInt("Item Buy Price (Batas Beli)", tostring(TF.CFG.item_buy_price), "Buy Price", "200", "PriceCheck", "tf_input_buy_price")
-    uiItem:addDivider()
-    uiItem:addLabel("Quick Presets Item ID:")
-    uiItem:addButton("Pepper Tree Block (4584)", "tf_btn_pre_pepper_block")
-    uiItem:addButton("Pepper Tree Seed (4585)", "tf_btn_pre_pepper_seed")
-    uiItem:addButton("Chandelier Block (2408)", "tf_btn_pre_chnd_block")
-
-    -- TAB 3: INPUT & OUTPUT WORLD
-    local uiWorld = createNativeUI("3. Input & Output World", "Public")
-    uiWorld:addLabelApp("Input & Output World (Support WORLD:DOOR)", "Public")
-    uiWorld:addInputString("Input World [Required]", TF.CFG.input_world_raw, "Input World", "STORAGE1:DOOR", "FolderOpen", "tf_input_in_world")
-    uiWorld:addButton("📍 Pakai World Sekarang (Input)", "tf_btn_cur_in_world")
-    uiWorld:addDivider()
-    uiWorld:addInputString("Output World [Required]", TF.CFG.output_world_raw, "Output World", "STORE1:DOOR", "CloudUpload", "tf_input_out_world")
-    uiWorld:addButton("📍 Pakai World Sekarang (Output)", "tf_btn_cur_out_world")
-
-    -- TAB 4: BUDGET & LIMIT
-    local uiBudget = createNativeUI("4. Budget & Limit", "AccountBalance")
-    uiBudget:addLabelApp("Batas Pembelian & Kapasitas Vend", "AccountBalance")
-    uiBudget:addInputInt("Max Buy Quota (0 = Unli)", tostring(TF.CFG.max_buy_quota), "Quota", "0", "FormatListNumbered", "tf_input_max_quota")
-    uiBudget:addInputInt("Max WL Budget (0 = Unli)", tostring(TF.CFG.max_wl_budget), "Budget WL", "0", "Paid", "tf_input_max_budget")
-    uiBudget:addSlider("Kapasitas Max Vend (5k Default)", 1000, 5000, TF.CFG.vend_max_cap or 5000, 500, false, "tf_slider_vend_cap")
-    uiBudget:addSlider("Ukuran Drop per Petak", 50, 200, TF.CFG.drop_batch or 200, 10, false, "tf_slider_drop_batch")
-
-    -- TAB 5: PENGATURAN & DELAY
-    local uiSet = createNativeUI("5. Pengaturan & Delay", "Tune")
-    uiSet:addLabelApp("Delay Kecepatan & Fitur Gerak", "Tune")
-    uiSet:addToggle("Gunakan ModFly saat Bergerak", TF.CFG.use_modfly ~= false, "tf_toggle_modfly", false)
-    uiSet:addToggle("Auto Collect Item Target", TF.CFG.auto_collect ~= false, "tf_toggle_auto_collect", false)
-    uiSet:addDivider()
-    uiSet:addSlider("Delay Langkah Bot (ms)", 60, 300, TF.CFG.step_delay or 110, 10, false, "tf_slider_step_delay")
-    uiSet:addSlider("Delay Warp World (ms)", 1500, 10000, TF.CFG.warp_delay or 4500, 500, false, "tf_slider_warp_delay")
-
-    pcall(addCategory, "Boren Transfer Pro", "CompareArrows")
-    pcall(addIntoModule, "Boren Transfer Pro", uiMode:generateJSON())
-    pcall(addIntoModule, "Boren Transfer Pro", uiItem:generateJSON())
-    pcall(addIntoModule, "Boren Transfer Pro", uiWorld:generateJSON())
-    pcall(addIntoModule, "Boren Transfer Pro", uiBudget:generateJSON())
-    pcall(addIntoModule, "Boren Transfer Pro", uiSet:generateJSON())
-end
-
-function OnValue(a1, a2, a3)
-    local name, val = a1, a2
-    if type(a1) == "table" then
-        name = a1.name or a1.alias or a1.id
-        val  = a1.value or a1.val
-    elseif a3 ~= nil then
-        name = a2
-        val  = a3
-    end
-    if not name then return end
-
-    local c = TF.CFG
-    local st = TF.STATE
-
-    if name == "tf_btn_start" then
-        TF.start()
-    elseif name == "tf_btn_stop" then
-        TF.stop()
-    elseif name == "tf_run_power" then
-        if val == true or val == "true" or val == 1 then TF.start() else TF.stop() end
-    elseif name == "tf_toggle_enable" then
-        c.enabled = (val == true)
-        if c.enabled then TF.start() else TF.stop() end
-        TF.saveData()
-    elseif name == "tf_toggle_auto_vend" then
-        c.auto_vend = (val == true)
-        if c.auto_vend then c.restock = false end
-        TF.saveData()
-    elseif name == "tf_toggle_restock" then
-        c.restock = (val == true)
-        if c.restock then c.auto_vend = false end
-        TF.saveData()
-    elseif name == "tf_toggle_per_item" then
-        c.per_item = (val == true)
-        TF.saveData()
-    elseif name == "tf_toggle_vertical" then
-        c.vertical = (val == true)
-        TF.saveData()
-    elseif name == "tf_input_item_id" then
-        local n = tonumber(val)
-        if n and n > 0 then c.item_id = math.floor(n); st.item_id_buf = tostring(c.item_id); TF.saveData() end
-    elseif name == "tf_input_item_price" then
-        local n = tonumber(val)
-        if n and n >= 0 then c.item_price = math.floor(n); st.item_price_buf = tostring(c.item_price); TF.saveData() end
-    elseif name == "tf_input_buy_price" then
-        local n = tonumber(val)
-        if n and n >= 0 then c.item_buy_price = math.floor(n); st.buy_price_buf = tostring(c.item_buy_price); TF.saveData() end
-    elseif name == "tf_btn_pre_pepper_block" then
-        c.item_id = 4584; st.item_id_buf = "4584"; TF.saveData(); addLog("Preset: Pepper Block (4584)")
-    elseif name == "tf_btn_pre_pepper_seed" then
-        c.item_id = 4585; st.item_id_buf = "4585"; TF.saveData(); addLog("Preset: Pepper Seed (4585)")
-    elseif name == "tf_btn_pre_chnd_block" then
-        c.item_id = 2408; st.item_id_buf = "2408"; TF.saveData(); addLog("Preset: Chandelier Block (2408)")
-    elseif name == "tf_input_in_world" then
-        c.input_world_raw = trimStr(val or ""); st.input_w_buf = c.input_world_raw; TF.saveData()
-    elseif name == "tf_btn_cur_in_world" then
-        local cw = getCurrentWorld()
-        if cw ~= "" and cw ~= "EXIT" then c.input_world_raw = cw; st.input_w_buf = cw; TF.saveData(); addLog("Input World diset: " .. cw) end
-    elseif name == "tf_input_out_world" then
-        c.output_world_raw = trimStr(val or ""); st.output_w_buf = c.output_world_raw; TF.saveData()
-    elseif name == "tf_btn_cur_out_world" then
-        local cw = getCurrentWorld()
-        if cw ~= "" and cw ~= "EXIT" then c.output_world_raw = cw; st.output_w_buf = cw; TF.saveData(); addLog("Output World diset: " .. cw) end
-    elseif name == "tf_input_max_quota" then
-        local n = tonumber(val)
-        if n and n >= 0 then c.max_buy_quota = math.floor(n); st.max_quota_buf = tostring(c.max_buy_quota); TF.saveData() end
-    elseif name == "tf_input_max_budget" then
-        local n = tonumber(val)
-        if n and n >= 0 then c.max_wl_budget = math.floor(n); st.max_budget_buf = tostring(c.max_wl_budget); TF.saveData() end
-    elseif name == "tf_slider_vend_cap" then
-        local n = tonumber(val)
-        if n and n >= 1000 then c.vend_max_cap = math.floor(n); TF.saveData() end
-    elseif name == "tf_slider_drop_batch" then
-        local n = tonumber(val)
-        if n and n >= 20 then c.drop_batch = math.floor(n); TF.saveData() end
-    elseif name == "tf_toggle_modfly" then
-        c.use_modfly = (val == true); TF.saveData()
-    elseif name == "tf_toggle_auto_collect" then
-        c.auto_collect = (val == true); TF.saveData()
-    elseif name == "tf_slider_step_delay" then
-        local n = tonumber(val)
-        if n and n >= 50 then c.step_delay = math.floor(n); TF.saveData() end
-    elseif name == "tf_slider_warp_delay" then
-        local n = tonumber(val)
-        if n and n >= 1000 then c.warp_delay = math.floor(n); TF.saveData() end
-    end
-end
-onValue = OnValue
-
--- Global hook setup
-if setOnValue then
-    local aliases = {
-        "tf_btn_start", "tf_btn_stop", "tf_run_power",
-        "tf_toggle_enable", "tf_toggle_auto_vend", "tf_toggle_restock", "tf_toggle_per_item", "tf_toggle_vertical",
-        "tf_input_item_id", "tf_input_item_price", "tf_input_buy_price",
-        "tf_btn_pre_pepper_block", "tf_btn_pre_pepper_seed", "tf_btn_pre_chnd_block",
-        "tf_input_in_world", "tf_btn_cur_in_world", "tf_input_out_world", "tf_btn_cur_out_world",
-        "tf_input_max_quota", "tf_input_max_budget", "tf_slider_vend_cap", "tf_slider_drop_batch",
-        "tf_toggle_modfly", "tf_toggle_auto_collect", "tf_slider_step_delay", "tf_slider_warp_delay",
-    }
-    for _, al in ipairs(aliases) do
-        pcall(setOnValue, al, function(a1, a2, a3)
-            OnValue(al, a1 or a2 or a3)
-        end)
+local function hookDialogReturn(vtype, packet)
+    if vtype == 2 and type(packet) == "string" then
+        if packet:find("action|dialog_return") or packet:find("dialog_name|vending") then
+            TF.STATE.last_dlg_text = packet
+        end
     end
 end
 
--- Variant hook untuk dialog vend
-if addHook then
-    pcall(addHook, TF.handleVariant, "onvariant")
+if AddHook then
+    pcall(AddHook, "OnSendPacket", "boren_tf_dlg_hook", hookDialogReturn)
+elseif addHook then
+    pcall(addHook, "OnSendPacket", "boren_tf_dlg_hook", hookDialogReturn)
 end
 
--- Load persisted configuration & register Native Menu
+-- ============================================================================
+-- 10. BOOTSTRAP INITIALIZATION
+-- ============================================================================
 TF.loadData()
-registerNativeTransferUI()
+setupNativeMenu()
 
-logMsg("`2BOREN TRANSFER PRO v" .. TF.VERSION .. " SIAP! (/transfer)")
-notifyMsg("BOREN TRANSFER PRO Siap!")
+if imgui and imgui.render then
+    pcall(imgui.render, drawMainWindow)
+end
+
+if LogToConsole then
+    pcall(LogToConsole, "`2[Boren Store] `0Auto Transfer Pro (Multi-World) Berhasil Dimuat! Ketik /transfer untuk buka menu.")
+end
 
 return TF
