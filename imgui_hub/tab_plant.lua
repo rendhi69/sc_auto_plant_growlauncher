@@ -2260,13 +2260,7 @@ local function renderFrame()
         pcall(ImGui.SetNextWindowSize, ImVec2(initW, initH), condOnce)
     end
 
-    -- Otomatis perbaiki jika jendela terlalu sempit (< 650px) akibat simpanan lama imgui.ini
-    local curW = safeWinW()
-    if (not isPinned) and (curW < 650 or needCenterPos) then
-        if ImGui.SetWindowSize and ImVec2 then
-            pcall(ImGui.SetWindowSize, ImVec2(initW, initH), condAlways)
-        end
-    end
+
     if ImGui.SetNextWindowPos and ImVec2 then
         if needCenterPos then
             local cx, cy = getCenteredWindowPos(initW, initH)
@@ -2309,6 +2303,20 @@ local function renderFrame()
             popBorenTheme(cCnt, vCnt)
             return
         end
+
+        local winW = safeWinW()
+        local dispW, dispH = getScreenSize()
+        local targetW = math.max(720, math.min(840, math.floor(dispW - 24)))
+        local targetH = math.max(380, math.min(500, math.floor(dispH - 24)))
+
+        -- Otomatis perlebar jendela aktif jika masih tersimpan sempit (< 680px) dari imgui.ini lama
+        if (not isPinned) and winW < 680 then
+            if ImGui.SetWindowSize and ImVec2 then
+                pcall(ImGui.SetWindowSize, ImVec2(targetW, targetH), condAlways)
+                winW = targetW
+            end
+        end
+
         if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
         if ImGui.GetWindowPos then
             local okP, wp = pcall(ImGui.GetWindowPos)

@@ -969,6 +969,17 @@ local function renderMainPanel()
     end
     ImGui.SameLine()
 
+    local availW = 500
+    if ImGui and ImGui.GetContentRegionAvail then
+        local okA, av = pcall(ImGui.GetContentRegionAvail)
+        local ax = (type(av) == "number" and av) or (av and av.x) or 500
+        if type(ax) == "number" and ax > 50 then availW = ax end
+    end
+
+    if availW >= 470 then
+        ImGui.SameLine()
+    end
+
     local chPI, vPI = ImGui.Checkbox("Per Item##tf_pi", c.per_item)
     if chPI then c.per_item = vPI; TF.saveData() end
     ImGui.SameLine()
@@ -1090,7 +1101,13 @@ local function renderMainPanel()
             TF.saveData()
         end
     end
-    ImGui.SameLine()
+    local availIW = 500
+    if ImGui and ImGui.GetContentRegionAvail then
+        local okA, av = pcall(ImGui.GetContentRegionAvail)
+        local ax = (type(av) == "number" and av) or (av and av.x) or 500
+        if type(ax) == "number" and ax > 50 then availIW = ax end
+    end
+    if availIW >= 460 then ImGui.SameLine() end
     local inCount = #st.input_queue
     if autoBtn(st.show_input_queue and "▲ Tutup Antrian##tf_inq_btn" or ("▼ Antrian (" .. inCount .. ")##tf_inq_btn")) then
         st.show_input_queue = not st.show_input_queue
