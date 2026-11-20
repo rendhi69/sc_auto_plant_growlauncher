@@ -1258,34 +1258,77 @@ end
 
 local function drawMainWindow()
     if not ImGui then return end
-    ImGui.Begin("Boren Transfer Pro - Multi World", true)
 
-    local sub = TF.STATE.active_sub or "main"
-    if autoBtn(sub == "main" and "[ Panel Utama ]##sub_main" or "Panel Utama##sub_main") then
-        TF.STATE.active_sub = "main"
-    end
-    ImGui.SameLine()
-    if autoBtn(sub == "adv" and "[ Pengaturan Lanjut ]##sub_adv" or "Pengaturan Lanjut##sub_adv") then
-        TF.STATE.active_sub = "adv"
-    end
-    ImGui.SameLine()
-    if autoBtn(sub == "logs" and "[ Log Bot ]##sub_logs" or "Log Bot##sub_logs") then
-        TF.STATE.active_sub = "logs"
+    local winFlags = 2048 -- ImGuiWindowFlags_HorizontalScrollbar (geser kanan kiri)
+    if ImGui.WindowFlags and ImGui.WindowFlags.HorizontalScrollbar then
+        winFlags = tonumber(ImGui.WindowFlags.HorizontalScrollbar) or 2048
     end
 
-    uiGap(6)
-    ImGui.Separator()
-    uiGap(6)
-
-    if sub == "main" then
-        renderMainPanel()
-    elseif sub == "adv" then
-        renderAdvancedPanel()
-    elseif sub == "logs" then
-        renderLogsPanel()
+    local pCnt = 0
+    local vCnt = 0
+    if ImGui.PushStyleColor and ImGui.Col then
+        local C = ImGui.Col
+        local function pc(k, col)
+            local idx = tonumber(C[k]) or C[k]
+            if idx and pcall(ImGui.PushStyleColor, idx, col) then pCnt = pCnt + 1 end
+        end
+        pc("ScrollbarBg", 0xFF140A28)
+        pc("ScrollbarGrab", 0xFFE04000)
+        pc("ScrollbarGrabHovered", 0xFFFF6020)
+        pc("ScrollbarGrabActive", 0xFFFF3080)
+    end
+    if ImGui.PushStyleVar and ImGui.StyleVar then
+        local V = ImGui.StyleVar
+        local function pv(k, val)
+            local idx = tonumber(V[k]) or V[k]
+            if idx and pcall(ImGui.PushStyleVar, idx, val) then vCnt = vCnt + 1 end
+        end
+        pv("ScrollbarRounding", 6.0)
+        pv("ScrollbarSize", 14.0)
     end
 
-    ImGui.End()
+    local okCall, res = pcall(ImGui.Begin, "Boren Transfer Pro - Multi World", true, winFlags)
+    if not okCall or res == nil then
+        okCall, res = pcall(ImGui.Begin, "Boren Transfer Pro - Multi World", winFlags)
+    end
+    if not okCall or res == nil then
+        okCall, res = pcall(ImGui.Begin, "Boren Transfer Pro - Multi World", true)
+    end
+    if not okCall or res == nil then
+        okCall, res = pcall(ImGui.Begin, "Boren Transfer Pro - Multi World")
+    end
+
+    if okCall and res then
+        local sub = TF.STATE.active_sub or "main"
+        if autoBtn(sub == "main" and "[ Panel Utama ]##sub_main" or "Panel Utama##sub_main") then
+            TF.STATE.active_sub = "main"
+        end
+        ImGui.SameLine()
+        if autoBtn(sub == "adv" and "[ Pengaturan Lanjut ]##sub_adv" or "Pengaturan Lanjut##sub_adv") then
+            TF.STATE.active_sub = "adv"
+        end
+        ImGui.SameLine()
+        if autoBtn(sub == "logs" and "[ Log Bot ]##sub_logs" or "Log Bot##sub_logs") then
+            TF.STATE.active_sub = "logs"
+        end
+
+        uiGap(6)
+        ImGui.Separator()
+        uiGap(6)
+
+        if sub == "main" then
+            renderMainPanel()
+        elseif sub == "adv" then
+            renderAdvancedPanel()
+        elseif sub == "logs" then
+            renderLogsPanel()
+        end
+
+        pcall(ImGui.End)
+    end
+
+    if vCnt > 0 and ImGui.PopStyleVar then pcall(ImGui.PopStyleVar, vCnt) end
+    if pCnt > 0 and ImGui.PopStyleColor then pcall(ImGui.PopStyleColor, pCnt) end
 end
 
 -- ============================================================================

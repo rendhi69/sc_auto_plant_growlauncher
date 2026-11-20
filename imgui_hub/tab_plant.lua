@@ -402,6 +402,7 @@ local function pushBorenTheme()
         pv(V.PopupRounding,     6.0)
         pv(V.GrabRounding,      5.0)
         pv(V.ScrollbarRounding, 6.0)
+        pv(V.ScrollbarSize,     14.0)
         pv(V.WindowBorderSize,  2.0)
         pv(V.FrameBorderSize,   1.5)
     end
@@ -2258,7 +2259,20 @@ local function renderFrame()
         end
     end
 
-    if ImGui.Begin("BOREN STORE##boren_main") then
+    local winFlags = 2048 -- ImGuiWindowFlags_HorizontalScrollbar (geser kanan kiri)
+    if ImGui.WindowFlags and ImGui.WindowFlags.HorizontalScrollbar then
+        winFlags = tonumber(ImGui.WindowFlags.HorizontalScrollbar) or 2048
+    end
+
+    local okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", nil, winFlags)
+    if not okBegin or opened == nil then
+        okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", winFlags)
+    end
+    if not okBegin or opened == nil then
+        okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main")
+    end
+
+    if okBegin and opened then
         if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
         if ImGui.GetWindowPos then
             local okP, wp = pcall(ImGui.GetWindowPos)
@@ -2309,8 +2323,8 @@ local function renderFrame()
         else
             wasItemActive = false
         end
+        pcall(ImGui.End)
     end
-    ImGui.End()
     flushDebouncedSaves(false)
     popBorenTheme(cCnt, vCnt)
 end
