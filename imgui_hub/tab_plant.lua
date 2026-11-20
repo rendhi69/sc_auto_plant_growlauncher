@@ -2058,7 +2058,8 @@ local function renderLeftFeatureSidebar(colW)
             pc(C.Text,          P.offText)
         end
     end
-    if fullBtn(isPinned and "Pin: ON##sb_pin" or "Pin: OFF##sb_pin", btnW) then
+    local halfW = math.max(48, math.floor((btnW - 6) * 0.5))
+    if fullBtn(isPinned and "Pin: ON##sb_pin" or "Pin: OFF##sb_pin", halfW) then
         isPinned = not isPinned
         if isPinned and lastWinX and lastWinY then
             pinnedX, pinnedY = lastWinX, lastWinY
@@ -2068,16 +2069,17 @@ local function renderLeftFeatureSidebar(colW)
     if pinPushed > 0 and ImGui and ImGui.PopStyleColor then
         pcall(ImGui.PopStyleColor, pinPushed)
     end
-
-    if styledBtn("Fit Layar##sb_fit", btnW, false, false) then
+    ImGui.SameLine()
+    if styledBtn("Fit##sb_fit", halfW, false, false) then
         local dw, dh = getScreenSize()
-        local fw = math.max(680, math.min(840, math.floor(dw - 24)))
-        local fh = math.max(340, math.min(500, math.floor(dh - 24)))
+        local fw = math.max(720, math.min(840, math.floor(dw - 24)))
+        local fh = math.max(380, math.min(500, math.floor(dh - 24)))
         if ImGui.SetWindowSize and ImVec2 then
             pcall(ImGui.SetWindowSize, ImVec2(fw, fh), condAlways)
         end
         setNotice("Ukuran jendela disesuaikan (" .. fw .. "x" .. fh .. ")")
     end
+
     if styledBtn("Hide UI", btnW, false, true) then
         windowOpen = false
     end
@@ -2251,11 +2253,19 @@ local function renderFrame()
     end
 
     local dispW, dispH = getScreenSize()
-    local initW = math.max(680, math.min(820, math.floor(dispW - 16)))
-    local initH = math.max(300, math.min(450, math.floor(dispH - 16)))
+    local initW = math.max(720, math.min(840, math.floor(dispW - 24)))
+    local initH = math.max(380, math.min(500, math.floor(dispH - 24)))
     if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
     if ImGui.SetNextWindowSize and ImVec2 then
         pcall(ImGui.SetNextWindowSize, ImVec2(initW, initH), condOnce)
+    end
+
+    -- Otomatis perbaiki jika jendela terlalu sempit (< 650px) akibat simpanan lama imgui.ini
+    local curW = safeWinW()
+    if (not isPinned) and (curW < 650 or needCenterPos) then
+        if ImGui.SetWindowSize and ImVec2 then
+            pcall(ImGui.SetWindowSize, ImVec2(initW, initH), condAlways)
+        end
     end
     if ImGui.SetNextWindowPos and ImVec2 then
         if needCenterPos then
@@ -2292,7 +2302,13 @@ local function renderFrame()
         okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main")
     end
 
-    if okBegin and opened then
+    if okBegin then
+        if opened == false then
+            windowOpen = false
+            pcall(ImGui.End)
+            popBorenTheme(cCnt, vCnt)
+            return
+        end
         if ImGui.SetWindowFontScale then pcall(ImGui.SetWindowFontScale, 1.08) end
         if ImGui.GetWindowPos then
             local okP, wp = pcall(ImGui.GetWindowPos)
@@ -2333,10 +2349,34 @@ local function renderFrame()
             end
         end
 
+        -- Wrap panel kanan dalam Child Window dengan flag HorizontalScrollbar
+        -- Ini MENJAMIN scrollbar horizontal muncul di bagian bawah panel kanan saat sempit!
+        local childFlags = 2048 -- ImGuiWindowFlags_HorizontalScrollbar
+        if ImGui.WindowFlags and ImGui.WindowFlags.HorizontalScrollbar then
+            childFlags = tonumber(ImGui.WindowFlags.HorizontalScrollbar) or 2048
+        end
+
+        local okChild = pcall(ImGui.BeginChild, "BorenRightScroll", ImVec2(0, 0), false, childFlags)
+        if not okChild then
+            okChild = pcall(ImGui.BeginChild, "BorenRightScroll", ImVec2(0, 0), false)
+        end
+        if not okChild then
+            okChild = pcall(ImGui.BeginChild, "BorenRightScroll")
+        end
+
+        -- Paksakan lebar isi child minimal 560px agar scrollbar horizontal AKTIF dan Console (Logs) TIDAK HILANG!
+        if ImGui.Dummy and ImVec2 then
+            pcall(ImGui.Dummy, ImVec2(560, 0.1))
+        end
+
         local okRight, errRight = pcall(renderRightPanel)
         lastSectionKetikFn = nil
         if not okRight then
             setNotice("UI Err: " .. tostring(errRight))
+        end
+
+        if okChild then
+            pcall(ImGui.EndChild)
         end
 
         if usedCols then
