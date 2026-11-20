@@ -1958,7 +1958,9 @@ local function drawSidebarDivider(width)
 end
 
 local function renderLeftFeatureSidebar(colW)
-    local btnW = math.max(90, colW - 18)
+    local colWidth = tonumber(colW) or 190
+    local avX = safeAvailX()
+    local btnW = (avX and avX > 80 and avX <= colWidth) and math.floor(avX - 2) or math.max(150, colWidth - 18)
     local P = getBorenPal()
     centeredText("MENU", btnW, P.textCyan)
     safeSpacing()
@@ -2072,7 +2074,7 @@ local function renderLeftFeatureSidebar(colW)
     ImGui.SameLine()
     if styledBtn("Fit##sb_fit", halfW, false, false) then
         local dw, dh = getScreenSize()
-        local fw = math.max(720, math.min(840, math.floor(dw - 24)))
+        local fw = math.max(760, math.min(880, math.floor(dw - 24)))
         local fh = math.max(380, math.min(500, math.floor(dh - 24)))
         if ImGui.SetWindowSize and ImVec2 then
             pcall(ImGui.SetWindowSize, ImVec2(fw, fh), condAlways)
@@ -2253,7 +2255,7 @@ local function renderFrame()
     end
 
     local dispW, dispH = getScreenSize()
-    local initW = math.max(720, math.min(840, math.floor(dispW - 24)))
+    local initW = math.max(760, math.min(880, math.floor(dispW - 24)))
     local initH = math.max(380, math.min(500, math.floor(dispH - 24)))
     if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
     if ImGui.SetNextWindowSize and ImVec2 then
@@ -2298,11 +2300,11 @@ local function renderFrame()
 
         local winW = safeWinW()
         local dispW, dispH = getScreenSize()
-        local targetW = math.max(720, math.min(840, math.floor(dispW - 24)))
+        local targetW = math.max(760, math.min(880, math.floor(dispW - 24)))
         local targetH = math.max(380, math.min(500, math.floor(dispH - 24)))
 
-        -- Otomatis perlebar jendela aktif jika masih tersimpan sempit (< 680px) dari imgui.ini lama
-        if (not isPinned) and winW < 680 then
+        -- Otomatis perlebar jendela aktif jika masih tersimpan sempit (< 740px) dari imgui.ini lama
+        if (not isPinned) and winW < 740 then
             if ImGui.SetWindowSize and ImVec2 then
                 pcall(ImGui.SetWindowSize, ImVec2(targetW, targetH), condAlways)
                 winW = targetW
@@ -2322,7 +2324,7 @@ local function renderFrame()
         end
         drawWindowNeonChrome()
 
-        local sideW = 150 -- Lebar sidebar menu kiri yang pas dan rapi
+        local sideW = 190 -- Lebar sidebar menu kiri agar nama fitur (Dashboard, Dirt Farm, Build Soil, Database ID, dll.) tampil penuh tanpa terpotong!
 
         -- 1. PANEL KIRI: SIDEBAR MENU (Child Window mandiri dengan lebar tetap)
         local okLeft = pcall(ImGui.BeginChild, "BorenSidebar", ImVec2(sideW, 0), false)
