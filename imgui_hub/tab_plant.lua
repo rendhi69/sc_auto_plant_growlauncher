@@ -402,7 +402,7 @@ local function pushBorenTheme()
         pv(V.PopupRounding,     6.0)
         pv(V.GrabRounding,      5.0)
         pv(V.ScrollbarRounding, 6.0)
-        pv(V.ScrollbarSize,     14.0)
+        pv(V.ScrollbarSize,     16.0)
         pv(V.WindowBorderSize,  2.0)
         pv(V.FrameBorderSize,   1.5)
     end
@@ -2069,6 +2069,15 @@ local function renderLeftFeatureSidebar(colW)
         pcall(ImGui.PopStyleColor, pinPushed)
     end
 
+    if styledBtn("Fit Layar##sb_fit", btnW, false, false) then
+        local dw, dh = getScreenSize()
+        local fw = math.max(680, math.min(840, math.floor(dw - 24)))
+        local fh = math.max(340, math.min(500, math.floor(dh - 24)))
+        if ImGui.SetWindowSize and ImVec2 then
+            pcall(ImGui.SetWindowSize, ImVec2(fw, fh), condAlways)
+        end
+        setNotice("Ukuran jendela disesuaikan (" .. fw .. "x" .. fh .. ")")
+    end
     if styledBtn("Hide UI", btnW, false, true) then
         windowOpen = false
     end
@@ -2242,7 +2251,7 @@ local function renderFrame()
     end
 
     local dispW, dispH = getScreenSize()
-    local initW = math.max(480, math.min(760, math.floor(dispW - 16)))
+    local initW = math.max(680, math.min(820, math.floor(dispW - 16)))
     local initH = math.max(300, math.min(450, math.floor(dispH - 16)))
     if ImGui.SetNextWindowBgAlpha then pcall(ImGui.SetNextWindowBgAlpha, 1.0) end
     if ImGui.SetNextWindowSize and ImVec2 then
@@ -2264,9 +2273,20 @@ local function renderFrame()
         winFlags = tonumber(ImGui.WindowFlags.HorizontalScrollbar) or 2048
     end
 
-    local okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", nil, winFlags)
+    local MIN_CONTENT_W = 720
+    local curWinW = safeWinW()
+    local totalContentW = math.max(MIN_CONTENT_W, curWinW)
+
+    if ImGui.SetNextWindowContentSize and ImVec2 then
+        pcall(ImGui.SetNextWindowContentSize, ImVec2(totalContentW, 0))
+    end
+
+    local okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", true, winFlags)
     if not okBegin or opened == nil then
         okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", winFlags)
+    end
+    if not okBegin or opened == nil then
+        okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", nil, winFlags)
     end
     if not okBegin or opened == nil then
         okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main")
@@ -2285,8 +2305,15 @@ local function renderFrame()
             end
         end
         drawWindowNeonChrome()
+
+        -- Memastikan cursor ImGui mengembang hingga totalContentW agar Scrollbar Horizontal SELALU muncul saat jendela sempit
+        if ImGui.Dummy and ImVec2 then
+            pcall(ImGui.Dummy, ImVec2(totalContentW, 0.1))
+        end
+
         local winW = safeWinW()
-        local sideW = math.max(130, math.floor(winW * 0.20))
+        local sideW = 160 -- Lebar sidebar pasti agar Dashboard, Dirt Farm, Build Soil tidak terpotong!
+        local rightW = math.max(560, totalContentW - sideW)
 
         local usedCols = false
         if ImGui.Columns and ImGui.NextColumn then
@@ -2295,6 +2322,7 @@ local function renderFrame()
                 usedCols = true
                 if ImGui.SetColumnWidth then
                     pcall(ImGui.SetColumnWidth, 0, sideW)
+                    pcall(ImGui.SetColumnWidth, 1, rightW)
                 end
 
                 -- KOLOM KIRI: Kategori Fitur SAJA (tanpa Separator agar kanan rata atas!)
