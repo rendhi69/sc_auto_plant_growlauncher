@@ -2272,17 +2272,9 @@ local function renderFrame()
         end
     end
 
-    local winFlags = 2048 -- ImGuiWindowFlags_HorizontalScrollbar (geser kanan kiri)
-    if ImGui.WindowFlags and ImGui.WindowFlags.HorizontalScrollbar then
-        winFlags = tonumber(ImGui.WindowFlags.HorizontalScrollbar) or 2048
-    end
-
-    local MIN_CONTENT_W = 720
-    local curWinW = safeWinW()
-    local totalContentW = math.max(MIN_CONTENT_W, curWinW)
-
-    if ImGui.SetNextWindowContentSize and ImVec2 then
-        pcall(ImGui.SetNextWindowContentSize, ImVec2(totalContentW, 0))
+    local winFlags = 0
+    if ImGui.WindowFlags and ImGui.WindowFlags.NoCollapse then
+        winFlags = tonumber(ImGui.WindowFlags.NoCollapse) or 0
     end
 
     local okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", true, winFlags)
@@ -2330,51 +2322,41 @@ local function renderFrame()
         end
         drawWindowNeonChrome()
 
-        -- Memastikan cursor ImGui mengembang hingga totalContentW agar Scrollbar Horizontal SELALU muncul saat jendela sempit
-        if ImGui.Dummy and ImVec2 then
-            pcall(ImGui.Dummy, ImVec2(totalContentW, 0.1))
+        local sideW = 150 -- Lebar sidebar menu kiri yang pas dan rapi
+
+        -- 1. PANEL KIRI: SIDEBAR MENU (Child Window mandiri dengan lebar tetap)
+        local okLeft = pcall(ImGui.BeginChild, "BorenSidebar", ImVec2(sideW, 0), false)
+        if not okLeft then
+            okLeft = pcall(ImGui.BeginChild, "BorenSidebar", ImVec2(sideW, 0))
+        end
+        renderLeftFeatureSidebar(sideW)
+        if okLeft then
+            pcall(ImGui.EndChild)
         end
 
-        local winW = safeWinW()
-        local sideW = 160 -- Lebar sidebar pasti agar Dashboard, Dirt Farm, Build Soil tidak terpotong!
-        local rightW = math.max(560, totalContentW - sideW)
+        -- Sejajar horizontal di baris yang sama untuk panel konten kanan
+        ImGui.SameLine()
 
-        local usedCols = false
-        if ImGui.Columns and ImGui.NextColumn then
-            local okCol = pcall(ImGui.Columns, 2)
-            if okCol then
-                usedCols = true
-                if ImGui.SetColumnWidth then
-                    pcall(ImGui.SetColumnWidth, 0, sideW)
-                    pcall(ImGui.SetColumnWidth, 1, rightW)
-                end
-
-                -- KOLOM KIRI: Kategori Fitur SAJA (tanpa Separator agar kanan rata atas!)
-                renderLeftFeatureSidebar(sideW)
-
-                -- KOLOM KANAN: Sub-menu atas (List World, List Storage, Settings, Logs) + Konten
-                ImGui.NextColumn()
-            end
-        end
-
-        -- Wrap panel kanan dalam Child Window dengan flag HorizontalScrollbar
-        -- Ini MENJAMIN scrollbar horizontal muncul di bagian bawah panel kanan saat sempit!
-        local childFlags = 2048 -- ImGuiWindowFlags_HorizontalScrollbar
+        -- 2. PANEL KANAN: KONTEN FITUR
+        -- Mengisi 100% sisa lebar jendela (ImVec2(0, 0)) sehingga AREA HITAM KOSONG 100% HILANG!
+        local rightFlags = 2048 -- ImGuiWindowFlags_HorizontalScrollbar
         if ImGui.WindowFlags and ImGui.WindowFlags.HorizontalScrollbar then
-            childFlags = tonumber(ImGui.WindowFlags.HorizontalScrollbar) or 2048
+            rightFlags = tonumber(ImGui.WindowFlags.HorizontalScrollbar) or 2048
         end
 
-        local okChild = pcall(ImGui.BeginChild, "BorenRightScroll", ImVec2(0, 0), false, childFlags)
-        if not okChild then
-            okChild = pcall(ImGui.BeginChild, "BorenRightScroll", ImVec2(0, 0), false)
+        local okRightChild = pcall(ImGui.BeginChild, "BorenRightPanel", ImVec2(0, 0), false, rightFlags)
+        if not okRightChild then
+            okRightChild = pcall(ImGui.BeginChild, "BorenRightPanel", ImVec2(0, 0), false)
         end
-        if not okChild then
-            okChild = pcall(ImGui.BeginChild, "BorenRightScroll")
+        if not okRightChild then
+            okRightChild = pcall(ImGui.BeginChild, "BorenRightPanel")
         end
 
-        -- Paksakan lebar isi child minimal 560px agar scrollbar horizontal AKTIF dan Console (Logs) TIDAK HILANG!
-        if ImGui.Dummy and ImVec2 then
-            pcall(ImGui.Dummy, ImVec2(560, 0.1))
+        -- Pastikan jika jendela di perangkat sempit (< 540px sisa lebar),
+        -- scrollbar horizontal di bagian bawah panel kanan aktif & bisa digeser kanan-kiri
+        local availR = safeAvailX()
+        if availR < 540 and ImGui.Dummy and ImVec2 then
+            pcall(ImGui.Dummy, ImVec2(540, 0.1))
         end
 
         local okRight, errRight = pcall(renderRightPanel)
@@ -2383,13 +2365,10 @@ local function renderFrame()
             setNotice("UI Err: " .. tostring(errRight))
         end
 
-        if okChild then
+        if okRightChild then
             pcall(ImGui.EndChild)
         end
 
-        if usedCols then
-            pcall(ImGui.Columns, 1)
-        end
         drawSwitchEffect(sideW)
 
         if ImGui.IsAnyItemActive then
