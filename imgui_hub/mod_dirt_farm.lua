@@ -150,6 +150,7 @@ DF.CFG = {
     step_delay        = 120,
     warp_delay        = 3500,
     use_modfly        = true,
+    ignore_lock       = false,
 }
 
 local DEFAULT_TRASH_RAW = "14,4,5,10,11"
@@ -426,6 +427,7 @@ function DF.saveData()
         "PLACED=" .. tostring(tonumber(DF.CFG.place_delay) or 160),
         "STEPD=" .. tostring(tonumber(DF.CFG.step_delay) or 120),
         "MODFLY=" .. (DF.CFG.use_modfly and "1" or "0"),
+        "IGNORELOCK=" .. (DF.CFG.ignore_lock and "1" or "0"),
     }
     for _, r in ipairs(DF.STATE.rows) do
         table.insert(lines, "ROW=" .. r.name .. ":" .. tostring(r.door or "") .. "|" .. tostring(r.status or "Ready"))
@@ -479,6 +481,7 @@ function DF.loadData()
         elseif k == "PLACED" then DF.CFG.place_delay = tonumber(v) or 160
         elseif k == "STEPD" then DF.CFG.step_delay = tonumber(v) or 120
         elseif k == "MODFLY" then DF.CFG.use_modfly = (v ~= "0")
+        elseif k == "IGNORELOCK" then DF.CFG.ignore_lock = (v == "1")
         elseif k == "ROW" then
             local wd, st = v:match("^(.-)|(.*)$")
             local p = parseWorldLine(wd or v)
@@ -1407,7 +1410,7 @@ local function isCurrentWorldFreeForDF()
             for _, t in pairs(tiles) do
                 if t then
                     local fg = tonumber(t.fg) or 0
-                    if LOCK_IDS[fg] then
+                    if (not DF.CFG.ignore_lock) and LOCK_IDS[fg] then
                         return false, "Sudah di-lock (ID " .. tostring(fg) .. ")"
                     end
                 end
@@ -1420,7 +1423,7 @@ local function isCurrentWorldFreeForDF()
                 local t = getTileSafe(x, y)
                 if t then
                     local fg = tonumber(t.fg) or 0
-                    if LOCK_IDS[fg] then
+                    if (not DF.CFG.ignore_lock) and LOCK_IDS[fg] then
                         return false, "Sudah di-lock (ID " .. tostring(fg) .. ")"
                     end
                 end
@@ -1488,6 +1491,10 @@ end
 -- ============================================================================
 local function getRequiredDFKit()
     local kit = {}
+    if DF.CFG.ignore_lock then
+        -- Mode Ignore Lock: world sudah di-lock orang lain, bot tidak butuh alat lock/security
+        return kit
+    end
     local byId = {}
     local function addNeed(id, want, label)
         id = math.floor(tonumber(id) or 0)
@@ -2260,6 +2267,10 @@ end
 -- Stage 0: Smart Skip Lock (jika posisi lock sudah benar -> skip buat ulang lock, cukup cek Door ID!)
 local function setupWorldSecurity(row, doorX, doorY)
     if not doorX or not doorY then return true end
+    if DF.CFG.ignore_lock then
+        addLog("[DF] Ignore Lock AKTIF: Melewati setup security & lock, langsung proses pembuatan Dirt Farm!")
+        return true
+    end
     local needAny = DF.CFG.use_blocker_door or DF.CFG.auto_place_jammer or DF.CFG.auto_lock_wl or DF.CFG.auto_place_sl or DF.CFG.use_id_door
     if not needAny then return true end
 
@@ -4166,6 +4177,12 @@ local function renderLockDoorSub()
     uiNote(uiNotice)
 
     if ImGui.BeginTable("BorenDFLockOpts", 2) then
+        renderOptRow("Ignore Lock (Bukan Owner)", function()
+            if uiToggleBtn(DF.CFG.ignore_lock, "dfl_ign_lock") then
+                DF.CFG.ignore_lock = not DF.CFG.ignore_lock; DF.saveData()
+            end
+            ImGui.SameLine(); ImGui.TextDisabled("(Langsung buat DF tanpa setup lock/door)")
+        end)
         renderOptRow("World Lock (242)", function()
             if uiToggleBtn(DF.CFG.auto_lock_wl, "dfl_wl") then
                 DF.CFG.auto_lock_wl = not DF.CFG.auto_lock_wl; DF.saveData()

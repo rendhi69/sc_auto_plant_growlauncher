@@ -35,6 +35,7 @@ SB.CFG = {
     step_delay     = 110,
     warp_delay     = 3500,
     use_modfly     = true,
+    ignore_lock    = false,
 }
 
 SB.STATE = {
@@ -214,6 +215,7 @@ function SB.saveData()
         "PDELAY=" .. tostring(tonumber(SB.CFG.place_delay) or 180),
         "STEPD=" .. tostring(tonumber(SB.CFG.step_delay) or 110),
         "MODFLY=" .. (SB.CFG.use_modfly and "1" or "0"),
+        "IGNORELOCK=" .. (SB.CFG.ignore_lock and "1" or "0"),
     }
     for _, r in ipairs(SB.STATE.rows) do
         table.insert(lines, "ROW=" .. formatRowLine(r) .. "|" .. tostring(r.status or "Ready"))
@@ -242,6 +244,7 @@ function SB.loadData()
         elseif k == "PDELAY" then SB.CFG.place_delay = tonumber(v) or 180
         elseif k == "STEPD" then SB.CFG.step_delay = tonumber(v) or 110
         elseif k == "MODFLY" then SB.CFG.use_modfly = (v ~= "0")
+        elseif k == "IGNORELOCK" then SB.CFG.ignore_lock = (v == "1")
         elseif k == "ROW" then
             local wd, st = v:match("^(.-)|(.*)$")
             local p = parseRowLine(wd or v)
@@ -723,11 +726,15 @@ local function scanProtectedAreas()
         if fg == 6 then
             markProtectedRect(tx, ty, 2, 2)
         elseif LOCK_IDS[fg] then
-            local rad = 1
-            if fg == 204 then rad = 5 end
-            if fg == 206 then rad = 10 end
-            if fg == 242 or fg == 1796 or fg == 4428 or fg == 4802 or fg == 4994 or fg == 7188 or fg == 9640 then rad = 2 end
-            markProtectedRect(tx, ty, rad, rad)
+            if SB.CFG.ignore_lock then
+                markProtectedRect(tx, ty, 0, 0) -- Hanya lindungi tepat di petak lock itu sendiri
+            else
+                local rad = 1
+                if fg == 204 then rad = 5 end
+                if fg == 206 then rad = 10 end
+                if fg == 242 or fg == 1796 or fg == 4428 or fg == 4802 or fg == 4994 or fg == 7188 or fg == 9640 then rad = 2 end
+                markProtectedRect(tx, ty, rad, rad)
+            end
         elseif BLOCKER_DOOR_IDS[fg] then
             markProtectedRect(tx, ty, 1, 1)
         end
@@ -757,7 +764,7 @@ isProtectedLockOrBlocker = function(tx, ty, forWater)
     if fg ~= 0 and (LOCK_IDS[fg] or BLOCKER_DOOR_IDS[fg] or fg == 8) then return true end
 
     local par = tonumber(t.parent) or 0
-    if par > 0 then
+    if par > 0 and (not SB.CFG.ignore_lock) then
         if forWater then return true end
         local px = par % 100
         local py = math.floor(par / 100)
@@ -1555,6 +1562,12 @@ local function renderSettingsSub()
     uiSection("Pengaturan Build Soil", true)
 
     if ImGui.BeginTable("BorenSoilSetOpts", 2) then
+        renderOptRow("Ignore Lock (Bukan Owner)", function()
+            if uiToggleBtn(SB.CFG.ignore_lock, "sb_ign_lock") then
+                SB.CFG.ignore_lock = not SB.CFG.ignore_lock; SB.saveData()
+            end
+            ImGui.SameLine(); ImGui.TextDisabled("(Langsung buat soil walau world di-lock orang lain)")
+        end)
         renderOptRow("Mode Pasang", function()
             local is3z = (SB.CFG.place_mode == "3zigzag")
             if autoBtn(is3z and " 3-Zigzag (Cepat) ##sbm" or " 1-by-1 (Presisi) ##sbm") then
