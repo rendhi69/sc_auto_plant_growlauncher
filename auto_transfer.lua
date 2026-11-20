@@ -14,6 +14,26 @@
 
 local TF = {}
 
+-- ============================================================================
+-- DAFTAR ID ITEM CONSUME & ANTI-TAKE GUARD
+-- ============================================================================
+local CONSUME_IDS = {
+    [528]  = true, -- Lucky Clover
+    [1056] = true, -- Songpyeon
+    [1058] = true, -- Normal Mooncake
+    [1094] = true, -- Harmony Mooncake
+    [1096] = true, -- Peace Mooncake
+    [1098] = true, -- Prosperity Mooncake
+    [1828] = true, -- Longevity Mooncake
+    [4668] = true, -- Arroz Con Pollo
+    [1420] = true, -- Chocolate
+    [2754] = true, -- Birthday Cake
+    [3092] = true, -- Winterfest Cracker
+    [3120] = true, -- Hot Chocolate
+    [2478] = true, -- Punch Potion
+    [1400] = true, -- Megaphone
+}
+
 TF.CFG = {
     -- Master Switch & Mode Toggles (Sesuai Gambar)
     enabled          = false,       -- Master switch (START / STOP)
@@ -76,6 +96,10 @@ TF.STATE = {
     buy_price_buf    = "200",
     max_quota_buf    = "0",
     max_budget_buf   = "0",
+    add_input_w_buf  = "",
+    add_output_w_buf = "",
+    is_dropping      = false,
+    anti_take_active = false,
 
     -- Dialog Hook Capture
     last_dlg_text    = "",
@@ -395,7 +419,7 @@ local function collectFloatingItem(itemID, range)
         if not TF.STATE.running then break end
         if type(o) == "table" then
             local oid = tonumber(o.id or o.item_id or o.itemID) or 0
-            if oid == itemID or itemID == 0 then
+            if oid == itemID and itemID > 0 and (not CONSUME_IDS[oid]) then
                 local ox = tonumber(o.pos_x or o.x) or 0
                 local oy = tonumber(o.pos_y or o.y) or 0
                 if ox > 100 then ox = math.floor(ox / 32) end
@@ -424,18 +448,38 @@ local function dropItemSafe(itemID, amount)
     if initial <= 0 then return false end
     local dropAmt = math.min(amount, math.min(200, initial))
 
+    -- Aktifkan anti-take guard & nonaktifkan auto-collect cheat saat drop
+    TF.STATE.is_dropping = true
+    TF.STATE.anti_take_active = true
+    if bot then
+        pcall(function()
+            if bot.auto_collect ~= nil then bot.auto_collect = false end
+            if bot.collect ~= nil then bot.collect = false end
+            if bot.anti_collect ~= nil then bot.anti_collect = true end
+        end)
+    end
+
     -- Metode 1: growtopia.confirmDropItem
     if growtopia and growtopia.confirmDropItem then
         pcall(growtopia.confirmDropItem, itemID, dropAmt)
-        safeSleep(300)
+        safeSleep(280)
     end
     -- Metode 2: Standard packet drop
     if sendPacket then
         pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|drop_item\nitemID|%d|\ncount|%d\n", itemID, dropAmt))
-        safeSleep(200)
+        safeSleep(180)
         pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|drop\nitemID|%d|\ncount|%d\n", itemID, dropAmt))
     end
-    safeSleep(300)
+    safeSleep(280)
+
+    -- Menjauh 1 petak setelah drop agar bot tidak berdiri di atas item
+    local curX, curY = getLocalPos()
+    local nextX = (curX <= 3) and (curX + 1) or (curX - 1)
+    findPathSafe(nextX, curY)
+    safeSleep(120)
+
+    TF.STATE.is_dropping = false
+    TF.STATE.anti_take_active = false
 
     local after = getInvCount(itemID)
     if after < initial then
@@ -883,6 +927,9 @@ local function mainTransferLoop()
 
     TF.STATE.running = false
     TF.STATE.enabled = false
+    TF.CFG.enabled = false
+    TF.STATE.is_dropping = false
+    TF.STATE.anti_take_active = false
     TF.STATE.status_text = "Idle"
     TF.saveData()
     addLog("Transfer Bot selesai / berhenti.")
@@ -921,6 +968,9 @@ function TF.stop()
     end
     TF.STATE.running = false
     TF.STATE.enabled = false
+    TF.CFG.enabled = false
+    TF.STATE.is_dropping = false
+    TF.STATE.anti_take_active = false
     TF.STATE.status_text = "Stopping..."
     addLog("Menghentikan bot transfer...")
     return true
@@ -942,6 +992,7 @@ local function renderMainPanel()
     local c = TF.CFG
     local st = TF.STATE
 
+    -- BARIS TOP CHECKBOXES
     ImGui.Text("Pengaturan Mode:")
     uiGap(2)
 
@@ -991,6 +1042,7 @@ local function renderMainPanel()
     ImGui.Separator()
     uiGap(6)
 
+    -- PENJELASAN MODE AKTIF
     local modeDesc = "Move Block/Seed (Input -> Output)"
     if c.auto_vend then
         modeDesc = "Auto Vend Buy (Beli dari Toko -> Drop di Output)"
@@ -1006,7 +1058,8 @@ local function renderMainPanel()
     ImGui.Separator()
     uiGap(6)
 
-    -- Item ID
+    -- FORM ANGKA DENGAN TOMBOL [-] [+]
+    -- 1. Item ID
     ImGui.Text("Item ID:")
     ImGui.PushItemWidth(140)
     local chIID, vIID = ImGui.InputText("##tf_iid", st.item_id_buf, 10)
@@ -1029,7 +1082,7 @@ local function renderMainPanel()
         TF.saveData()
     end
 
-    -- Item Price
+    -- 2. Item Price
     ImGui.Text("Item Price:")
     ImGui.PushItemWidth(140)
     local chIP, vIP = ImGui.InputText("##tf_ip", st.item_price_buf, 10)
@@ -1052,7 +1105,7 @@ local function renderMainPanel()
         TF.saveData()
     end
 
-    -- Item Buy Price
+    -- 3. Item Buy Price
     ImGui.Text("Item Buy Price:")
     ImGui.PushItemWidth(140)
     local chIBP, vIBP = ImGui.InputText("##tf_ibp", st.buy_price_buf, 10)
@@ -1079,49 +1132,33 @@ local function renderMainPanel()
     ImGui.Separator()
     uiGap(6)
 
-    -- INPUT WORLD (MULTI-WORLD)
-    ImGui.Text("Input World [Required] (Bisa multi world dipisah koma):")
-    ImGui.PushItemWidth(260)
-    local chIW, vIW = ImGui.InputText("##tf_iw", st.input_w_buf, 1024)
-    ImGui.PopItemWidth()
-    if chIW then
-        st.input_w_buf = vIW
-        c.input_world_raw = trimStr(vIW)
-        st.input_queue = parseWorldList(c.input_world_raw)
-        TF.saveData()
-    end
-    ImGui.SameLine()
-    if autoBtn("+ World Saat Ini##tf_cur_in") then
-        local cw = getCurrentWorld()
-        if cw ~= "" and cw ~= "EXIT" then
-            if c.input_world_raw == "" then c.input_world_raw = cw
-            else c.input_world_raw = c.input_world_raw .. ", " .. cw end
-            st.input_w_buf = c.input_world_raw
-            st.input_queue = parseWorldList(c.input_world_raw)
-            TF.saveData()
-        end
-    end
-    local availIW = 500
-    if ImGui and ImGui.GetContentRegionAvail then
-        local okA, av = pcall(ImGui.GetContentRegionAvail)
-        local ax = (type(av) == "number" and av) or (av and av.x) or 500
-        if type(ax) == "number" and ax > 50 then availIW = ax end
-    end
-    if availIW >= 460 then ImGui.SameLine() end
+    -- ========================================================================
+    -- 1. DAFTAR & FORM INPUT WORLD (MULTI-WORLD TABLE & FORM)
+    -- ========================================================================
     local inCount = #st.input_queue
-    if autoBtn(st.show_input_queue and "▲ Tutup Antrian##tf_inq_btn" or ("▼ Antrian (" .. inCount .. ")##tf_inq_btn")) then
-        st.show_input_queue = not st.show_input_queue
-    end
+    uiSection("Daftar World Input (" .. inCount .. ")", true)
 
-    if st.show_input_queue then
-        ImGui.TextColored(0.4, 0.8, 1.0, 1.0, string.format("--- Daftar Antrian Input World (%d World) ---", inCount))
+    if ImGui.BeginTable("BorenTFInputTable", 4) then
+        ImGui.TableSetupColumn("No")
+        ImGui.TableSetupColumn("World:Door")
+        ImGui.TableSetupColumn("Status")
+        ImGui.TableSetupColumn("Aksi")
+        ImGui.TableHeadersRow()
+
         if inCount == 0 then
-            ImGui.Text("Belum ada Input World. Masukkan nama world di atas (pisahkan koma).")
+            ImGui.TableNextRow()
+            ImGui.TableSetColumnIndex(0); ImGui.Text("-")
+            ImGui.TableSetColumnIndex(1); ImGui.Text("(Kosong)")
+            ImGui.TableSetColumnIndex(2); ImGui.Text("Belum ada")
+            ImGui.TableSetColumnIndex(3); ImGui.Text("Tambah di bawah")
         else
             for i, w in ipairs(st.input_queue) do
-                local badge = (w.status == "Active") and "[PROSES]" or (w.status:match("^Done") and "[SELESAI]" or "[ANTRI]")
-                ImGui.Text(string.format(" %d. %s  %s", i, w.raw, badge))
-                ImGui.SameLine()
+                ImGui.TableNextRow()
+                ImGui.TableSetColumnIndex(0); ImGui.Text(tostring(i))
+                ImGui.TableSetColumnIndex(1); ImGui.Text(tostring(w.raw or w.name))
+                local badge = (w.status == "Active") and "[PROSES]" or (w.status:match("^Done") and "[SELESAI]" or tostring(w.status or "Ready"))
+                ImGui.TableSetColumnIndex(2); ImGui.Text(badge)
+                ImGui.TableSetColumnIndex(3)
                 if autoBtn("Hapus##del_in_" .. i) then
                     table.remove(st.input_queue, i)
                     c.input_world_raw = formatWorldList(st.input_queue)
@@ -1130,53 +1167,114 @@ local function renderMainPanel()
                     break
                 end
             end
-            if autoBtn("↺ Reset Status Antrian Input##reset_in_status") then
-                for _, w in ipairs(st.input_queue) do w.status = "Ready" end
-                st.input_idx = 1
-            end
         end
-        uiGap(4)
+        ImGui.EndTable()
     end
 
-    uiGap(6)
-
-    -- OUTPUT WORLD (MULTI-WORLD)
-    ImGui.Text("Output World [Required] (Bisa multi world dipisah koma):")
-    ImGui.PushItemWidth(260)
-    local chOW, vOW = ImGui.InputText("##tf_ow", st.output_w_buf, 1024)
-    ImGui.PopItemWidth()
-    if chOW then
-        st.output_w_buf = vOW
-        c.output_world_raw = trimStr(vOW)
-        st.output_queue = parseWorldList(c.output_world_raw)
-        TF.saveData()
+    local function openAddInputDialog()
+        uiOpenDialog("boren_in_tf_in", "Tambah Input World", {
+            { id = "w", label = "Input World (Bisa multi pisah koma/enter)", default = st.add_input_w_buf, maxLen = 512 },
+        }, "Tambah & Simpan", function(v)
+            local raw = trimStr(v.w or "")
+            if raw ~= "" then
+                local parsed = parseWorldList(raw)
+                for _, pw in ipairs(parsed) do table.insert(st.input_queue, pw) end
+                c.input_world_raw = formatWorldList(st.input_queue)
+                st.input_w_buf = c.input_world_raw
+                st.add_input_w_buf = ""
+                TF.saveData()
+                addLog(string.format("`2[Input World] Berhasil menambah %d world ke antrian.", #parsed))
+            end
+        end)
     end
+
+    uiGap(2)
+    uiSection("Tambah World Input Baru")
     ImGui.SameLine()
-    if autoBtn("+ World Saat Ini##tf_cur_out") then
-        local cw = getCurrentWorld()
-        if cw ~= "" and cw ~= "EXIT" then
-            if c.output_world_raw == "" then c.output_world_raw = cw
-            else c.output_world_raw = c.output_world_raw .. ", " .. cw end
-            st.output_w_buf = c.output_world_raw
-            st.output_queue = parseWorldList(c.output_world_raw)
+    if autoBtn("+ Dialog / Ketik##tf_btn_dlg_in") then
+        openAddInputDialog()
+    end
+
+    ImGui.PushItemWidth(math.max(160, math.floor(availW * 0.44)))
+    local chInW, nvInW = safeInputText("##tf_add_in_buf", st.add_input_w_buf, 256)
+    ImGui.PopItemWidth()
+    if chInW then st.add_input_w_buf = nvInW end
+
+    ImGui.SameLine()
+    if autoBtn("+ Tambah Input##tf_add_in_btn") then
+        local textToAdd = trimStr(st.add_input_w_buf or "")
+        if textToAdd == "" then
+            openAddInputDialog()
+        else
+            local parsed = parseWorldList(textToAdd)
+            for _, pw in ipairs(parsed) do table.insert(st.input_queue, pw) end
+            c.input_world_raw = formatWorldList(st.input_queue)
+            st.input_w_buf = c.input_world_raw
+            st.add_input_w_buf = ""
             TF.saveData()
         end
     end
     ImGui.SameLine()
-    local outCount = #st.output_queue
-    if autoBtn(st.show_output_queue and "▲ Tutup Antrian##tf_outq_btn" or ("▼ Antrian (" .. outCount .. ")##tf_outq_btn")) then
-        st.show_output_queue = not st.show_output_queue
+    if autoBtn("+ World Saat Ini##tf_cur_in") then
+        local cw = getCurrentWorld()
+        if cw ~= "" and cw ~= "EXIT" then
+            table.insert(st.input_queue, { raw = cw, name = cw:upper(), door = "", status = "Ready" })
+            c.input_world_raw = formatWorldList(st.input_queue)
+            st.input_w_buf = c.input_world_raw
+            TF.saveData()
+        end
+    end
+    ImGui.SameLine()
+    if autoBtn("Paste##tf_paste_in") then
+        local clip = getClipboardTextSafe()
+        if clip and clip ~= "" then st.add_input_w_buf = clip end
+    end
+    ImGui.SameLine()
+    if autoBtn("↺ Reset Status##reset_in_status") then
+        for _, w in ipairs(st.input_queue) do w.status = "Ready" end
+        st.input_idx = 1
+        TF.saveData()
+    end
+    ImGui.SameLine()
+    if autoBtn("Hapus Semua##clear_in_all") then
+        st.input_queue = {}
+        c.input_world_raw = ""
+        st.input_w_buf = ""
+        st.input_idx = 1
+        TF.saveData()
     end
 
-    if st.show_output_queue then
-        ImGui.TextColored(0.4, 0.8, 1.0, 1.0, string.format("--- Daftar Antrian Output World (%d World) ---", outCount))
+    uiGap(8)
+    ImGui.Separator()
+    uiGap(4)
+
+    -- ========================================================================
+    -- 2. DAFTAR & FORM OUTPUT WORLD (MULTI-WORLD TABLE & FORM)
+    -- ========================================================================
+    local outCount = #st.output_queue
+    uiSection("Daftar World Output (" .. outCount .. ")", true)
+
+    if ImGui.BeginTable("BorenTFOutputTable", 4) then
+        ImGui.TableSetupColumn("No")
+        ImGui.TableSetupColumn("World:Door")
+        ImGui.TableSetupColumn("Status")
+        ImGui.TableSetupColumn("Aksi")
+        ImGui.TableHeadersRow()
+
         if outCount == 0 then
-            ImGui.Text("Belum ada Output World. Masukkan nama world di atas (pisahkan koma).")
+            ImGui.TableNextRow()
+            ImGui.TableSetColumnIndex(0); ImGui.Text("-")
+            ImGui.TableSetColumnIndex(1); ImGui.Text("(Kosong)")
+            ImGui.TableSetColumnIndex(2); ImGui.Text("Belum ada")
+            ImGui.TableSetColumnIndex(3); ImGui.Text("Tambah di bawah")
         else
             for i, w in ipairs(st.output_queue) do
-                local badge = (w.status == "Active") and "[PROSES]" or (w.status:match("^Done") and "[SELESAI]" or "[ANTRI]")
-                ImGui.Text(string.format(" %d. %s  %s", i, w.raw, badge))
-                ImGui.SameLine()
+                ImGui.TableNextRow()
+                ImGui.TableSetColumnIndex(0); ImGui.Text(tostring(i))
+                ImGui.TableSetColumnIndex(1); ImGui.Text(tostring(w.raw or w.name))
+                local badge = (w.status == "Active") and "[PROSES]" or (w.status:match("^Done") and "[SELESAI]" or tostring(w.status or "Ready"))
+                ImGui.TableSetColumnIndex(2); ImGui.Text(badge)
+                ImGui.TableSetColumnIndex(3)
                 if autoBtn("Hapus##del_out_" .. i) then
                     table.remove(st.output_queue, i)
                     c.output_world_raw = formatWorldList(st.output_queue)
@@ -1185,31 +1283,91 @@ local function renderMainPanel()
                     break
                 end
             end
-            if autoBtn("↺ Reset Status Antrian Output##reset_out_status") then
-                for _, w in ipairs(st.output_queue) do w.status = "Ready" end
-                st.output_idx = 1
-            end
         end
-        uiGap(4)
+        ImGui.EndTable()
     end
 
-    uiGap(10)
-    ImGui.Separator()
-    uiGap(6)
+    local function openAddOutputDialog()
+        uiOpenDialog("boren_in_tf_out", "Tambah Output World", {
+            { id = "w", label = "Output World (Bisa multi pisah koma/enter)", default = st.add_output_w_buf, maxLen = 512 },
+        }, "Tambah & Simpan", function(v)
+            local raw = trimStr(v.w or "")
+            if raw ~= "" then
+                local parsed = parseWorldList(raw)
+                for _, pw in ipairs(parsed) do table.insert(st.output_queue, pw) end
+                c.output_world_raw = formatWorldList(st.output_queue)
+                st.output_w_buf = c.output_world_raw
+                st.add_output_w_buf = ""
+                TF.saveData()
+                addLog(string.format("`2[Output World] Berhasil menambah %d world ke antrian.", #parsed))
+            end
+        end)
+    end
 
-    -- TOMBOL UTAMA START / STOP
-    if st.running then
-        if autoBtn(" ■ STOP BOT TRANSFER ##tf_stop") then
-            TF.stop()
-        end
-    else
-        if autoBtn(" ▶ START BOT TRANSFER ##tf_start") then
-            TF.start()
+    uiGap(2)
+    uiSection("Tambah World Output Baru")
+    ImGui.SameLine()
+    if autoBtn("+ Dialog / Ketik##tf_btn_dlg_out") then
+        openAddOutputDialog()
+    end
+
+    ImGui.PushItemWidth(math.max(160, math.floor(availW * 0.44)))
+    local chOutW, nvOutW = safeInputText("##tf_add_out_buf", st.add_output_w_buf, 256)
+    ImGui.PopItemWidth()
+    if chOutW then st.add_output_w_buf = nvOutW end
+
+    ImGui.SameLine()
+    if autoBtn("+ Tambah Output##tf_add_out_btn") then
+        local textToAdd = trimStr(st.add_output_w_buf or "")
+        if textToAdd == "" then
+            openAddOutputDialog()
+        else
+            local parsed = parseWorldList(textToAdd)
+            for _, pw in ipairs(parsed) do table.insert(st.output_queue, pw) end
+            c.output_world_raw = formatWorldList(st.output_queue)
+            st.output_w_buf = c.output_world_raw
+            st.add_output_w_buf = ""
+            TF.saveData()
         end
     end
     ImGui.SameLine()
-    ImGui.Text("Status: " .. tostring(st.status_text))
+    if autoBtn("+ World Saat Ini##tf_cur_out") then
+        local cw = getCurrentWorld()
+        if cw ~= "" and cw ~= "EXIT" then
+            table.insert(st.output_queue, { raw = cw, name = cw:upper(), door = "", status = "Ready" })
+            c.output_world_raw = formatWorldList(st.output_queue)
+            st.output_w_buf = c.output_world_raw
+            TF.saveData()
+        end
+    end
+    ImGui.SameLine()
+    if autoBtn("Paste##tf_paste_out") then
+        local clip = getClipboardTextSafe()
+        if clip and clip ~= "" then st.add_output_w_buf = clip end
+    end
+    ImGui.SameLine()
+    if autoBtn("↺ Reset Status##reset_out_status") then
+        for _, w in ipairs(st.output_queue) do w.status = "Ready" end
+        st.output_idx = 1
+        TF.saveData()
+    end
+    ImGui.SameLine()
+    if autoBtn("Hapus Semua##clear_out_all") then
+        st.output_queue = {}
+        c.output_world_raw = ""
+        st.output_w_buf = ""
+        st.output_idx = 1
+        TF.saveData()
+    end
 
+    uiGap(8)
+    ImGui.Separator()
+    uiGap(4)
+
+    -- ========================================================================
+    -- 3. STATUS & STATISTIK (TANPA TOMBOL START BOT DI BAWAH)
+    -- ========================================================================
+    ImGui.Text("Status: " .. tostring(st.status_text))
     uiGap(4)
     ImGui.Text(string.format("Statistik -> Moved: %d | Bought: %d (%d WL) | Restocked: %d (Max Cap: 5k)",
         st.total_moved, st.total_bought, st.total_wl_spent, st.total_restocked))
@@ -1420,6 +1578,69 @@ end
 
 if LogToConsole then
     pcall(LogToConsole, "`2[Boren Store] `0Auto Transfer Pro (Multi-World) Berhasil Dimuat! Ketik /transfer untuk buka menu.")
+end
+
+
+-- ============================================================================
+-- ANTI-TAKE PACKET 11 HOOK (BLOCK/SEED & CONSUME GUARD)
+-- ============================================================================
+local function onSendPacketRawTransferHook(raw)
+    if not TF.STATE.running then return false end
+    -- Packet 11 = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST (Pick up floating object)
+    if raw and raw.type == 11 and raw.value then
+        -- 1. Sedang proses drop -> TOLAK SEMUA PICKUP
+        if TF.STATE.is_dropping or TF.STATE.anti_take_active then
+            return true
+        end
+
+        local targetUID = tonumber(raw.value) or 0
+        local targetID = TF.CFG.item_id
+        local blockPick = false
+
+        -- Cek apakah saat ini bot berada di salah satu Output World
+        local inOutput = false
+        local cw = getCurrentWorld():upper()
+        if cw ~= "" and cw ~= "EXIT" then
+            for _, ow in ipairs(TF.STATE.output_queue) do
+                if ow.name == cw then inOutput = true; break end
+            end
+        end
+
+        local objs = nil
+        if getObjects then pcall(function() objs = getObjects() end) end
+        if (not objs) and GetObjects then pcall(function() objs = GetObjects() end) end
+        if type(objs) == "table" then
+            for _, o in pairs(objs) do
+                local oid = tonumber(o.id or o.item_id or o.itemID) or 0
+                local uid = tonumber(o.uid or o.oid or o.objID) or 0
+                if uid == targetUID then
+                    -- Anti take item consume (kapan saja saat bot transfer aktif)
+                    if CONSUME_IDS[oid] then
+                        blockPick = true
+                        break
+                    end
+                    -- Di Output World: anti take block / seed yang di-drop
+                    if inOutput and (oid == targetID or oid == (targetID + 1) or oid == (targetID - 1)) then
+                        blockPick = true
+                        break
+                    end
+                end
+            end
+        end
+
+        if blockPick then
+            return true -- Block packet 11! Bot tidak bisa take item ini!
+        end
+    end
+    return false
+end
+
+TF.handleSendPacketRaw = onSendPacketRawTransferHook
+
+if AddHook then
+    pcall(AddHook, "OnSendPacketRaw", "boren_tf_antitake_raw", onSendPacketRawTransferHook)
+elseif addHook then
+    pcall(addHook, "OnSendPacketRaw", "boren_tf_antitake_raw", onSendPacketRawTransferHook)
 end
 
 return TF

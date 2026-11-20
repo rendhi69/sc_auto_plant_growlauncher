@@ -834,8 +834,8 @@ local function dropToEventWorlds(returnFarm)
 
     local rows = HV.STATE.event_rows
     if #rows == 0 then
-        addLog("`4[Event World] Daftar Event Save World kosong! Isi di tab Event Save.")
-        return false
+        addLog("`e[Event World] World Event belum diatur (opsional) — melewati drop event.")
+        return true
     end
 
     for _, itmID in ipairs(toDrop) do
@@ -849,8 +849,8 @@ local function dropToEventWorlds(returnFarm)
             end
 
             if not targetRow then
-                addLog("`4[Event World] Semua World Event sudah penuh / tidak tersedia!")
-                break
+                addLog("`e[Event World] Semua World Event penuh / tidak tersedia — drop event dilewati.")
+                return true
             end
 
             HV.STATE.status_text = "Drop Event -> " .. targetRow.name
@@ -941,21 +941,19 @@ local function ensureGearAndFuel(returnFarm)
     end
 
     local gw = parseWorldDoor(c.gear_world)
-    if not gw then
-        if c.auto_magni_fuel and c.stop_if_no_fuel and getInvCount(ITEM.FUEL_PACK) <= 0 then
-            addLog("`4[Fuel Guard] Fuel Pack habis & Gear World belum diatur — bot berhenti aman!")
-            HV.STATE.status_text = "No Fuel Pack"
-            return false
-        end
-        addLog("`e[Gear] Gear World belum diatur — melewati restock gear.")
+    if not gw or trimStr(c.gear_world or "") == "" then
+        -- Gear World opsional! Equip perlengkapan yang ada di tas bila tersedia
+        if c.auto_magni_fuel and getInvCount(ITEM.MAGNI) > 0 then equipItem(ITEM.MAGNI); safeSleep(100) end
+        if getInvCount(ITEM.FUEL_PACK) > 0 and HV.STATE.need_fuel then equipItem(ITEM.FUEL_PACK); HV.STATE.need_fuel = false; safeSleep(100) end
+        for _, eqID in ipairs(equipIDs) do if getInvCount(eqID) > 0 then equipItem(eqID); safeSleep(100) end end
         return true
     end
 
     HV.STATE.status_text = "Gear World: " .. gw.name
     addLog("[Gear] Ambil perlengkapan / fuel di " .. gw.name)
     if not warpToWorld(gw.name, gw.door) then
-        addLog("`4[Gear] Gagal warp ke Gear World " .. gw.name)
-        return false
+        addLog("`e[Gear] Gagal warp ke Gear World " .. gw.name .. " — melanjutkan harvest (Gear World opsional).")
+        return true
     end
 
     setCollectCheats(true)
@@ -980,7 +978,7 @@ local function ensureGearAndFuel(returnFarm)
         end
     end
 
-    if c.auto_magni_fuel and c.stop_if_no_fuel and getInvCount(ITEM.FUEL_PACK) <= 0 then
+    if c.auto_magni_fuel and c.stop_if_no_fuel and getInvCount(ITEM.FUEL_PACK) <= 0 and (gw and trimStr(c.gear_world or "") ~= "") then
         addLog("`4[Fuel Guard] Stok Fuel Pack habis di tas & Gear World — bot berhenti aman!")
         HV.STATE.status_text = "No Fuel Pack"
         return false
@@ -1421,7 +1419,7 @@ local function renderFarmsSub()
         ImGui.EndTable()
     end
 
-    uiSectionWithKetik("Tambah World Farm Baru", "hv_ktk_w", function()
+    local function openAddFarmDialog()
         local wPre, dPre = tostring(addFarmWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
         if not wPre then wPre = tostring(addFarmWorldBuf or ""); dPre = "" end
         uiOpenDialog("boren_in_hv_w", "Tambah World Harvest", {
@@ -1441,7 +1439,13 @@ local function renderFarmsSub()
                 uiNotice = "Tersimpan: " .. wn .. " (ID " .. tostring(iid) .. ")"
             end
         end)
-    end)
+    end
+
+    uiSection("Tambah World Farm Baru")
+    ImGui.SameLine()
+    if autoBtn("+ Dialog / Ketik##hv_btn_dlg_w") then
+        openAddFarmDialog()
+    end
 
     if ImGui.BeginTable("BorenHarvestAddW", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -1477,11 +1481,13 @@ local function renderFarmsSub()
 
     if act == 1 then
         local rawW = trimStr(addFarmWorldBuf)
-        local p = nil
-        if rawW ~= "" then
+        if rawW == "" then
+            openAddFarmDialog()
+        else
             local norm = rawW:gsub("|", ":")
             local colons = 0
             for _ in norm:gmatch(":") do colons = colons + 1 end
+            local p = nil
             if colons >= 2 then
                 p = parseFarmRow(norm)
             else
@@ -1492,11 +1498,11 @@ local function renderFarmsSub()
                 if iid <= 0 then iid = 4584 end
                 if wName ~= "" then p = { name = wName, door = dId, item_id = iid, status = "Ready" } end
             end
+            if p then
+                table.insert(st.rows, p); addFarmWorldBuf = ""; HV.saveData()
+                uiNotice = "Tersimpan: " .. p.name .. " (ID " .. tostring(p.item_id) .. ")"
+            end
         end
-        if p then
-            table.insert(st.rows, p); addFarmWorldBuf = ""; HV.saveData()
-            uiNotice = "Tersimpan: " .. p.name .. " (ID " .. tostring(p.item_id) .. ")"
-        else uiNotice = "Isi World:DoorID dulu!" end
 
     elseif act == 2 then
         runAsync(function()
@@ -1580,7 +1586,7 @@ local function renderSaveSub()
         ImGui.EndTable()
     end
 
-    uiSectionWithKetik("Tambah Save World Baru", "hv_ktk_sw", function()
+    local function openAddSaveDialog()
         local wPre, dPre = tostring(addSaveWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
         if not wPre then wPre = tostring(addSaveWorldBuf or ""); dPre = "" end
         uiOpenDialog("boren_in_hv_sw", "Tambah Save World", {
@@ -1603,7 +1609,13 @@ local function renderSaveSub()
                 uiNotice = "Tersimpan Save: " .. wn .. " (" .. stype .. ")"
             end
         end)
-    end)
+    end
+
+    uiSection("Tambah Save World Baru")
+    ImGui.SameLine()
+    if autoBtn("+ Dialog / Ketik##hv_btn_dlg_sw") then
+        openAddSaveDialog()
+    end
 
     if ImGui.BeginTable("BorenHarvestAddSwTbl", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -1626,20 +1638,17 @@ local function renderSaveSub()
     end
 
     uiGap(2)
-    ImGui.Text("Limit per World:")
+    ImGui.Text("Limit per World (0 = Unlimited):")
     ImGui.SameLine()
-    ImGui.PushItemWidth(math.max(70, math.floor(w * 0.22)))
+    ImGui.PushItemWidth(math.max(80, math.floor(w * 0.28)))
     local chLim, nvLim = safeInput("##hv_sw_lim_in", addSaveLimitBuf, 16)
     ImGui.PopItemWidth()
     if chLim then addSaveLimitBuf = nvLim:gsub("[^0-9]", "") end
     ImGui.SameLine()
-    if autoBtn("10k##sw_10") then addSaveLimitBuf = "10000" end
-    ImGui.SameLine()
-    if autoBtn("20k##sw_20") then addSaveLimitBuf = "20000" end
-    ImGui.SameLine()
-    if autoBtn("50k##sw_50") then addSaveLimitBuf = "50000" end
-    ImGui.SameLine()
-    if autoBtn("Unli##sw_unl") then addSaveLimitBuf = "0" end
+    local isUnliSw = (addSaveLimitBuf == "0" or addSaveLimitBuf == "")
+    if autoBtn(isUnliSw and "[ Unlimited ]##sw_unl" or "Unlimited##sw_unl") then
+        addSaveLimitBuf = "0"
+    end
 
     uiGap(4)
     local act = uiActionBar("BorenHarvestSaveActs", w, {
@@ -1652,8 +1661,9 @@ local function renderSaveSub()
 
     if act == 1 then
         local rawW = trimStr(addSaveWorldBuf)
-        local p = nil
-        if rawW ~= "" then
+        if rawW == "" then
+            openAddSaveDialog()
+        else
             local norm = rawW:gsub("|", ":")
             local colons = 0
             for _ in norm:gmatch(":") do colons = colons + 1 end
@@ -1759,7 +1769,7 @@ local function renderEventSub()
         ImGui.EndTable()
     end
 
-    uiSectionWithKetik("Tambah Event World Baru", "hv_ktk_ew", function()
+    local function openAddEventDialog()
         local wPre, dPre = tostring(addEventWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
         if not wPre then wPre = tostring(addEventWorldBuf or ""); dPre = "" end
         uiOpenDialog("boren_in_hv_ew", "Tambah World Event", {
@@ -1778,7 +1788,13 @@ local function renderEventSub()
                 uiNotice = "Tersimpan Event: " .. wn
             end
         end)
-    end)
+    end
+
+    uiSection("Tambah Event World Baru")
+    ImGui.SameLine()
+    if autoBtn("+ Dialog / Ketik##hv_btn_dlg_ew") then
+        openAddEventDialog()
+    end
 
     if ImGui.BeginTable("BorenHarvestAddEwTbl", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -1800,15 +1816,17 @@ local function renderEventSub()
     end
 
     uiGap(2)
-    ImGui.Text("Preset Limit Event:")
+    ImGui.Text("Limit per World (0 = Unlimited):")
     ImGui.SameLine()
-    if autoBtn("5k##ew_5") then addEventLimitBuf = "5000" end
+    ImGui.PushItemWidth(math.max(80, math.floor(w * 0.28)))
+    local chLim, nvLim = safeInput("##hv_ew_lim_in", addEventLimitBuf, 16)
+    ImGui.PopItemWidth()
+    if chLim then addEventLimitBuf = nvLim:gsub("[^0-9]", "") end
     ImGui.SameLine()
-    if autoBtn("10k##ew_10") then addEventLimitBuf = "10000" end
-    ImGui.SameLine()
-    if autoBtn("20k##ew_20") then addEventLimitBuf = "20000" end
-    ImGui.SameLine()
-    if autoBtn("Unli##ew_unl") then addEventLimitBuf = "0" end
+    local isUnliEv = (addEventLimitBuf == "0" or addEventLimitBuf == "")
+    if autoBtn(isUnliEv and "[ Unlimited ]##ew_unl" or "Unlimited##ew_unl") then
+        addEventLimitBuf = "0"
+    end
 
     uiGap(4)
     local act = uiActionBar("BorenHarvestEventActs", w, {
@@ -1821,8 +1839,9 @@ local function renderEventSub()
 
     if act == 1 then
         local rawW = trimStr(addEventWorldBuf)
-        local p = nil
-        if rawW ~= "" then
+        if rawW == "" then
+            openAddEventDialog()
+        else
             local norm = rawW:gsub("|", ":")
             local colons = 0
             for _ in norm:gmatch(":") do colons = colons + 1 end
