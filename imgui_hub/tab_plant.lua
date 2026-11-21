@@ -109,7 +109,7 @@ local function safeInputText(id, curVal, maxLen, onDoubleTapFn)
     end
 
     -- Opsi B: Double-tap/double-click kotak input -> buka Native Keyboard Dialog HP (0 perubahan UI!)
-    local dtFn = (type(onDoubleTapFn) == "function") and onDoubleTapFn or lastSectionKetikFn
+    local dtFn = (type(onDoubleTapFn) == "function") and onDoubleTapFn or ((onDoubleTapFn ~= false) and lastSectionKetikFn or nil)
     if dtFn and checkInputDoubleTap(tostring(id)) then
         pcall(dtFn)
         return false, s

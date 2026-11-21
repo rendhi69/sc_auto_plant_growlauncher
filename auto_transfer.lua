@@ -347,13 +347,23 @@ local function getLocalPos()
 end
 
 local function getCurrentWorld()
-    if GetWorld then
-        local ok, w = pcall(GetWorld)
-        if ok and w and w.name then return cleanWorldName(w.name) end
-    end
-    if getWorld then
-        local ok, w = pcall(getWorld)
-        if ok and w and w.name then return cleanWorldName(w.name) end
+    local fns = { getCurrentWorldName, GetWorldName, getWorld, _G.getCurrentWorld, GetWorld }
+    for _, fn in ipairs(fns) do
+        if type(fn) == "function" then
+            local ok, res = pcall(fn)
+            if ok and res ~= nil then
+                if type(res) == "string" then
+                    local nm = cleanWorldName(res)
+                    if nm ~= "" then return nm end
+                elseif type(res) == "table" or type(res) == "userdata" then
+                    local okN, nm = pcall(function() return res.name or res.worldName end)
+                    if okN and type(nm) == "string" then
+                        local c = cleanWorldName(nm)
+                        if c ~= "" then return c end
+                    end
+                end
+            end
+        end
     end
     return ""
 end

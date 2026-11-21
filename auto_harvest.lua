@@ -404,23 +404,25 @@ local function getPlayerPos()
 end
 
 local function getCurrentWorldSafe()
-    local cw = nil
-    if getRealWorldName then
-        local ok, w = pcall(getRealWorldName)
-        if ok and type(w) == "string" and w ~= "" then cw = w end
-    end
-    if not cw and GetWorld then
-        local ok, w = pcall(GetWorld)
-        if ok and w then
-            local name = w.name or (w.getName and w:getName())
-            if type(name) == "string" and name ~= "" then cw = name end
+    local fns = { getCurrentWorldName, GetWorldName, getWorld, getCurrentWorld, GetWorld }
+    for _, fn in ipairs(fns) do
+        if type(fn) == "function" then
+            local ok, res = pcall(fn)
+            if ok and res ~= nil then
+                if type(res) == "string" then
+                    local nm = cleanWorldName(res)
+                    if nm ~= "" then return nm end
+                elseif type(res) == "table" or type(res) == "userdata" then
+                    local okN, nm = pcall(function() return res.name or res.worldName end)
+                    if okN and type(nm) == "string" then
+                        local c = cleanWorldName(nm)
+                        if c ~= "" then return c end
+                    end
+                end
+            end
         end
     end
-    if not cw and getLocalSafe() then
-        local p = getLocalSafe()
-        if p.world and type(p.world) == "string" and p.world ~= "" then cw = p.world end
-    end
-    return cleanWorldName(cw or "EXIT")
+    return "EXIT"
 end
 
 local function getInvCount(itemID)
@@ -1326,7 +1328,7 @@ end
 
 local function safeInput(id, val, maxL)
     local k = uiKit()
-    if k and k.safeInputText then return k.safeInputText(id, val, maxL) end
+    if k and k.safeInputText then return k.safeInputText(id, val, maxL, false) end
     local s = tostring(val or "")
     local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxL or 256)
     if not ok then return false, s end
