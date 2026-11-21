@@ -498,24 +498,80 @@ local function isTileBlocked(x, y)
     return false
 end
 
-local unreachableMap = {}
 local function moveSafeTo(tx, ty)
-    if unreachableMap[tx .. ":" .. ty] then return false end
-    if tx < 0 or tx > 99 or ty < 0 or ty > 59 then return false end
-    if FindPath then
-        local ok, r = pcall(FindPath, tx, ty)
-        if ok and r == false then
-            unreachableMap[tx .. ":" .. ty] = true
-            return false
+    if not HV.STATE.running then return false end
+    tx = math.max(0, math.min(99, math.floor(tx or 0)))
+    ty = math.max(0, math.min(53, math.floor(ty or 0)))
+
+    local curPx, curPy = getPlayerPos()
+    if curPx and curPy and math.abs(curPx - tx) <= 1 and math.abs(curPy - ty) <= 1 then
+        return true
+    end
+
+    local sx, sy = tx, ty
+    local t = getTileSafe(tx, ty)
+    if t and t.collidable then
+        local tUp = getTileSafe(tx, ty - 1)
+        if tUp and not tUp.collidable then sx, sy = tx, ty - 1 end
+    end
+
+    local pFn = FindPath or findPath
+    if not pFn then return false end
+    if HV.CFG.use_modfly and editToggle then
+        pcall(editToggle, "ModFly", true)
+        pcall(editToggle, "Anti Lava", true)
+        pcall(editToggle, "No Lava", true)
+    end
+
+    local startPx, startPy = getPlayerPos()
+    local totalDist = math.max(math.abs((startPx or 0) - sx), math.abs((startPy or 0) - sy))
+
+    if totalDist <= 3 then
+        pcall(pFn, sx, sy)
+        local maxWait = math.max(160, (tonumber(HV.CFG.step_delay) or 110) * 3)
+        local waited = 0
+        while waited < maxWait and HV.STATE.running do
+            local px, py = getPlayerPos()
+            if px and py and math.abs(px - sx) <= 1 and math.abs(py - sy) <= 1 then
+                safeSleep(HV.CFG.step_delay or 40)
+                return true
+            end
+            safeSleep(25)
+            waited = waited + 25
+        end
+        local fx, fy = getPlayerPos()
+        return (fx and fy and math.abs(fx - sx) <= 1 and math.abs(fy - sy) <= 1)
+    end
+
+    pcall(pFn, sx, sy)
+    local maxWaitFar = math.max(2500, math.min(15000, totalDist * 180))
+    local waitedFar = 0
+    local lastPx, lastPy = startPx, startPy
+    local stuckTicks = 0
+
+    while waitedFar < maxWaitFar and HV.STATE.running do
+        safeSleep(60)
+        waitedFar = waitedFar + 60
+        local nx, ny = getPlayerPos()
+        if nx and ny then
+            if math.abs(nx - sx) <= 1 and math.abs(ny - sy) <= 1 then
+                safeSleep(HV.CFG.step_delay or 50)
+                return true
+            end
+            if nx == lastPx and ny == lastPy then
+                stuckTicks = stuckTicks + 1
+                if stuckTicks >= 10 then
+                    pcall(pFn, sx, sy)
+                    stuckTicks = 0
+                end
+            else
+                stuckTicks = 0
+                lastPx, lastPy = nx, ny
+            end
         end
     end
-    local px, py = getPlayerPos()
-    if math.abs(px - tx) <= 1 and math.abs(py - ty) <= 1 then return true end
-    safeSleep(tonumber(HV.CFG.step_delay) or 110)
-    local npx, npy = getPlayerPos()
-    local moved = (math.abs(npx - tx) < math.abs(px - tx)) or (math.abs(npy - ty) < math.abs(py - ty)) or (npx == tx and npy == ty)
-    if not moved then unreachableMap[tx .. ":" .. ty] = true end
-    return moved
+    local fx, fy = getPlayerPos()
+    return (fx and fy and math.abs(fx - sx) <= 1 and math.abs(fy - sy) <= 1)
 end
 
 local function warpToWorldInner(wName, doorID)
@@ -656,24 +712,76 @@ end
 local function findCleanDropPositions()
     local spots = {}
     local px, py = getPlayerPos()
-    local startX = math.max(2, math.min(94, px))
-    local startY = math.max(2, math.min(54, py))
-    for r = 0, 8 do
-        for dy = -r, r do
-            for dx = -r, r do
-                if math.abs(dx) == r or math.abs(dy) == r then
-                    local sx, sy = startX + dx, startY + dy
-                    if sx >= 2 and sx <= 97 and sy >= 2 and sy <= 55 then
-                        if not isTileBlocked(sx, sy) and not isTileBlocked(sx, sy + 1) then
-                            table.insert(spots, { x = sx, y = sy })
-                            if #spots >= 16 then return spots end
-                        end
-                    end
+    local doorX, doorY = px, py
+
+    -- Cari koordinat pintu masuk kedatangan bot (fg == 6 atau door)
+    for dy = -2, 2 do
+        for dx = -2, 2 do
+            local t = getTileSafe(px + dx, py + dy)
+            if t and (tonumber(t.fg) == 6 or tonumber(t.fg) == 8) then
+                doorX, doorY = px + dx, py + dy
+                break
+            end
+        end
+    end
+
+    local function isDropSpotClean(sx, sy)
+        if sx < 2 or sx > 97 or sy < 1 or sy > 54 then return false end
+        -- Jangan drop pas di pintu kedatangan
+        if math.abs(sx - doorX) <= 1 and math.abs(sy - doorY) <= 1 then return false end
+        if isTileBlocked(sx, sy) then return false end
+        local t = getTileSafe(sx, sy)
+        if t and t.collidable then return false end
+        return true
+    end
+
+    -- 1. UTAMA: Sejajar horizontal dengan door saat dia masuk (y = doorY)
+    -- Prioritas dari kanan door (doorX + 2 .. 97), kemudian kiri door (doorX - 2 .. 2)
+    for x = doorX + 2, 97 do
+        if isDropSpotClean(x, doorY) then
+            table.insert(spots, { x = x, y = doorY })
+            if #spots >= 24 then return spots end
+        end
+    end
+    for x = doorX - 2, 2, -1 do
+        if isDropSpotClean(x, doorY) then
+            table.insert(spots, { x = x, y = doorY })
+            if #spots >= 24 then return spots end
+        end
+    end
+
+    -- Bila baris tepat sejajar door terbatas, coba baris tepat di atas door (doorY - 1)
+    if doorY > 2 then
+        for x = doorX + 2, 97 do
+            if isDropSpotClean(x, doorY - 1) then
+                table.insert(spots, { x = x, y = doorY - 1 })
+                if #spots >= 24 then return spots end
+            end
+        end
+        for x = doorX - 2, 2, -1 do
+            if isDropSpotClean(x, doorY - 1) then
+                table.insert(spots, { x = x, y = doorY - 1 })
+                if #spots >= 24 then return spots end
+            end
+        end
+    end
+
+    -- 2. FALLBACK: "atau kalo tidak bisa drop di paling atas saja" (baris paling atas world y = 1..4)
+    if #spots < 6 then
+        for topY = 1, 4 do
+            for topX = 2, 97 do
+                if isDropSpotClean(topX, topY) then
+                    table.insert(spots, { x = topX, y = topY })
+                    if #spots >= 24 then return spots end
                 end
             end
         end
     end
-    if #spots == 0 then table.insert(spots, { x = startX, y = startY }) end
+
+    -- Jaga-jaga jika world sangat padat
+    if #spots == 0 then
+        table.insert(spots, { x = math.max(2, math.min(97, doorX + 2)), y = doorY })
+    end
     return spots
 end
 
@@ -995,12 +1103,38 @@ end
 -- ============================================================================
 -- 6. HARVEST ENGINE (3-ZIGZAG / 1BY1 + TAKE FLOATING + AUTO DROP)
 -- ============================================================================
-local function isReadyTree(tx, ty, seedID)
-    local t = getTileSafe(tx, ty)
-    if not t or tonumber(t.fg) ~= seedID then return false end
-    if t.readyharvest == true then return true end
+local function isTileTreeReady(t)
+    if not t then return false end
+    if t.readyharvest == true or t.readyharvest == 1 or t.readyharvest == "true" then return true end
+    if t.ready_to_harvest == true or t.ready_to_harvest == 1 then return true end
+    if t.canHarvest and type(t.canHarvest) == "function" then
+        local okH, resH = pcall(t.canHarvest, t)
+        if okH and resH == true then return true end
+    end
     if tonumber(t.progress) and tonumber(t.progress) >= 1.0 then return true end
+    if t.extra and type(t.extra) == "table" then
+        if tonumber(t.extra.growth) == 0 and (tonumber(t.extra.fruitcount) or 0) > 0 then
+            return true
+        end
+    end
     return false
+end
+
+local function isReadyTree(tx, ty, seedID, blockID)
+    local t = getTileSafe(tx, ty)
+    if not t then return false end
+    local fg = tonumber(t.fg) or 0
+    if fg <= 0 then return false end
+
+    -- Cocokkan fg dengan seedID atau blockID bila disediakan
+    local matchesID = false
+    if seedID and seedID > 0 and fg == seedID then matchesID = true end
+    if (not matchesID) and blockID and blockID > 0 and fg == blockID then matchesID = true end
+
+    -- Jika ID diberikan dan tidak cocok dengan fg, bukan pohon target
+    if (seedID and seedID > 0) and not matchesID then return false end
+
+    return isTileTreeReady(t)
 end
 
 local function updateInvPreview(blockID, seedID, eventList)
@@ -1093,6 +1227,47 @@ local function processFarmWorld(row)
     setCollectCheats(true)
     safeSleep(500)
 
+    -- Auto-Detect: Cek apakah ada pohon yang cocok di world. Bila 0, scan otomatis pohon matang di world!
+    local initialReady = 0
+    for testY = 1, 53 do
+        for testX = 2, 97 do
+            if isReadyTree(testX, testY, seedID, blockID) then
+                initialReady = initialReady + 1
+                if initialReady >= 1 then break end
+            end
+        end
+        if initialReady >= 1 then break end
+    end
+
+    if initialReady == 0 then
+        local detectedCounts = {}
+        for scY = 1, 53 do
+            for scX = 2, 97 do
+                local t = getTileSafe(scX, scY)
+                if t and isTileTreeReady(t) then
+                    local fg = tonumber(t.fg) or 0
+                    if fg > 0 then
+                        detectedCounts[fg] = (detectedCounts[fg] or 0) + 1
+                    end
+                end
+            end
+        end
+
+        local bestFg, bestCnt = nil, 0
+        for fg, cnt in pairs(detectedCounts) do
+            if cnt > bestCnt then bestFg = fg; bestCnt = cnt end
+        end
+
+        if bestFg and bestCnt > 0 then
+            blockID, seedID = normalizeHarvestPair(bestFg)
+            row.item_id = blockID
+            allowedSet[blockID] = true
+            allowedSet[seedID]  = true
+            HV.saveData()
+            addLog(string.format("`a[Auto-Detect] Menemukan %d pohon matang di %s -> ID Block: %d, Seed: %d", bestCnt, row.name, blockID, seedID))
+        end
+    end
+
     local hDelay = math.max(90, tonumber(HV.CFG.harvest_delay) or 180)
     local isZigzag = (HV.CFG.harvest_mode == "3zigzag")
     local rowCount = 0
@@ -1108,7 +1283,7 @@ local function processFarmWorld(row)
         local ty = py - 1
         local hasTreeInRow = false
         for x = 2, 97 do
-            if isReadyTree(x, ty, seedID) then hasTreeInRow = true; break end
+            if isReadyTree(x, ty, seedID, blockID) then hasTreeInRow = true; break end
         end
 
         if hasTreeInRow then
@@ -1119,13 +1294,16 @@ local function processFarmWorld(row)
                     if not HV.STATE.running then return false end
                     if not ensureHVOnline(row, true) then return false end
 
-                    local t1 = isReadyTree(x, ty, seedID)
-                    local t2 = isReadyTree(x + stepX, ty, seedID)
-                    local t3 = isReadyTree(x + (stepX * 2), ty, seedID)
+                    local t1 = isReadyTree(x, ty, seedID, blockID)
+                    local t2 = isReadyTree(x + stepX, ty, seedID, blockID)
+                    local t3 = isReadyTree(x + (stepX * 2), ty, seedID, blockID)
 
                     if t1 or t2 or t3 then
                         if not checkAndDropIfFull(row, blockID, seedID, eventList, false) then return false end
-                        moveSafeTo(x, py)
+                        local standY = py
+                        local tFloor = getTileSafe(x, py)
+                        if tFloor and tFloor.collidable then standY = ty end
+                        moveSafeTo(x, standY)
                         collectNearbyAllowed(allowedSet, 4)
 
                         if t1 then punchTile(x, ty); safeSleep(hDelay); HV.STATE.total_harvested = HV.STATE.total_harvested + 1 end
@@ -1141,9 +1319,12 @@ local function processFarmWorld(row)
                 for x = startX, endX, stepX do
                     if not HV.STATE.running then return false end
                     if not ensureHVOnline(row, true) then return false end
-                    if isReadyTree(x, ty, seedID) then
+                    if isReadyTree(x, ty, seedID, blockID) then
                         if not checkAndDropIfFull(row, blockID, seedID, eventList, false) then return false end
-                        moveSafeTo(x, py)
+                        local standY = py
+                        local tFloor = getTileSafe(x, py)
+                        if tFloor and tFloor.collidable then standY = ty end
+                        moveSafeTo(x, standY)
                         collectNearbyAllowed(allowedSet, 4)
                         punchTile(x, ty)
                         safeSleep(hDelay)
