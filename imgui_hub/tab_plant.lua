@@ -1989,21 +1989,48 @@ local function renderLeftFeatureSidebar(colW)
     local avX = safeAvailX()
     local btnW = (avX and avX > 80 and avX <= colWidth) and math.floor(avX - 2) or math.max(150, colWidth - 18)
     local P = getBorenPal()
-    centeredText("MENU", btnW, P.textCyan)
-    safeSpacing()
-    if styledBtn("Dashboard", btnW, activeFeature == "dashboard", false) then
-        selectFeature("dashboard")
-    end
-    if styledBtn("Plant", btnW, activeFeature == "plant", false) then
-        selectFeature("plant")
-    end
-    local dbFeat = nil
-    for _, feat in ipairs(getDynamicFeatures()) do
-        if feat.id == "database_id" then
-            dbFeat = feat
-        else
-            if styledBtn(tostring(feat.label or feat.id), btnW, activeFeature == feat.id, false) then
-                selectFeature(feat.id)
+    local singleKey = _G.__BOREN_SINGLE_FEATURE
+    if singleKey and singleKey ~= "" then
+        local featTitle = "FITUR AKTIF"
+        for _, f in ipairs(getDynamicFeatures()) do
+            if f.id == singleKey then featTitle = tostring(f.label or f.id):upper(); break end
+        end
+        if singleKey == "plant" then featTitle = "AUTO PLANT"
+        elseif singleKey == "harvest" then featTitle = "AUTO HARVEST"
+        elseif singleKey == "transfer" then featTitle = "AUTO TRANSFER"
+        elseif singleKey == "dirt_farm" then featTitle = "AUTO DIRT FARM"
+        elseif singleKey == "build_soil" then featTitle = "AUTO SOIL BUILDER"
+        elseif singleKey == "buy_pack" then featTitle = "AUTO BUY PACK"
+        elseif singleKey == "chemsynth" then featTitle = "AUTO CHEMSYNTH"
+        elseif singleKey == "database_id" then featTitle = "DATABASE ID" end
+
+        centeredText(featTitle, btnW, P.textCyan)
+        safeSpacing()
+        styledBtn(featTitle, btnW, true, false)
+        safeSpacing()
+        ImGui.Separator()
+        safeSpacing()
+        if styledBtn("Semua Menu", btnW, false, false) then
+            _G.__BOREN_SINGLE_FEATURE = nil
+            selectFeature("dashboard")
+        end
+    else
+        centeredText("MENU", btnW, P.textCyan)
+        safeSpacing()
+        if styledBtn("Dashboard", btnW, activeFeature == "dashboard", false) then
+            selectFeature("dashboard")
+        end
+        if styledBtn("Plant", btnW, activeFeature == "plant", false) then
+            selectFeature("plant")
+        end
+        local dbFeat = nil
+        for _, feat in ipairs(getDynamicFeatures()) do
+            if feat.id == "database_id" then
+                dbFeat = feat
+            else
+                if styledBtn(tostring(feat.label or feat.id), btnW, activeFeature == feat.id, false) then
+                    selectFeature(feat.id)
+                end
             end
         end
     end
@@ -2306,7 +2333,13 @@ local function renderFrame()
         winFlags = tonumber(ImGui.WindowFlags.NoCollapse) or 0
     end
 
-    local okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", true, winFlags)
+    local winTitle = "BOREN STORE"
+    if _G.__BOREN_SINGLE_FEATURE and _G.__BOREN_SINGLE_FEATURE ~= "" then
+        local s = tostring(_G.__BOREN_SINGLE_FEATURE):upper()
+        if s == "BUILD_SOIL" then s = "SOIL BUILDER" end
+        winTitle = "BOREN STORE - " .. s .. " [CONSOLE]"
+    end
+    local okBegin, opened = pcall(ImGui.Begin, winTitle .. "##boren_main", true, winFlags)
     if not okBegin or opened == nil then
         okBegin, opened = pcall(ImGui.Begin, "BOREN STORE##boren_main", winFlags)
     end
@@ -2594,6 +2627,10 @@ UI.render          = renderFrame
 function UI.init(hubCtx)
     HUB = hubCtx
     if HUB then HUB.ui_kit = UI_KIT end
+    local initFeat = _G.__BOREN_INITIAL_FEATURE or (HUB and HUB.initialFeature)
+    if initFeat and initFeat ~= "" then
+        activeFeature = initFeat
+    end
     needCenterPos = true
     switchAnimStart = nowSec()
     _G.__BOREN_HUB_UI = UI

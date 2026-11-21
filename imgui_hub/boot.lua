@@ -57,7 +57,10 @@ local function validateGLFeature(mod, entry)
     return true, { id = id, label = label, order = order }
 end
 
-function BOOT.start(baseRawUrl)
+function BOOT.start(baseRawUrl, initialFeature)
+    if initialFeature and initialFeature ~= "" then
+        _G.__BOREN_INITIAL_FEATURE = initialFeature
+    end
     local BASE_RAW_URL = (type(baseRawUrl) == "string" and baseRawUrl ~= "") and baseRawUrl or DEFAULT_BASE_URL
     if BASE_RAW_URL:sub(-1) ~= "/" then BASE_RAW_URL = BASE_RAW_URL .. "/" end
 
@@ -171,6 +174,7 @@ function BOOT.start(baseRawUrl)
                 { id = "dirt_farm",   label = "Dirt Farm",   order = 20, path = "imgui_hub/mod_dirt_farm.lua" },
                 { id = "build_soil",  label = "Build Soil",  order = 30, path = "imgui_hub/mod_soil_builder.lua" },
                 { id = "buy_pack",    label = "Buy Pack",    order = 40, path = "imgui_hub/mod_buy_pack.lua" },
+                { id = "chemsynth",     label = "Chemsynth",   order = 45, path = "imgui_hub/mod_chemsynth.lua" },
                 { id = "database_id", label = "Database ID", order = 50, path = "imgui_hub/mod_database_id.lua" },
             },
         }

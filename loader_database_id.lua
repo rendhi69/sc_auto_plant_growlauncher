@@ -1,12 +1,19 @@
 -- ============================================================================
--- LOADER BOREN STORE - DATABASE ID INSPECTOR
+-- LOADER BOREN STORE - DATABASE ID INSPECTOR (CONSOLE IMGUI)
 -- File: loader_database_id.lua
 -- ============================================================================
--- Memuat modul Database ID Inspector & Item ID Lookup.
+-- Memuat antarmuka Console ImGui khusus Database ID Inspector.
+-- 100% Berbasis antarmuka Console ImGui Modern (Bukan Menu Native Lama).
 -- Dilengkapi auto-fetch dari GitHub, cache-busting, dan fallback file lokal.
 -- ============================================================================
 
-local RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/imgui_hub/mod_database_id.lua"
+local BASE_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/"
+local BOOT_PATH = "imgui_hub/boot.lua"
+local TARGET_FEATURE = "database_id"
+
+-- Set target fitur awal & mode fokus console
+_G.__BOREN_INITIAL_FEATURE = TARGET_FEATURE
+_G.__BOREN_SINGLE_FEATURE = "database_id"
 
 local function makeTag()
     if getTime then
@@ -33,63 +40,57 @@ local function notifyUser(msg)
     elseif growtopia and growtopia.notify then pcall(growtopia.notify, tostring(msg)) end
 end
 
-logMsg("`9Menghubungkan ke GitHub dan memuat DATABASE ID INSPECTOR...")
-notifyUser("Memuat DATABASE ID INSPECTOR...")
+logMsg("`9Menghubungkan ke GitHub dan memuat Console DATABASE ID INSPECTOR...")
+notifyUser("Memuat Console DATABASE ID INSPECTOR...")
 
-local content = nil
+local code = nil
 if fetch then
-    local fetchUrl = RAW_URL .. "?v=" .. makeTag()
+    local fetchUrl = BASE_URL .. BOOT_PATH .. "?v=" .. makeTag()
     local okF, res = pcall(fetch, fetchUrl)
     if okF and type(res) == "string" and res ~= "" and not res:match("^404") and not res:match("^<!DOCTYPE") then
-        content = res
+        code = res
     end
 end
 
-if not content or content == "" then
-    local candidatePaths = {
-        "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/imgui_hub/mod_database_id.lua",
-        "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/imgui_hub/mod_database_id.lua",
-        "/storage/emulated/0/Download/imgui_hub/mod_database_id.lua",
-        "script/script code/imgui_hub/mod_database_id.lua",
-        "script/imgui_hub/mod_database_id.lua",
-        "imgui_hub/mod_database_id.lua",
+if not code or code == "" then
+    local localRoots = {
+        "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/",
+        "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/",
+        "/storage/emulated/0/Download/",
+        "script/",
+        "",
     }
-    for _, p in ipairs(candidatePaths) do
-        local okF, fh = pcall(io.open, p, "r")
-        if okF and fh then
-            local text = fh:read("*a")
-            fh:close()
-            if text and text ~= "" then
-                content = text
-                logMsg("`2File lokal berhasil dimuat dari: " .. p)
-                break
-            end
+    for _, root in ipairs(localRoots) do
+        local okO, f = pcall(io.open, root .. BOOT_PATH, "r")
+        if okO and f then
+            local txt = f:read("*a")
+            f:close()
+            if txt and txt ~= "" then code = txt; break end
         end
     end
 end
 
-if not content or content == "" then
-    local errMsg = "Gagal memuat imgui_hub/mod_database_id.lua! (Koneksi offline dan file lokal tidak ditemukan)."
-    logMsg("`4" .. errMsg)
-    notifyUser(errMsg)
+if not code or code == "" then
+    logMsg("`4Gagal memuat Console DATABASE ID INSPECTOR! Periksa koneksi internet / file lokal.")
+    notifyUser("Gagal memuat Console!")
     return
 end
 
 local loaderFn = loadstring or load
-local chunk, loadErr = loaderFn(content)
+local chunk, err = loaderFn(code)
 if not chunk then
-    local errMsg = "Error kompilasi script: " .. tostring(loadErr)
-    logMsg("`4" .. errMsg)
-    notifyUser(errMsg)
+    logMsg("`4Error kompilasi boot console: " .. tostring(err))
+    notifyUser("Error kompilasi console!")
     return
 end
 
-local okExec, runErr = pcall(chunk)
-if okExec then
-    logMsg("`2DATABASE ID INSPECTOR berhasil dimuat dan siap digunakan!")
-    notifyUser("DATABASE ID INSPECTOR Siap!")
-else
-    local errMsg = "Error runtime: " .. tostring(runErr)
-    logMsg("`4" .. errMsg)
-    notifyUser(errMsg)
+local okRun, boot = pcall(chunk)
+if not okRun or type(boot) ~= "table" or type(boot.start) ~= "function" then
+    logMsg("`4Error inisialisasi boot: " .. tostring(boot))
+    notifyUser("Error inisialisasi console!")
+    return
 end
+
+boot.start(BASE_URL, TARGET_FEATURE)
+logMsg("`2Console DATABASE ID INSPECTOR Siap Digunakan!")
+notifyUser("Console DATABASE ID INSPECTOR Siap!")

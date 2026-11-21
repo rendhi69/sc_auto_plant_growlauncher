@@ -1,13 +1,19 @@
 -- ============================================================================
--- LOADER BOREN STORE - DASHBOARD UTAMA (IMGUI HUB)
+-- LOADER BOREN STORE - DASHBOARD UTAMA (CONSOLE IMGUI)
 -- File: loader_hub_imgui.lua
 -- ============================================================================
--- Memuat seluruh Dashboard Boren Store ImGui Hub (Kompatibilitas Loader Lama).
+-- Memuat seluruh Dashboard ImGui Hub Boren Store (Alias Kompatibilitas Loader Lama).
+-- 100% Berbasis antarmuka Console ImGui Modern (Bukan Menu Native Lama).
 -- Dilengkapi auto-fetch dari GitHub, cache-busting, dan fallback file lokal.
 -- ============================================================================
 
 local BASE_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/"
 local BOOT_PATH = "imgui_hub/boot.lua"
+local TARGET_FEATURE = "dashboard"
+
+-- Set target fitur awal & mode fokus console
+_G.__BOREN_INITIAL_FEATURE = TARGET_FEATURE
+_G.__BOREN_SINGLE_FEATURE = nil
 
 local function makeTag()
     if getTime then
@@ -34,8 +40,8 @@ local function notifyUser(msg)
     elseif growtopia and growtopia.notify then pcall(growtopia.notify, tostring(msg)) end
 end
 
-logMsg("`9Menghubungkan ke GitHub dan memuat Dashboard...")
-notifyUser("Memuat Dashboard Boren Store...")
+logMsg("`9Menghubungkan ke GitHub dan memuat Console DASHBOARD UTAMA...")
+notifyUser("Memuat Console DASHBOARD UTAMA...")
 
 local code = nil
 if fetch then
@@ -65,26 +71,26 @@ if not code or code == "" then
 end
 
 if not code or code == "" then
-    logMsg("`4Gagal memuat Dashboard! Periksa koneksi internet / file lokal.")
-    notifyUser("Gagal memuat Dashboard!")
+    logMsg("`4Gagal memuat Console DASHBOARD UTAMA! Periksa koneksi internet / file lokal.")
+    notifyUser("Gagal memuat Console!")
     return
 end
 
 local loaderFn = loadstring or load
 local chunk, err = loaderFn(code)
 if not chunk then
-    logMsg("`4Error kompilasi core dashboard: " .. tostring(err))
-    notifyUser("Error kompilasi dashboard!")
+    logMsg("`4Error kompilasi boot console: " .. tostring(err))
+    notifyUser("Error kompilasi console!")
     return
 end
 
 local okRun, boot = pcall(chunk)
 if not okRun or type(boot) ~= "table" or type(boot.start) ~= "function" then
     logMsg("`4Error inisialisasi boot: " .. tostring(boot))
-    notifyUser("Error inisialisasi dashboard!")
+    notifyUser("Error inisialisasi console!")
     return
 end
 
-boot.start(BASE_URL)
-logMsg("`2Dashboard Boren Store ImGui Hub Siap Digunakan!")
-notifyUser("Dashboard Siap!")
+boot.start(BASE_URL, TARGET_FEATURE)
+logMsg("`2Console DASHBOARD UTAMA Siap Digunakan!")
+notifyUser("Console DASHBOARD UTAMA Siap!")
