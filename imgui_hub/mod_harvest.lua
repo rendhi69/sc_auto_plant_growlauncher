@@ -909,24 +909,33 @@ local function openNativeInputDialog(dialogId, title, fields, submitLabel, onSub
     showClientDialog(dText)
 end
 
-local function onSendPacketHook(vtype, packet)
-    if vtype == 2 and type(packet) == "string" then
-        if packet:find("action|dialog_return", 1, true) then
-            local dlgName = packet:match("dialog_name|([^\r\n|]+)")
-            if dlgName and activeNativeDialogs[dlgName] then
-                local cb = activeNativeDialogs[dlgName]
-                activeNativeDialogs[dlgName] = nil
-                local fields = {}
-                for line in packet:gmatch("[^\r\n]+") do
-                    local k, v = line:match("^([^|]+)|(.*)$")
-                    if k then fields[k] = v end
+local function onSendPacketHook(p1, p2)
+    local packet = (type(p2) == "string") and p2 or ((type(p1) == "string") and p1 or nil)
+    if not packet then return false end
+    if packet:find("action|dialog_return", 1, true) then
+        local dlgName = packet:match("dialog_name|([^\r\n|]+)")
+        if dlgName and activeNativeDialogs[dlgName] then
+            local cb = activeNativeDialogs[dlgName]
+            activeNativeDialogs[dlgName] = nil
+            local fields = {}
+            for line in packet:gmatch("[^\r\n]+") do
+                local k, v = line:match("^([^|]+)|(.*)$")
+                if k and k ~= "" then
+                    v = tostring(v or ""):gsub("|$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+                    fields[k] = v
                 end
-                local btn = tostring(fields.buttonClicked or ""):lower()
-                if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
-                    pcall(cb, fields)
-                end
-                return true
             end
+            local btn = tostring(fields.buttonClicked or ""):lower()
+            if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
+                pcall(cb, fields)
+            end
+            if HV and HV.STATE and HV.STATE._saved_ui_state ~= nil then
+                HV.STATE.show_ui = HV.STATE._saved_ui_state
+                HV.STATE._saved_ui_state = nil
+            elseif HV and HV.STATE and HV.STATE.show_ui ~= nil then
+                HV.STATE.show_ui = true
+            end
+            return true
         end
     end
 end
@@ -1904,23 +1913,37 @@ local function uiActionBar(id, w, buttons)
     return hit
 end
 
+local formRevision = 1
+
+local function cleanInputStr(v)
+    return tostring(v or ""):gsub("%z.*", "")
+end
+
+local function cleanDialogField(v)
+    local s = tostring(v or ""):gsub("%z.*", "")
+    s = s:gsub("[\r\n|]+$", ""):gsub("^[\r\n|]+", "")
+    return s:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
 local lastDialogOpenAt = 0
 local function safeInput(id, val, maxL, onKetikFn)
-    local s = tostring(val or "")
-    local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxL or 256)
+    local s = cleanInputStr(val)
+    local uniqueId = tostring(id) .. "_" .. tostring(formRevision)
+    local ok, r1, r2 = pcall(ImGui.InputText, uniqueId, s, maxL or 256)
     local changed = false
     local newVal = s
 
     if ok then
         if type(r1) == "boolean" and type(r2) == "string" then
-            changed = (r1 or r2 ~= s)
-            newVal = r2
-        elseif type(r1) == "string" then
-            changed = (r2 == true or r1 ~= s)
-            newVal = r1
-        elseif type(r2) == "string" and r2 ~= s then
-            changed = true
-            newVal = r2
+            if r1 == true then
+                changed = true
+                newVal = cleanInputStr(r2)
+            end
+        elseif type(r1) == "string" and type(r2) == "boolean" then
+            if r2 == true then
+                changed = true
+                newVal = cleanInputStr(r1)
+            end
         end
     end
 
@@ -1936,7 +1959,6 @@ local function safeInput(id, val, maxL, onKetikFn)
             if okA and act then clicked = true end
         end
         if clicked then
-            if ImGui.SetKeyboardFocusHere then pcall(ImGui.SetKeyboardFocusHere, -1) end
             local now = os.clock and os.clock() or os.time()
             if (now - lastDialogOpenAt) >= 0.8 then
                 lastDialogOpenAt = now
@@ -2049,14 +2071,14 @@ local function renderFarmsSub()
     end
 
     local function ketikFarmForm()
-        local wPre = tostring(addFarmWorldBuf or "")
-        local iPre = tostring(addFarmItemBuf or (c.default_item_id and tostring(c.default_item_id) or "4584"))
+        local wPre = cleanDialogField(addFarmWorldBuf)
+        local iPre = cleanDialogField(addFarmItemBuf ~= "" and addFarmItemBuf or (c.default_item_id and tostring(c.default_item_id) or "4584"))
         uiOpenDialog("boren_hv_fform", "Input Form Farm", {
             { id = "f_world", label = "World Farm (Nama atau Nama:DoorID)", default = wPre, maxLen = 64 },
             { id = "f_item",  label = "Item ID (Block atau Seed)", default = iPre, maxLen = 16 },
         }, "Masukkan ke Form", function(vals)
-            local wn = trimStr(vals.f_world or ""):upper()
-            local iidStr = trimStr(vals.f_item or ""):gsub("[^0-9]", "")
+            local wn = cleanDialogField(vals.f_world or vals["f_world"]):upper()
+            local iidStr = cleanDialogField(vals.f_item or vals["f_item"]):gsub("[^0-9]", "")
             if wn ~= "" then
                 addFarmWorldBuf = wn
             end
@@ -2068,7 +2090,8 @@ local function renderFarmsSub()
                     HV.saveData()
                 end
             end
-            uiNotice = "Form World Farm terisi."
+            formRevision = formRevision + 1
+            uiNotice = "Form World Farm terisi: " .. tostring(addFarmWorldBuf)
         end)
     end
 
@@ -2211,17 +2234,18 @@ local function renderSaveSub()
     end
 
     local function ketikSaveForm()
-        local wPre = tostring(addSaveWorldBuf or "")
-        local lPre = tostring(addSaveLimitBuf or "0")
+        local wPre = cleanDialogField(addSaveWorldBuf)
+        local lPre = cleanDialogField(addSaveLimitBuf ~= "" and addSaveLimitBuf or "0")
         uiOpenDialog("boren_hv_sform", "Input Form Save World", {
             { id = "f_world", label = "Save World (Nama atau Nama:DoorID)", default = wPre, maxLen = 64 },
             { id = "f_lim",   label = "Limit per World (0 = Unlimited)", default = lPre, maxLen = 16 },
         }, "Masukkan ke Form", function(vals)
-            local wn = trimStr(vals.f_world or ""):upper()
-            local limStr = trimStr(vals.f_lim or ""):gsub("[^0-9]", "")
+            local wn = cleanDialogField(vals.f_world or vals["f_world"]):upper()
+            local limStr = cleanDialogField(vals.f_lim or vals["f_lim"]):gsub("[^0-9]", "")
             if wn ~= "" then addSaveWorldBuf = wn end
             if limStr ~= "" then addSaveLimitBuf = limStr else addSaveLimitBuf = "0" end
-            uiNotice = "Form Save World terisi."
+            formRevision = formRevision + 1
+            uiNotice = "Form Save World terisi: " .. tostring(addSaveWorldBuf)
         end)
     end
 
@@ -2377,17 +2401,18 @@ local function renderEventSub()
     end
 
     local function ketikEventForm()
-        local wPre = tostring(addEventWorldBuf or "")
-        local lPre = tostring(addEventLimitBuf or "0")
+        local wPre = cleanDialogField(addEventWorldBuf)
+        local lPre = cleanDialogField(addEventLimitBuf ~= "" and addEventLimitBuf or "0")
         uiOpenDialog("boren_hv_eform", "Input Form Event World", {
             { id = "f_world", label = "World Event (Nama atau Nama:DoorID)", default = wPre, maxLen = 64 },
             { id = "f_lim",   label = "Limit Total Item (0 = Unlimited)", default = lPre, maxLen = 16 },
         }, "Masukkan ke Form", function(vals)
-            local wn = trimStr(vals.f_world or ""):upper()
-            local limStr = trimStr(vals.f_lim or ""):gsub("[^0-9]", "")
+            local wn = cleanDialogField(vals.f_world or vals["f_world"]):upper()
+            local limStr = cleanDialogField(vals.f_lim or vals["f_lim"]):gsub("[^0-9]", "")
             if wn ~= "" then addEventWorldBuf = wn end
             if limStr ~= "" then addEventLimitBuf = limStr else addEventLimitBuf = "0" end
-            uiNotice = "Form Event World terisi."
+            formRevision = formRevision + 1
+            uiNotice = "Form Event World terisi: " .. tostring(addEventWorldBuf)
         end)
     end
 
@@ -2487,12 +2512,14 @@ local function renderEventSub()
 
     uiGap(4)
     local function ketikEventIdsDialog()
-        local cur = tostring(c.event_ids_raw or "")
+        local cur = cleanDialogField(c.event_ids_raw or "")
         uiOpenDialog("boren_hv_eids", "Input ID Item Event", {
             { id = "f_eids", label = "Daftar ID Item Event (pisah koma)", default = cur, maxLen = 256 },
         }, "Simpan ID Event", function(vals)
-            if vals.f_eids then
-                c.event_ids_raw = trimStr(vals.f_eids)
+            local raw = cleanDialogField(vals.f_eids or vals["f_eids"])
+            if raw ~= "" then
+                c.event_ids_raw = raw
+                formRevision = formRevision + 1
                 HV.saveData()
                 uiNotice = "ID Event diperbarui: " .. c.event_ids_raw
             end
@@ -2536,12 +2563,14 @@ local function renderGearSub()
     uiNote(uiNotice)
 
     local function ketikGearWorldDialog()
-        local cur = tostring(c.gear_world or "")
+        local cur = cleanDialogField(c.gear_world or "")
         uiOpenDialog("boren_hv_gw", "Input World Ambil Gear", {
             { id = "gw", label = "Gear World (WORLD:DOOR)", default = cur, maxLen = 64 },
         }, "Simpan Gear World", function(v)
-            if v.gw then
-                c.gear_world = trimStr(v.gw or "")
+            local raw = cleanDialogField(v.gw or v["gw"]):upper()
+            if raw ~= "" then
+                c.gear_world = raw
+                formRevision = formRevision + 1
                 HV.saveData()
                 uiNotice = "Gear World berhasil disimpan: " .. c.gear_world
             end
@@ -2598,12 +2627,14 @@ local function renderGearSub()
         uiGap(2)
         ImGui.Text("List ID Item Equip (DCS, Harvester, dll. pisah koma):")
         local function ketikGearEquipDialog()
-            local cur = tostring(c.gear_equip_ids or "")
+            local cur = cleanDialogField(c.gear_equip_ids or "")
             uiOpenDialog("boren_hv_geq", "Input List ID Equip", {
                 { id = "eq", label = "List ID Equip Alat (pisah koma)", default = cur, maxLen = 128 },
             }, "Simpan ID Equip", function(v)
-                if v.eq then
-                    c.gear_equip_ids = trimStr(v.eq or "6840, 1966")
+                local raw = cleanDialogField(v.eq or v["eq"])
+                if raw ~= "" then
+                    c.gear_equip_ids = raw
+                    formRevision = formRevision + 1
                     HV.saveData()
                     uiNotice = "Equip IDs berhasil disimpan: " .. c.gear_equip_ids
                 end
