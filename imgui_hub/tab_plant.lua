@@ -275,8 +275,8 @@ local function getBorenPal()
         windowBg        = mkCol(7,   9,  16, 255),
         childBg         = mkCol(10, 13,  24, 255),
         popupBg         = mkCol(10, 13,  24, 255),
-        border          = mkCol(0, 212, 255, 255), -- Neon Cyan Tebal
-        borderShadow    = mkCol(140, 38, 255, 180),
+        border          = mkCol(162, 52, 255, 240), -- Neon Purple/Violet (berpadu dengan Cyan)
+        borderShadow    = mkCol(0, 216, 255, 180),  -- Glow Neon Cyan
 
         -- Title Bar Hitam-Indigo Pekat
         titleBg         = mkCol(11, 14,  30, 255),
@@ -320,19 +320,19 @@ local function getBorenPal()
         header          = mkCol(28, 36,  86, 255),
         headerHover     = mkCol(14, 112, 188, 255),
         headerActive    = mkCol(104, 38, 238, 255),
-        separator       = mkCol(0,  204, 255, 220),
+        separator       = mkCol(168, 48, 255, 220), -- Neon Purple Separator Underline
         checkMark       = mkCol(0,  220, 255, 255),
         sliderGrab      = mkCol(0,  205, 252, 255),
         sliderGrabAct   = mkCol(168, 52, 255, 255),
         scrollBg        = mkCol(8,  10,  20, 255),
-        scrollGrab      = mkCol(36, 68, 138, 255),
-        scrollGrabHov   = mkCol(0, 175, 245, 255),
-        scrollGrabAct   = mkCol(138, 44, 255, 255),
+        scrollGrab      = mkCol(138, 44, 245, 255), -- Neon Purple Scrollbar Thumb
+        scrollGrabHov   = mkCol(0, 216, 255, 255),  -- Neon Cyan Hover
+        scrollGrabAct   = mkCol(188, 56, 255, 255),
         tableHeader     = mkCol(24, 22,  66, 255),
         tableRow        = mkCol(11, 14,  28, 255),
         tableRowAlt     = mkCol(16, 20,  38, 255),
-        tableBorderS    = mkCol(0,  185, 245, 220),
-        tableBorderL    = mkCol(48, 58, 122, 200),
+        tableBorderS    = mkCol(158, 48, 255, 200), -- Neon Purple Outer Table Border
+        tableBorderL    = mkCol(0, 212, 255, 150),  -- Neon Cyan Inner Column Divider
 
         -- Typography (ImVec4 untuk TextColored + mkCol untuk Col.Text)
         textCol         = mkCol(240, 248, 255, 255),
@@ -1472,51 +1472,37 @@ local function drawWindowNeonChrome()
     local okC, wx, wy, ww, wh = pcall(function() return wp.x, wp.y, ws.x, ws.y end)
     if not (okC and type(wx) == "number" and type(ww) == "number" and ww > 40 and wh > 40) then return end
 
-    local bg = getBGDrawList()
-    if bg then
-        local drewBorder = false
-        if bg.AddRectFilledMultiColor then
-            drewBorder = pcall(function()
-                bg:AddRectFilledMultiColor(
-                    ImVec2(wx - 3, wy - 3),
-                    ImVec2(wx + ww + 3, wy + wh + 3),
-                    NEON_CYAN_U32, NEON_PURPLE_U32, NEON_PURPLE_U32, NEON_CYAN_U32
-                )
-            end)
-        end
-        if bg.AddRectFilled then
-            if not drewBorder then
-                pcall(function()
-                    bg:AddRectFilled(ImVec2(wx - 3, wy - 3), ImVec2(wx + ww + 3, wy + wh + 3), NEON_CYAN_U32)
-                end)
-            end
-            -- Latar hitam pekat solid di dalam frame neon
-            local okSolid = pcall(function()
-                bg:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + ww, wy + wh), SOLID_BLACK_BG_U32)
-            end)
-            if not okSolid then
-                pcall(function()
-                    bg:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + ww, wy + wh), SOLID_BLACK_BG_U32, 0)
-                end)
-            end
-        end
-    end
-
-    local fg = getFGDrawList()
-    if fg then
-        local drawn = false
-        if fg.AddRectFilledMultiColor then
-            drawn = pcall(function()
-                fg:AddRectFilledMultiColor(
+    local dl = getWindowDrawListSafe()
+    if dl then
+        -- Perpaduan Neon Biru (#00D8FF) & Ungu (#B026FF) sekeliling jendela (persis estetika Hide UI!)
+        if dl.AddRectFilledMultiColor then
+            -- Top Edge: Cyan (kiri) -> Ungu (kanan)
+            pcall(function()
+                dl:AddRectFilledMultiColor(
                     ImVec2(wx, wy),
                     ImVec2(wx + ww, wy + 3.5),
                     NEON_CYAN_U32, NEON_PURPLE_U32, NEON_PURPLE_U32, NEON_CYAN_U32
                 )
             end)
-        end
-        if not drawn and fg.AddRectFilled then
+            -- Bottom Edge: Cyan (kiri) -> Ungu (kanan)
             pcall(function()
-                fg:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + ww, wy + 3.5), NEON_CYAN_U32)
+                dl:AddRectFilledMultiColor(
+                    ImVec2(wx, wy + wh - 3.5),
+                    ImVec2(wx + ww, wy + wh),
+                    NEON_CYAN_U32, NEON_PURPLE_U32, NEON_PURPLE_U32, NEON_CYAN_U32
+                )
+            end)
+            -- Left Edge: Neon Cyan
+            pcall(function()
+                dl:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + 2.5, wy + wh), NEON_CYAN_U32)
+            end)
+            -- Right Edge: Neon Purple
+            pcall(function()
+                dl:AddRectFilled(ImVec2(wx + ww - 2.5, wy), ImVec2(wx + ww, wy + wh), NEON_PURPLE_U32)
+            end)
+        elseif dl.AddRectFilled then
+            pcall(function()
+                dl:AddRectFilled(ImVec2(wx, wy), ImVec2(wx + ww, wy + 3.5), NEON_CYAN_U32)
             end)
         end
     end

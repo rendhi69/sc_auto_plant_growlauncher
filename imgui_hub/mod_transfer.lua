@@ -1300,10 +1300,7 @@ local function renderMainPanel()
     if autoBtn("+ World Saat Ini##tf_cur_in") then
         local cw = getCurrentWorld()
         if cw ~= "" and cw ~= "EXIT" then
-            table.insert(st.input_queue, { raw = cw, name = cw:upper(), door = "", status = "Ready" })
-            c.input_world_raw = formatWorldList(st.input_queue)
-            st.input_w_buf = c.input_world_raw
-            TF.saveData()
+            st.add_input_w_buf = cw .. ":"
         end
     end
     ImGui.SameLine()
@@ -1410,10 +1407,7 @@ local function renderMainPanel()
     if autoBtn("+ World Saat Ini##tf_cur_out") then
         local cw = getCurrentWorld()
         if cw ~= "" and cw ~= "EXIT" then
-            table.insert(st.output_queue, { raw = cw, name = cw:upper(), door = "", status = "Ready" })
-            c.output_world_raw = formatWorldList(st.output_queue)
-            st.output_w_buf = c.output_world_raw
-            TF.saveData()
+            st.add_output_w_buf = cw .. ":"
         end
     end
     ImGui.SameLine()

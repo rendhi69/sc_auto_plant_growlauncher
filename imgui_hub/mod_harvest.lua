@@ -1502,14 +1502,11 @@ local function renderFarmsSub()
         end
 
     elseif act == 2 then
-        runAsync(function()
-            local curW = getCurrentWorldSafe()
-            if curW ~= "" and curW ~= "EXIT" then
-                local iid = math.floor(tonumber(addFarmItemBuf) or tonumber(c.default_item_id) or 4584)
-                table.insert(st.rows, { name = curW, door = "", item_id = iid, status = "Ready" })
-                HV.saveData(); uiNotice = "World aktif ditambah: " .. curW
-            else uiNotice = "Masuk ke world dulu!" end
-        end)
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then
+            addFarmWorldBuf = curW .. ":"
+            uiNotice = "Terisi " .. curW .. ": (masukkan Door ID jika ada, lalu klik + Tambah)"
+        else uiNotice = "Masuk ke world dulu!" end
 
     elseif act == 3 then
         local added = 0
@@ -1677,14 +1674,11 @@ local function renderSaveSub()
         else uiNotice = "Isi World:DoorID dulu!" end
 
     elseif act == 2 then
-        runAsync(function()
-            local curW = getCurrentWorldSafe()
-            if curW ~= "" and curW ~= "EXIT" then
-                local lim = math.floor(tonumber(addSaveLimitBuf) or 20000)
-                table.insert(st.save_rows, { name = curW, door = "", save_type = addSaveTypeBuf, limit = lim, count = 0, status = "Ready" })
-                HV.saveData(); uiNotice = "World aktif ditambah: " .. curW
-            else uiNotice = "Masuk ke world dulu!" end
-        end)
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then
+            addSaveWorldBuf = curW .. ":"
+            uiNotice = "Terisi " .. curW .. ": (masukkan Door ID jika ada, lalu klik + Tambah)"
+        else uiNotice = "Masuk ke world dulu!" end
 
     elseif act == 3 then
         local added = 0
@@ -1851,14 +1845,11 @@ local function renderEventSub()
         else uiNotice = "Isi World:DoorID dulu!" end
 
     elseif act == 2 then
-        runAsync(function()
-            local curW = getCurrentWorldSafe()
-            if curW ~= "" and curW ~= "EXIT" then
-                local lim = math.floor(tonumber(addEventLimitBuf) or 10000)
-                table.insert(st.event_rows, { name = curW, door = "", limit = lim, count = 0, status = "Ready" })
-                HV.saveData(); uiNotice = "Event world ditambah: " .. curW
-            else uiNotice = "Masuk ke world dulu!" end
-        end)
+        local curW = getCurrentWorldSafe()
+        if curW ~= "" and curW ~= "EXIT" then
+            addEventWorldBuf = curW .. ":"
+            uiNotice = "Terisi " .. curW .. ": (masukkan Door ID jika ada, lalu klik + Tambah)"
+        else uiNotice = "Masuk ke world dulu!" end
 
     elseif act == 3 then
         local added = 0
@@ -1941,12 +1932,11 @@ local function renderGearSub()
     if chGW then c.gear_world = vGW; HV.saveData() end
     ImGui.SameLine()
     if autoBtn(" World Ini ##hv_gwc") then
-        runAsync(function()
-            local cw = getCurrentWorldSafe()
-            if cw ~= "" and cw ~= "EXIT" then
-                c.gear_world = cw .. ":"; HV.saveData(); uiNotice = "Gear World diset ke: " .. cw
-            else uiNotice = "Masuk ke world dulu!" end
-        end)
+        local cw = getCurrentWorldSafe()
+        if cw ~= "" and cw ~= "EXIT" then
+            c.gear_world = cw .. ":"
+            HV.saveData(); uiNotice = "Terisi " .. cw .. ": (masukkan Door ID jika ada)"
+        else uiNotice = "Masuk ke world dulu!" end
     end
 
     uiGap(4)
