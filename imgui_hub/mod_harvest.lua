@@ -854,10 +854,88 @@ local function onSendPacketRawHook(raw)
     end
 end
 
+-- ============================================================================
+-- NATIVE CLIENT DIALOG & KEYBOARD INPUT BRIDGE
+-- ============================================================================
+local activeNativeDialogs = {}
+
+local function sanitizeDialogVal(s)
+    return tostring(s or ""):gsub("[\r\n|]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function showClientDialog(dText)
+    if not dText or dText == "" then return false end
+    if growtopia and type(growtopia.sendDialog) == "function" then
+        local ok = pcall(growtopia.sendDialog, dText)
+        if ok then return true end
+    end
+    if sendVariant then
+        local ok0 = pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
+        if ok0 then return true end
+        local ok1 = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        if ok1 then return true end
+        local okNum = pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
+        if okNum then return true end
+    end
+    if sendVariantList then
+        local okList = pcall(sendVariantList, { [0] = "OnDialogRequest", [1] = dText })
+        if okList then return true end
+    end
+    if sendDialog then
+        pcall(sendDialog, dText)
+        return true
+    end
+    return false
+end
+
+local function openNativeInputDialog(dialogId, title, fields, submitLabel, onSubmit)
+    activeNativeDialogs[dialogId] = onSubmit
+    local lines = {
+        "set_default_color|`o",
+        "add_label_with_icon|big|`cBOREN HARVEST - " .. sanitizeDialogVal(title) .. "|left|3802|",
+        "add_spacer|small|",
+    }
+    for _, f in ipairs(fields or {}) do
+        local fid = tostring(f.id or "f")
+        local flb = sanitizeDialogVal(f.label or fid)
+        local fdv = sanitizeDialogVal(f.default or "")
+        local fln = tonumber(f.maxLen) or 48
+        lines[#lines + 1] = string.format("add_text_input|%s|%s:|%s|%d|", fid, flb, fdv, fln)
+    end
+    lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_smalltext|`7Ketik dengan keyboard HP Anda lalu tekan tombol di bawah.|"
+    lines[#lines + 1] = "end_dialog|" .. dialogId .. "|Batal|" .. sanitizeDialogVal(submitLabel or "Masukkan ke Form") .. "|"
+    local dText = table.concat(lines, "\n")
+    showClientDialog(dText)
+end
+
+local function onSendPacketHook(vtype, packet)
+    if vtype == 2 and type(packet) == "string" then
+        if packet:find("action|dialog_return", 1, true) then
+            local dlgName = packet:match("dialog_name|([^\r\n|]+)")
+            if dlgName and activeNativeDialogs[dlgName] then
+                local cb = activeNativeDialogs[dlgName]
+                activeNativeDialogs[dlgName] = nil
+                local fields = {}
+                for line in packet:gmatch("[^\r\n]+") do
+                    local k, v = line:match("^([^|]+)|(.*)$")
+                    if k then fields[k] = v end
+                end
+                local btn = tostring(fields.buttonClicked or ""):lower()
+                if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
+                    pcall(cb, fields)
+                end
+                return true
+            end
+        end
+    end
+end
+
 -- Registrasi Global & Engine Hooks
 if AddHook then
     pcall(AddHook, "OnSendPacketRaw", "boren_hv_raw_hook", onSendPacketRawHook)
     pcall(AddHook, "OnVariantList", "boren_hv_var_hook", onVariantHook)
+    pcall(AddHook, "OnSendPacket", "boren_hv_send_hook", onSendPacketHook)
 elseif addHook then
     pcall(addHook, onSendPacketRawHook, "onsendpacketraw")
     pcall(addHook, "onSendPacketRaw", "boren_hv_raw_hook", onSendPacketRawHook)
@@ -865,9 +943,14 @@ elseif addHook then
     pcall(addHook, onVariantHook, "onvariantlist")
     pcall(addHook, "onVariantList", "boren_hv_var_hook", onVariantHook)
     pcall(addHook, "OnVariantList", "boren_hv_var_hook", onVariantHook)
+    pcall(addHook, onSendPacketHook, "onsendpacket")
+    pcall(addHook, "onSendPacket", "boren_hv_send_hook", onSendPacketHook)
+    pcall(addHook, "OnSendPacket", "boren_hv_send_hook", onSendPacketHook)
 end
 onSendPacketRaw = onSendPacketRawHook
 OnSendPacketRaw = onSendPacketRawHook
+onSendPacket = onSendPacketHook
+OnSendPacket = onSendPacketHook
 
 -- ============================================================================
 -- 4. DROP ENGINE (DROP SEBELAH DOOR, DARI KANAN KE KIRI, ZIGZAG TINGKAT KE ATAS/BAWAH)
@@ -1770,11 +1853,6 @@ local function uiSection(title, skipTopSep)
 end
 
 local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
-    local k = uiKit()
-    if k and k.sectionWithKetik and k.openInputDialog then
-        k.sectionWithKetik(title, btnId, onKetikClick, skipTopSep)
-        return
-    end
     uiSection(title, skipTopSep)
 end
 
@@ -1782,7 +1860,9 @@ local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
     local k = uiKit()
     if k and k.openInputDialog then
         k.openInputDialog(id, title, fields, submitLbl, onSubmit)
+        return
     end
+    openNativeInputDialog(id, title, fields, submitLbl, onSubmit)
 end
 
 local function uiEnableBtn(isOn, id)
@@ -1824,16 +1904,48 @@ local function uiActionBar(id, w, buttons)
     return hit
 end
 
-local function safeInput(id, val, maxL)
-    local k = uiKit()
-    if k and k.safeInputText then return k.safeInputText(id, val, maxL, false) end
+local lastDialogOpenAt = 0
+local function safeInput(id, val, maxL, onKetikFn)
     local s = tostring(val or "")
     local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxL or 256)
-    if not ok then return false, s end
-    if type(r1) == "boolean" and type(r2) == "string" then return (r1 or r2 ~= s), r2
-    elseif type(r1) == "string" then return (r2 == true or r1 ~= s), r1
-    elseif type(r2) == "string" and r2 ~= s then return true, r2 end
-    return false, s
+    local changed = false
+    local newVal = s
+
+    if ok then
+        if type(r1) == "boolean" and type(r2) == "string" then
+            changed = (r1 or r2 ~= s)
+            newVal = r2
+        elseif type(r1) == "string" then
+            changed = (r2 == true or r1 ~= s)
+            newVal = r1
+        elseif type(r2) == "string" and r2 ~= s then
+            changed = true
+            newVal = r2
+        end
+    end
+
+    -- Otomatis panggil Native Keyboard Dialog saat kolom form diketuk / disentuh
+    if onKetikFn and ImGui then
+        local clicked = false
+        if ImGui.IsItemClicked then
+            local okC, clk = pcall(ImGui.IsItemClicked, 0)
+            if okC and clk then clicked = true end
+        end
+        if not clicked and ImGui.IsItemActivated then
+            local okA, act = pcall(ImGui.IsItemActivated)
+            if okA and act then clicked = true end
+        end
+        if clicked then
+            if ImGui.SetKeyboardFocusHere then pcall(ImGui.SetKeyboardFocusHere, -1) end
+            local now = os.clock and os.clock() or os.time()
+            if (now - lastDialogOpenAt) >= 0.8 then
+                lastDialogOpenAt = now
+                pcall(onKetikFn)
+            end
+        end
+    end
+
+    return changed, newVal
 end
 
 local function readClipLines()
@@ -1936,29 +2048,31 @@ local function renderFarmsSub()
         ImGui.EndTable()
     end
 
-    local function openAddFarmDialog()
-        local wPre, dPre = tostring(addFarmWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
-        if not wPre then wPre = tostring(addFarmWorldBuf or ""); dPre = "" end
-        uiOpenDialog("boren_in_hv_w", "Tambah World Harvest", {
-            { id = "f_world", label = "Nama World", default = wPre, maxLen = 32 },
-            { id = "f_door",  label = "Door ID (opsional)", default = dPre, maxLen = 32 },
-            { id = "f_item",  label = "Block / Seed ID", default = addFarmItemBuf, maxLen = 12 },
-        }, "Tambah & Simpan", function(vals)
+    local function ketikFarmForm()
+        local wPre = tostring(addFarmWorldBuf or "")
+        local iPre = tostring(addFarmItemBuf or (c.default_item_id and tostring(c.default_item_id) or "4584"))
+        uiOpenDialog("boren_hv_fform", "Input Form Farm", {
+            { id = "f_world", label = "World Farm (Nama atau Nama:DoorID)", default = wPre, maxLen = 64 },
+            { id = "f_item",  label = "Item ID (Block atau Seed)", default = iPre, maxLen = 16 },
+        }, "Masukkan ke Form", function(vals)
             local wn = trimStr(vals.f_world or ""):upper()
-            local dn = trimStr(vals.f_door or ""):upper()
-            local iid = math.floor(tonumber(vals.f_item) or tonumber(c.default_item_id) or 4584)
-            if iid <= 0 then iid = 4584 end
-            c.default_item_id = iid
-            addFarmItemBuf = tostring(iid)
+            local iidStr = trimStr(vals.f_item or ""):gsub("[^0-9]", "")
             if wn ~= "" then
-                local p = { name = wn, door = dn, item_id = iid, status = "Ready" }
-                table.insert(st.rows, p); addFarmWorldBuf = ""; HV.saveData()
-                uiNotice = "Tersimpan: " .. wn .. " (ID " .. tostring(iid) .. ")"
+                addFarmWorldBuf = wn
             end
+            if iidStr ~= "" then
+                addFarmItemBuf = iidStr
+                local n = tonumber(iidStr)
+                if n and n > 0 then
+                    c.default_item_id = math.floor(n)
+                    HV.saveData()
+                end
+            end
+            uiNotice = "Form World Farm terisi."
         end)
     end
 
-    uiSectionWithKetik("Tambah World Farm Baru", "hv_ktk_w", openAddFarmDialog)
+    uiSectionWithKetik("Tambah World Farm Baru", "hv_ktk_w", ketikFarmForm)
 
     if ImGui.BeginTable("BorenHarvestAddW", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -1967,13 +2081,13 @@ local function renderFarmsSub()
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
         ImGui.PushItemWidth(math.max(120, math.floor(w * 0.56)))
-        local chW, nvW = safeInput("##hv_add_w", addFarmWorldBuf, 256)
+        local chW, nvW = safeInput("##hv_add_w", addFarmWorldBuf, 256, ketikFarmForm)
         ImGui.PopItemWidth()
         if chW then addFarmWorldBuf = nvW end
 
         ImGui.TableSetColumnIndex(1)
         ImGui.PushItemWidth(math.max(80, math.floor(w * 0.34)))
-        local chI, nvI = safeInput("##hv_add_item", addFarmItemBuf, 64)
+        local chI, nvI = safeInput("##hv_add_item", addFarmItemBuf, 64, ketikFarmForm)
         ImGui.PopItemWidth()
         if chI then
             addFarmItemBuf = nvI:gsub("[^0-9]", "")
@@ -2096,32 +2210,22 @@ local function renderSaveSub()
         ImGui.EndTable()
     end
 
-    local function openAddSaveDialog()
-        local wPre, dPre = tostring(addSaveWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
-        if not wPre then wPre = tostring(addSaveWorldBuf or ""); dPre = "" end
-        uiOpenDialog("boren_in_hv_sw", "Tambah Save World", {
-            { id = "f_world", label = "World Save", default = wPre, maxLen = 32 },
-            { id = "f_door",  label = "Door ID (opsional)", default = dPre, maxLen = 32 },
-            { id = "f_type",  label = "Tipe: ALL / BLOCK / SEED", default = addSaveTypeBuf, maxLen = 8 },
-            { id = "f_lim",   label = "Limit Item (0 = Unlimited)", default = addSaveLimitBuf, maxLen = 16 },
-        }, "Tambah & Simpan", function(vals)
+    local function ketikSaveForm()
+        local wPre = tostring(addSaveWorldBuf or "")
+        local lPre = tostring(addSaveLimitBuf or "0")
+        uiOpenDialog("boren_hv_sform", "Input Form Save World", {
+            { id = "f_world", label = "Save World (Nama atau Nama:DoorID)", default = wPre, maxLen = 64 },
+            { id = "f_lim",   label = "Limit per World (0 = Unlimited)", default = lPre, maxLen = 16 },
+        }, "Masukkan ke Form", function(vals)
             local wn = trimStr(vals.f_world or ""):upper()
-            local dn = trimStr(vals.f_door or ""):upper()
-            local stype = trimStr(vals.f_type or "ALL"):upper()
-            if stype ~= "BLOCK" and stype ~= "SEED" then stype = "ALL" end
-            local lim = math.floor(tonumber(vals.f_lim) or tonumber(c.default_save_limit) or 20000)
-            if lim < 0 then lim = 0 end
-            addSaveTypeBuf = stype
-            addSaveLimitBuf = tostring(lim)
-            if wn ~= "" then
-                table.insert(st.save_rows, { name = wn, door = dn, save_type = stype, limit = lim, count = 0, status = "Ready" })
-                addSaveWorldBuf = ""; HV.saveData()
-                uiNotice = "Tersimpan Save: " .. wn .. " (" .. stype .. ")"
-            end
+            local limStr = trimStr(vals.f_lim or ""):gsub("[^0-9]", "")
+            if wn ~= "" then addSaveWorldBuf = wn end
+            if limStr ~= "" then addSaveLimitBuf = limStr else addSaveLimitBuf = "0" end
+            uiNotice = "Form Save World terisi."
         end)
     end
 
-    uiSectionWithKetik("Tambah Save World Baru", "hv_ktk_sw", openAddSaveDialog)
+    uiSectionWithKetik("Tambah Save World Baru", "hv_ktk_sw", ketikSaveForm)
 
     if ImGui.BeginTable("BorenHarvestAddSwTbl", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -2130,7 +2234,7 @@ local function renderSaveSub()
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
         ImGui.PushItemWidth(math.max(120, math.floor(w * 0.48)))
-        local chW, nvW = safeInput("##hv_add_sw", addSaveWorldBuf, 256)
+        local chW, nvW = safeInput("##hv_add_sw", addSaveWorldBuf, 256, ketikSaveForm)
         ImGui.PopItemWidth()
         if chW then addSaveWorldBuf = nvW end
 
@@ -2147,7 +2251,7 @@ local function renderSaveSub()
     ImGui.Text("Limit per World (0 = Unlimited):")
     ImGui.SameLine()
     ImGui.PushItemWidth(math.max(80, math.floor(w * 0.28)))
-    local chLim, nvLim = safeInput("##hv_sw_lim_in", addSaveLimitBuf, 16)
+    local chLim, nvLim = safeInput("##hv_sw_lim_in", addSaveLimitBuf, 16, ketikSaveForm)
     ImGui.PopItemWidth()
     if chLim then addSaveLimitBuf = nvLim:gsub("[^0-9]", "") end
     ImGui.SameLine()
@@ -2272,28 +2376,22 @@ local function renderEventSub()
         ImGui.EndTable()
     end
 
-    local function openAddEventDialog()
-        local wPre, dPre = tostring(addEventWorldBuf or ""):gsub("|", ":"):match("^([^:]+):(.*)$")
-        if not wPre then wPre = tostring(addEventWorldBuf or ""); dPre = "" end
-        uiOpenDialog("boren_in_hv_ew", "Tambah World Event", {
-            { id = "f_world", label = "World Event", default = wPre, maxLen = 32 },
-            { id = "f_door",  label = "Door ID (opsional)", default = dPre, maxLen = 32 },
-            { id = "f_lim",   label = "Limit Total Item (0 = Unlimited)", default = addEventLimitBuf, maxLen = 16 },
-        }, "Tambah & Simpan", function(vals)
+    local function ketikEventForm()
+        local wPre = tostring(addEventWorldBuf or "")
+        local lPre = tostring(addEventLimitBuf or "0")
+        uiOpenDialog("boren_hv_eform", "Input Form Event World", {
+            { id = "f_world", label = "World Event (Nama atau Nama:DoorID)", default = wPre, maxLen = 64 },
+            { id = "f_lim",   label = "Limit Total Item (0 = Unlimited)", default = lPre, maxLen = 16 },
+        }, "Masukkan ke Form", function(vals)
             local wn = trimStr(vals.f_world or ""):upper()
-            local dn = trimStr(vals.f_door or ""):upper()
-            local lim = math.floor(tonumber(vals.f_lim) or tonumber(c.default_ev_limit) or 10000)
-            if lim < 0 then lim = 0 end
-            addEventLimitBuf = tostring(lim)
-            if wn ~= "" then
-                table.insert(st.event_rows, { name = wn, door = dn, limit = lim, count = 0, status = "Ready" })
-                addEventWorldBuf = ""; HV.saveData()
-                uiNotice = "Tersimpan Event: " .. wn
-            end
+            local limStr = trimStr(vals.f_lim or ""):gsub("[^0-9]", "")
+            if wn ~= "" then addEventWorldBuf = wn end
+            if limStr ~= "" then addEventLimitBuf = limStr else addEventLimitBuf = "0" end
+            uiNotice = "Form Event World terisi."
         end)
     end
 
-    uiSectionWithKetik("Tambah Event World Baru", "hv_ktk_ew", openAddEventDialog)
+    uiSectionWithKetik("Tambah Event World Baru", "hv_ktk_ew", ketikEventForm)
 
     if ImGui.BeginTable("BorenHarvestAddEwTbl", 2) then
         ImGui.TableSetupColumn("World:DoorID")
@@ -2302,13 +2400,13 @@ local function renderEventSub()
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
         ImGui.PushItemWidth(math.max(120, math.floor(w * 0.52)))
-        local chW, nvW = safeInput("##hv_add_ew", addEventWorldBuf, 256)
+        local chW, nvW = safeInput("##hv_add_ew", addEventWorldBuf, 256, ketikEventForm)
         ImGui.PopItemWidth()
         if chW then addEventWorldBuf = nvW end
 
         ImGui.TableSetColumnIndex(1)
         ImGui.PushItemWidth(math.max(70, math.floor(w * 0.24)))
-        local chLim, nvLim = safeInput("##hv_ew_lim_in", addEventLimitBuf, 16)
+        local chLim, nvLim = safeInput("##hv_ew_lim_in", addEventLimitBuf, 16, ketikEventForm)
         ImGui.PopItemWidth()
         if chLim then addEventLimitBuf = nvLim:gsub("[^0-9]", "") end
         ImGui.EndTable()
@@ -2316,11 +2414,6 @@ local function renderEventSub()
 
     uiGap(2)
     ImGui.Text("Limit per World (0 = Unlimited):")
-    ImGui.SameLine()
-    ImGui.PushItemWidth(math.max(80, math.floor(w * 0.28)))
-    local chLim, nvLim = safeInput("##hv_ew_lim_in", addEventLimitBuf, 16)
-    ImGui.PopItemWidth()
-    if chLim then addEventLimitBuf = nvLim:gsub("[^0-9]", "") end
     ImGui.SameLine()
     local isUnliEv = (addEventLimitBuf == "0" or addEventLimitBuf == "")
     if autoBtn(isUnliEv and "[ Unlimited ]##ew_unl" or "Unlimited##ew_unl") then
@@ -2393,9 +2486,22 @@ local function renderEventSub()
     end
 
     uiGap(4)
+    local function ketikEventIdsDialog()
+        local cur = tostring(c.event_ids_raw or "")
+        uiOpenDialog("boren_hv_eids", "Input ID Item Event", {
+            { id = "f_eids", label = "Daftar ID Item Event (pisah koma)", default = cur, maxLen = 256 },
+        }, "Simpan ID Event", function(vals)
+            if vals.f_eids then
+                c.event_ids_raw = trimStr(vals.f_eids)
+                HV.saveData()
+                uiNotice = "ID Event diperbarui: " .. c.event_ids_raw
+            end
+        end)
+    end
+
     uiSection("Daftar ID Item Event (Disimpan ke World Event)")
     ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
-    local chEI, vEI = safeInput("##hv_ei", c.event_ids_raw, 512)
+    local chEI, vEI = safeInput("##hv_ei", c.event_ids_raw, 512, ketikEventIdsDialog)
     ImGui.PopItemWidth()
     if chEI then c.event_ids_raw = vEI; HV.saveData() end
 
@@ -2429,21 +2535,23 @@ local function renderGearSub()
     uiSection("Gudang Alat & Fuel (Gear World)", true)
     uiNote(uiNotice)
 
-    uiSectionWithKetik("World Penyimpanan Alat & Fuel (WORLD:DOOR)", "hv_ktk_gw", function()
-        uiOpenDialog("boren_in_hv_gw", "Setting Gear World", {
-            { id = "gw", label = "Gear World (WORLD:DOOR)", default = c.gear_world, maxLen = 64 },
-            { id = "eq", label = "List ID Equip Alat (pisah koma)", default = c.gear_equip_ids, maxLen = 64 },
-            { id = "fa", label = "Target Ambil Fuel Pack", default = tostring(c.fuel_target_amt), maxLen = 8 },
-        }, "Simpan", function(v)
-            c.gear_world = trimStr(v.gw or "")
-            c.gear_equip_ids = trimStr(v.eq or "6840, 1966")
-            local n = tonumber(v.fa); if n and n >= 1 then c.fuel_target_amt = math.min(200, math.floor(n)) end
-            HV.saveData(); uiNotice = "Gear World berhasil disimpan."
+    local function ketikGearWorldDialog()
+        local cur = tostring(c.gear_world or "")
+        uiOpenDialog("boren_hv_gw", "Input World Ambil Gear", {
+            { id = "gw", label = "Gear World (WORLD:DOOR)", default = cur, maxLen = 64 },
+        }, "Simpan Gear World", function(v)
+            if v.gw then
+                c.gear_world = trimStr(v.gw or "")
+                HV.saveData()
+                uiNotice = "Gear World berhasil disimpan: " .. c.gear_world
+            end
         end)
-    end)
+    end
+
+    uiSectionWithKetik("World Penyimpanan Alat & Fuel (WORLD:DOOR)", "hv_ktk_gw", ketikGearWorldDialog)
 
     ImGui.PushItemWidth(math.max(160, math.floor(w * 0.72)))
-    local chGW, vGW = safeInput("##hv_gw", c.gear_world, 128)
+    local chGW, vGW = safeInput("##hv_gw", c.gear_world, 128, ketikGearWorldDialog)
     ImGui.PopItemWidth()
     if chGW then c.gear_world = vGW; HV.saveData() end
     ImGui.SameLine()
@@ -2489,8 +2597,21 @@ local function renderGearSub()
     if c.use_dcs_harvester then
         uiGap(2)
         ImGui.Text("List ID Item Equip (DCS, Harvester, dll. pisah koma):")
+        local function ketikGearEquipDialog()
+            local cur = tostring(c.gear_equip_ids or "")
+            uiOpenDialog("boren_hv_geq", "Input List ID Equip", {
+                { id = "eq", label = "List ID Equip Alat (pisah koma)", default = cur, maxLen = 128 },
+            }, "Simpan ID Equip", function(v)
+                if v.eq then
+                    c.gear_equip_ids = trimStr(v.eq or "6840, 1966")
+                    HV.saveData()
+                    uiNotice = "Equip IDs berhasil disimpan: " .. c.gear_equip_ids
+                end
+            end)
+        end
+
         ImGui.PushItemWidth(math.max(160, math.floor(w * 0.96)))
-        local chEq, vEq = safeInput("##hv_eq_ids", c.gear_equip_ids, 256)
+        local chEq, vEq = safeInput("##hv_eq_ids", c.gear_equip_ids, 256, ketikGearEquipDialog)
         ImGui.PopItemWidth()
         if chEq then c.gear_equip_ids = vEq; HV.saveData() end
 
