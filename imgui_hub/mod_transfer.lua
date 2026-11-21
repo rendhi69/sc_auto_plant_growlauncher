@@ -1023,28 +1023,150 @@ end
 -- ============================================================================
 -- UI SAFE HELPERS (COMPATIBLE ANDROID IME & CLIPBOARD)
 -- ============================================================================
-local function safeInputText(id, curVal, maxLen)
-    local k = uiKit()
-    if k and k.safeInputText then return k.safeInputText(id, curVal, maxLen, false) end
-    local s = tostring(curVal or ""):gsub("%z.*", "")
-    local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
-    if not ok then
-        ok, r1, r2 = pcall(ImGui.InputText, id, s)
-        if not ok then return false, s end
+local formRevision = 1
+
+local function cleanInputStr(v)
+    return tostring(v or ""):gsub("%z.*", "")
+end
+
+local function cleanDialogField(v)
+    local s = tostring(v or ""):gsub("%z.*", "")
+    s = s:gsub("[\r\n|]+$", ""):gsub("^[\r\n|]+", "")
+    return s:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local lastDialogOpenAt = 0
+local function safeInputText(id, curVal, maxLen, onKetikFn)
+    local s = cleanInputStr(curVal)
+    local uniqueId = tostring(id) .. "_" .. tostring(formRevision)
+    local ok, r1, r2 = pcall(ImGui.InputText, uniqueId, s, maxLen or 256)
+    local changed = false
+    local newVal = s
+
+    if ok then
+        if type(r1) == "boolean" and type(r2) == "string" then
+            if r1 == true then
+                changed = true
+                newVal = cleanInputStr(r2)
+            end
+        elseif type(r1) == "string" and type(r2) == "boolean" then
+            if r2 == true then
+                changed = true
+                newVal = cleanInputStr(r1)
+            end
+        end
     end
-    if type(r1) == "boolean" and type(r2) == "string" then
-        local c = tostring(r2):gsub("%z.*", "")
-        if r1 or c ~= s then return true, c end
-        return false, s
-    elseif type(r1) == "string" then
-        local c = tostring(r1):gsub("%z.*", "")
-        if (r2 == true) or c ~= s then return true, c end
-        return false, s
-    elseif type(r2) == "string" then
-        local c = tostring(r2):gsub("%z.*", "")
-        if c ~= s then return true, c end
+
+    -- Otomatis panggil Native Keyboard Dialog saat kolom form diketuk / disentuh
+    if onKetikFn and ImGui then
+        local clicked = false
+        if ImGui.IsItemClicked then
+            local okC, clk = pcall(ImGui.IsItemClicked, 0)
+            if okC and clk then clicked = true end
+        end
+        if not clicked and ImGui.IsItemActivated then
+            local okA, act = pcall(ImGui.IsItemActivated)
+            if okA and act then clicked = true end
+        end
+        if clicked then
+            local now = os.clock and os.clock() or os.time()
+            if (now - lastDialogOpenAt) >= 0.8 then
+                lastDialogOpenAt = now
+                pcall(onKetikFn)
+            end
+        end
     end
-    return false, s
+
+    return changed, newVal
+end
+
+local activeNativeDialogs = {}
+
+local function sanitizeDialogVal(s)
+    return tostring(s or ""):gsub("[\r\n|]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function showClientDialog(dText)
+    if not dText or dText == "" then return false end
+    if growtopia and type(growtopia.sendDialog) == "function" then
+        local ok = pcall(growtopia.sendDialog, dText)
+        if ok then return true end
+    end
+    if sendVariant then
+        local ok0 = pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
+        if ok0 then return true end
+        local ok1 = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        if ok1 then return true end
+        local okNum = pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
+        if okNum then return true end
+    end
+    if sendVariantList then
+        local okList = pcall(sendVariantList, { [0] = "OnDialogRequest", [1] = dText })
+        if okList then return true end
+    end
+    if sendDialog then
+        pcall(sendDialog, dText)
+        return true
+    end
+    return false
+end
+
+local function openNativeInputDialog(dialogId, title, fields, submitLabel, onSubmit)
+    activeNativeDialogs[dialogId] = onSubmit
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS = _G.__BOREN_ACTIVE_NATIVE_DIALOGS or {}
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dialogId] = onSubmit
+
+    local lines = {
+        "set_default_color|`o",
+        "add_label_with_icon|big|`cBOREN TRANSFER - " .. sanitizeDialogVal(title) .. "|left|3802|",
+        "add_spacer|small|",
+    }
+    for _, f in ipairs(fields or {}) do
+        local fid = tostring(f.id or "f")
+        local flb = sanitizeDialogVal(f.label or fid)
+        local fdv = sanitizeDialogVal(f.default or "")
+        local fln = tonumber(f.maxLen) or 48
+        lines[#lines + 1] = string.format("add_text_input|%s|%s:|%s|%d|", fid, flb, fdv, fln)
+    end
+    lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_smalltext|`7Ketik dengan keyboard HP Anda lalu tekan tombol di bawah.|"
+    lines[#lines + 1] = "end_dialog|" .. dialogId .. "|Batal|" .. sanitizeDialogVal(submitLabel or "Masukkan ke Form") .. "|"
+    local dText = table.concat(lines, "\n")
+    showClientDialog(dText)
+end
+
+local function onSendPacketHook(p1, p2)
+    local packet = (type(p2) == "string") and p2 or ((type(p1) == "string") and p1 or nil)
+    if not packet then return false end
+    if packet:find("action|dialog_return", 1, true) then
+        local dlgName = packet:match("dialog_name|([^\r\n|]+)")
+        if dlgName then
+            local cb = activeNativeDialogs[dlgName] or (_G.__BOREN_ACTIVE_NATIVE_DIALOGS and _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dlgName])
+            if cb then
+                activeNativeDialogs[dlgName] = nil
+                if _G.__BOREN_ACTIVE_NATIVE_DIALOGS then _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dlgName] = nil end
+                local fields = {}
+                for line in packet:gmatch("[^\r\n]+") do
+                    local k, v = line:match("^([^|]+)|(.*)$")
+                    if k and k ~= "" then
+                        k = k:gsub("^%s+", ""):gsub("%s+$", "")
+                        v = tostring(v or ""):gsub("|$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+                        fields[k] = v
+                    end
+                end
+                local btn = tostring(fields.buttonClicked or ""):lower()
+                if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
+                    pcall(cb, fields)
+                end
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function TF.handleSendPacket(p1, p2)
+    return onSendPacketHook(p1, p2)
 end
 
 local function uiSection(title, skipTopSep)
@@ -1055,11 +1177,16 @@ local function uiSection(title, skipTopSep)
 end
 
 local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
+    activeNativeDialogs[id] = onSubmit
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS = _G.__BOREN_ACTIVE_NATIVE_DIALOGS or {}
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS[id] = onSubmit
+
     local k = uiKit()
     if k and k.openInputDialog then
         k.openInputDialog(id, title, fields, submitLbl, onSubmit)
         return
     end
+    openNativeInputDialog(id, title, fields, submitLbl, onSubmit)
 end
 
 local function getClipboardTextSafe()
@@ -1259,19 +1386,16 @@ local function renderMainPanel()
         ImGui.EndTable()
     end
 
-    local function openAddInputDialog()
-        uiOpenDialog("boren_in_tf_in", "Tambah Input World", {
-            { id = "w", label = "Input World (Bisa multi pisah koma/enter)", default = st.add_input_w_buf, maxLen = 512 },
-        }, "Tambah & Simpan", function(v)
-            local raw = trimStr(v.w or "")
+        local function openAddInputDialog()
+        local curPre = cleanDialogField(st.add_input_w_buf)
+        uiOpenDialog("boren_in_tf_in", "Input Form Input World", {
+            { id = "w", label = "Input World (Bisa multi pisah koma/enter)", default = curPre, maxLen = 512 },
+        }, "Masukkan ke Form", function(v)
+            local raw = cleanDialogField(v.w or "")
             if raw ~= "" then
-                local parsed = parseWorldList(raw)
-                for _, pw in ipairs(parsed) do table.insert(st.input_queue, pw) end
-                c.input_world_raw = formatWorldList(st.input_queue)
-                st.input_w_buf = c.input_world_raw
-                st.add_input_w_buf = ""
-                TF.saveData()
-                addLog(string.format("`2[Input World] Berhasil menambah %d world ke antrian.", #parsed))
+                st.add_input_w_buf = raw
+                formRevision = formRevision + 1
+                addLog("`2[Input World] Form terisi: " .. tostring(st.add_input_w_buf))
             end
         end)
     end
@@ -1280,7 +1404,7 @@ local function renderMainPanel()
     uiSection("Tambah World Input Baru")
 
     ImGui.PushItemWidth(math.max(160, math.floor(availW * 0.44)))
-    local chInW, nvInW = safeInputText("##tf_add_in_buf", st.add_input_w_buf, 256)
+    local chInW, nvInW = safeInputText("##tf_add_in_buf", st.add_input_w_buf, 256, openAddInputDialog)
     ImGui.PopItemWidth()
     if chInW then st.add_input_w_buf = nvInW end
 
@@ -1293,6 +1417,7 @@ local function renderMainPanel()
             c.input_world_raw = formatWorldList(st.input_queue)
             st.input_w_buf = c.input_world_raw
             st.add_input_w_buf = ""
+            formRevision = formRevision + 1
             TF.saveData()
         end
     end
@@ -1301,6 +1426,7 @@ local function renderMainPanel()
         local cw = getCurrentWorld()
         if cw ~= "" and cw ~= "EXIT" then
             st.add_input_w_buf = cw .. ":"
+            formRevision = formRevision + 1
         end
     end
     ImGui.SameLine()
@@ -1366,19 +1492,16 @@ local function renderMainPanel()
         ImGui.EndTable()
     end
 
-    local function openAddOutputDialog()
-        uiOpenDialog("boren_in_tf_out", "Tambah Output World", {
-            { id = "w", label = "Output World (Bisa multi pisah koma/enter)", default = st.add_output_w_buf, maxLen = 512 },
-        }, "Tambah & Simpan", function(v)
-            local raw = trimStr(v.w or "")
+        local function openAddOutputDialog()
+        local curPre = cleanDialogField(st.add_output_w_buf)
+        uiOpenDialog("boren_in_tf_out", "Input Form Output World", {
+            { id = "w", label = "Output World (Bisa multi pisah koma/enter)", default = curPre, maxLen = 512 },
+        }, "Masukkan ke Form", function(v)
+            local raw = cleanDialogField(v.w or "")
             if raw ~= "" then
-                local parsed = parseWorldList(raw)
-                for _, pw in ipairs(parsed) do table.insert(st.output_queue, pw) end
-                c.output_world_raw = formatWorldList(st.output_queue)
-                st.output_w_buf = c.output_world_raw
-                st.add_output_w_buf = ""
-                TF.saveData()
-                addLog(string.format("`2[Output World] Berhasil menambah %d world ke antrian.", #parsed))
+                st.add_output_w_buf = raw
+                formRevision = formRevision + 1
+                addLog("`2[Output World] Form terisi: " .. tostring(st.add_output_w_buf))
             end
         end)
     end
@@ -1387,7 +1510,7 @@ local function renderMainPanel()
     uiSection("Tambah World Output Baru")
 
     ImGui.PushItemWidth(math.max(160, math.floor(availW * 0.44)))
-    local chOutW, nvOutW = safeInputText("##tf_add_out_buf", st.add_output_w_buf, 256)
+    local chOutW, nvOutW = safeInputText("##tf_add_out_buf", st.add_output_w_buf, 256, openAddOutputDialog)
     ImGui.PopItemWidth()
     if chOutW then st.add_output_w_buf = nvOutW end
 
@@ -1400,6 +1523,7 @@ local function renderMainPanel()
             c.output_world_raw = formatWorldList(st.output_queue)
             st.output_w_buf = c.output_world_raw
             st.add_output_w_buf = ""
+            formRevision = formRevision + 1
             TF.saveData()
         end
     end
@@ -1408,6 +1532,7 @@ local function renderMainPanel()
         local cw = getCurrentWorld()
         if cw ~= "" and cw ~= "EXIT" then
             st.add_output_w_buf = cw .. ":"
+            formRevision = formRevision + 1
         end
     end
     ImGui.SameLine()
@@ -1608,8 +1733,19 @@ TF.handleSendPacketRaw = onSendPacketRawTransferHook
 
 if AddHook then
     pcall(AddHook, "OnSendPacketRaw", "boren_tf_antitake_raw", onSendPacketRawTransferHook)
+    pcall(AddHook, "OnSendPacket", "boren_tf_dlg_hook", onSendPacketHook)
 elseif addHook then
-    pcall(addHook, "OnSendPacketRaw", "boren_tf_antitake_raw", onSendPacketRawTransferHook)
+    local function hookDispatchRaw(p1, p2)
+        return onSendPacketRawTransferHook(p1, p2)
+    end
+    local function hookDispatch(p1, p2)
+        return onSendPacketHook(p1, p2)
+    end
+    pcall(addHook, hookDispatchRaw, "onsendpacketraw")
+    pcall(addHook, hookDispatch, "onsendpacket")
+    pcall(addHook, hookDispatch, "on_sendpacket")
+    pcall(addHook, "onsendpacket", hookDispatch)
+    pcall(addHook, "on_sendpacket", hookDispatch)
 end
 
 return TF

@@ -77,24 +77,62 @@ local searchBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
 
+local formRevision = 1
+
+local function cleanInputStr(v)
+    return tostring(v or ""):gsub("%z.*", "")
+end
+
+local function cleanDialogField(v)
+    local s = tostring(v or ""):gsub("%z.*", "")
+    s = s:gsub("[\r\n|]+$", ""):gsub("^[\r\n|]+", "")
+    return s:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local lastDialogOpenAt = 0
 local function safeInputText(id, curVal, maxLen, onDoubleTapFn)
-    local k = HUB_REF and HUB_REF.ui_kit
-    if k and k.safeInputText then
-        return k.safeInputText(id, curVal, maxLen, onDoubleTapFn)
+    local s = cleanInputStr(curVal)
+    local uniqueId = tostring(id) .. "_" .. tostring(formRevision)
+    local ok, r1, r2 = pcall(ImGui.InputText, uniqueId, s, maxLen or 256)
+    local changed = false
+    local newVal = s
+
+    if ok then
+        if type(r1) == "boolean" and type(r2) == "string" then
+            if r1 == true then
+                changed = true
+                newVal = cleanInputStr(r2)
+            end
+        elseif type(r1) == "string" and type(r2) == "boolean" then
+            if r2 == true then
+                changed = true
+                newVal = cleanInputStr(r1)
+            end
+        end
     end
-    local s = tostring(curVal or "")
-    local ok, r1, r2 = pcall(ImGui.InputText, id, s, maxLen or 256)
-    if not ok then return false, s end
-    if type(r1) == "boolean" and type(r2) == "string" then
-        if r1 or r2 ~= s then return true, r2 end
-        return false, s
-    elseif type(r1) == "string" then
-        if (r2 == true) or r1 ~= s then return true, r1 end
-        return false, s
-    elseif type(r2) == "string" and r2 ~= s then
-        return true, r2
+
+    -- Otomatis panggil Native Keyboard Dialog saat kolom form diketuk / disentuh
+    local tapFn = (type(onDoubleTapFn) == "function") and onDoubleTapFn or nil
+    if tapFn and ImGui then
+        local clicked = false
+        if ImGui.IsItemClicked then
+            local okC, clk = pcall(ImGui.IsItemClicked, 0)
+            if okC and clk then clicked = true end
+        end
+        if not clicked and ImGui.IsItemActivated then
+            local okA, act = pcall(ImGui.IsItemActivated)
+            if okA and act then clicked = true end
+        end
+        if clicked then
+            local now = os.clock and os.clock() or os.time()
+            if (now - lastDialogOpenAt) >= 0.8 then
+                lastDialogOpenAt = now
+                pcall(tapFn)
+            end
+        end
     end
-    return false, s
+
+    return changed, newVal
 end
 
 -- ============================================================================
@@ -992,11 +1030,106 @@ local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
     uiSection(title, skipTopSep)
 end
 
+local activeNativeDialogs = {}
+
+local function sanitizeDialogVal(s)
+    return tostring(s or ""):gsub("[\r\n|]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function showClientDialog(dText)
+    if not dText or dText == "" then return false end
+    if growtopia and type(growtopia.sendDialog) == "function" then
+        local ok = pcall(growtopia.sendDialog, dText)
+        if ok then return true end
+    end
+    if sendVariant then
+        local ok0 = pcall(sendVariant, { v0 = "OnDialogRequest", v1 = dText })
+        if ok0 then return true end
+        local ok1 = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        if ok1 then return true end
+        local okNum = pcall(sendVariant, { [0] = "OnDialogRequest", [1] = dText })
+        if okNum then return true end
+    end
+    if sendVariantList then
+        local okList = pcall(sendVariantList, { [0] = "OnDialogRequest", [1] = dText })
+        if okList then return true end
+    end
+    if sendDialog then
+        pcall(sendDialog, dText)
+        return true
+    end
+    return false
+end
+
+local function openNativeInputDialog(dialogId, title, fields, submitLabel, onSubmit)
+    activeNativeDialogs[dialogId] = onSubmit
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS = _G.__BOREN_ACTIVE_NATIVE_DIALOGS or {}
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dialogId] = onSubmit
+
+    local lines = {
+        "set_default_color|`o",
+        "add_label_with_icon|big|`cBOREN BUY PACK - " .. sanitizeDialogVal(title) .. "|left|3802|",
+        "add_spacer|small|",
+    }
+    for _, f in ipairs(fields or {}) do
+        local fid = tostring(f.id or "f")
+        local flb = sanitizeDialogVal(f.label or fid)
+        local fdv = sanitizeDialogVal(f.default or "")
+        local fln = tonumber(f.maxLen) or 48
+        lines[#lines + 1] = string.format("add_text_input|%s|%s:|%s|%d|", fid, flb, fdv, fln)
+    end
+    lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_smalltext|`7Ketik dengan keyboard HP Anda lalu tekan tombol di bawah.|"
+    lines[#lines + 1] = "end_dialog|" .. dialogId .. "|Batal|" .. sanitizeDialogVal(submitLabel or "Masukkan ke Form") .. "|"
+    local dText = table.concat(lines, "\n")
+    showClientDialog(dText)
+end
+
+local function onSendPacketHook(p1, p2)
+    local packet = (type(p2) == "string") and p2 or ((type(p1) == "string") and p1 or nil)
+    if not packet then return false end
+    if packet:find("action|dialog_return", 1, true) then
+        local dlgName = packet:match("dialog_name|([^\r\n|]+)")
+        if dlgName then
+            local cb = activeNativeDialogs[dlgName] or (_G.__BOREN_ACTIVE_NATIVE_DIALOGS and _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dlgName])
+            if cb then
+                activeNativeDialogs[dlgName] = nil
+                if _G.__BOREN_ACTIVE_NATIVE_DIALOGS then _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dlgName] = nil end
+                local fields = {}
+                for line in packet:gmatch("[^\r\n]+") do
+                    local k, v = line:match("^([^|]+)|(.*)$")
+                    if k and k ~= "" then
+                        k = k:gsub("^%s+", ""):gsub("%s+$", "")
+                        v = tostring(v or ""):gsub("|$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+                        fields[k] = v
+                    end
+                end
+                local btn = tostring(fields.buttonClicked or ""):lower()
+                if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
+                    pcall(cb, fields)
+                end
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function BP.handleSendPacket(p1, p2)
+    return onSendPacketHook(p1, p2)
+end
+
 local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
+    activeNativeDialogs[id] = onSubmit
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS = _G.__BOREN_ACTIVE_NATIVE_DIALOGS or {}
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS[id] = onSubmit
+
     local k = uiKit()
     if k and k.openInputDialog then
         k.openInputDialog(id, title, fields, submitLbl, onSubmit)
+        return
     end
+    openNativeInputDialog(id, title, fields, submitLbl, onSubmit)
 end
 
 local function uiEnableBtn(isOn, id)
@@ -1154,27 +1287,29 @@ local function renderMainSub()
         ImGui.EndTable()
     end
 
-    uiSectionWithKetik("Konfigurasi Pack & World Drop", "bp_ktk_cfg", function()
-        local swR = tostring(BP.CFG.save_world or ""):gsub("|", ":")
-        local swN, swD = swR:match("^([^:]+):(.*)$")
-        if not swN then swN = swR; swD = "" end
-        uiOpenDialog("boren_in_bp_cfg", "Konfigurasi Buy Pack", {
-            { id = "f_pid",   label = "Pack ID (Debug)", default = BP.CFG.pack_id, maxLen = 48 },
-            { id = "f_world", label = "World Save Drop", default = swN,            maxLen = 32 },
-            { id = "f_door",  label = "Door ID",         default = swD,            maxLen = 32 },
-        }, "Simpan", function(vals)
-            local pid = trimStr(vals.f_pid or "")
-            local wn  = trimStr(vals.f_world or ""):upper()
-            local dn  = trimStr(vals.f_door or ""):upper()
+        local function ketikBuyPackForm()
+        local swRaw = tostring(BP.CFG.save_world or ""):gsub("|", ":")
+        local swName, swDoor = swRaw:match("^([^:]+):(.*)$")
+        if not swName then swName = swRaw; swDoor = "" end
+        uiOpenDialog("boren_in_bp_cfg", "Input Form Pack & Save World", {
+            { id = "f_pid",   label = "Pack ID (Contoh: basic_splicing_kit)", default = cleanDialogField(BP.CFG.pack_id), maxLen = 64 },
+            { id = "f_world", label = "World Save Drop", default = cleanDialogField(swName), maxLen = 32 },
+            { id = "f_door",  label = "Door ID",         default = cleanDialogField(swDoor), maxLen = 32 },
+        }, "Masukkan ke Form", function(vals)
+            local pid = cleanDialogField(vals.f_pid or vals["f_pid"])
+            local wn  = cleanDialogField(vals.f_world or vals["f_world"]):upper()
+            local dn  = cleanDialogField(vals.f_door or vals["f_door"]):upper()
             if pid ~= "" then BP.CFG.pack_id = pid end
             if wn ~= "" then BP.CFG.save_world = (dn ~= "") and (wn .. ":" .. dn) or wn end
+            formRevision = formRevision + 1
             BP.saveData()
-            uiNotice = "Tersimpan: " .. tostring(BP.CFG.pack_id) .. " -> " .. tostring(BP.CFG.save_world)
+            uiNotice = "Form Save World terisi: " .. tostring(BP.CFG.save_world)
         end)
-    end)
+    end
+    uiSectionWithKetik("Konfigurasi Pack & World Drop", "bp_ktk_cfg", ketikBuyPackForm)
     ImGui.Text("Pack ID (Debug Name):")
     ImGui.PushItemWidth(math.max(160, w - 12))
-    local chP, nP = safeInputText("##bp_pid", BP.CFG.pack_id, 128)
+    local chP, nP = safeInputText("##bp_pid", BP.CFG.pack_id, 128, ketikBuyPackForm)
     ImGui.PopItemWidth()
     if chP then BP.CFG.pack_id = nP; BP.saveData() end
 
@@ -1190,7 +1325,7 @@ local function renderMainSub()
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
         ImGui.PushItemWidth(math.max(110, math.floor(w * 0.46)))
-        local chWN, newWN = safeInputText("##bp_sw_n", swName, 128)
+        local chWN, newWN = safeInputText("##bp_sw_n", swName, 128, ketikBuyPackForm)
         ImGui.PopItemWidth()
         if chWN then
             swName = newWN
@@ -1200,7 +1335,7 @@ local function renderMainSub()
 
         ImGui.TableSetColumnIndex(1)
         ImGui.PushItemWidth(math.max(90, math.floor(w * 0.44)))
-        local chWD, newWD = safeInputText("##bp_sw_d", swDoor, 128)
+        local chWD, newWD = safeInputText("##bp_sw_d", swDoor, 128, ketikBuyPackForm)
         ImGui.PopItemWidth()
         if chWD then
             swDoor = newWD
@@ -1221,7 +1356,9 @@ local function renderMainSub()
         local curW = getCurrentWorldSafe()
         if curW ~= "" and curW ~= "EXIT" then
             BP.CFG.save_world = (swDoor ~= "") and (curW .. ":" .. swDoor) or curW
-            BP.saveData(); uiNotice = "Save World tersimpan: " .. curW
+            formRevision = formRevision + 1
+            BP.saveData()
+            uiNotice = "Save World terisi: " .. curW
         else uiNotice = "Masuk ke world dulu!" end
     elseif actBp == 2 then
         local lines = uiReadClipLines()
@@ -1362,6 +1499,18 @@ function BP.init(hub)
     HUB_REF = hub
     BP.loadData()
     BP.loadPackDatabase()
+end
+
+if AddHook then
+    pcall(AddHook, "OnSendPacket", "boren_bp_dlg_hook", onSendPacketHook)
+elseif addHook then
+    local function hookDispatch(p1, p2)
+        return onSendPacketHook(p1, p2)
+    end
+    pcall(addHook, hookDispatch, "onsendpacket")
+    pcall(addHook, hookDispatch, "on_sendpacket")
+    pcall(addHook, "onsendpacket", hookDispatch)
+    pcall(addHook, "on_sendpacket", hookDispatch)
 end
 
 return BP
