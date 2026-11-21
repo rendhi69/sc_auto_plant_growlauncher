@@ -2078,7 +2078,7 @@ local function renderLeftFeatureSidebar(colW)
         end
     end
 
-    local bottomRows = dbFeat and 3 or 2
+    local bottomRows = (dbFeat and 1 or 0) + 3
     local bottomBlockH = (rowH * bottomRows) + 14
     local pushDown = 0
     if availY and availY > bottomBlockH then
@@ -2116,8 +2116,9 @@ local function renderLeftFeatureSidebar(colW)
             pc(C.Text,          P.offText)
         end
     end
-    local halfW = math.max(48, math.floor((btnW - 6) * 0.5))
-    if fullBtn(isPinned and "Pin: ON##sb_pin" or "Pin: OFF##sb_pin", halfW) then
+
+    -- Posisi atas-bawah: Pin di atas, Fit Layar di tengah, Hide UI di bawah
+    if fullBtn(isPinned and "Pin: ON##sb_pin" or "Pin: OFF##sb_pin", btnW) then
         isPinned = not isPinned
         if isPinned and lastWinX and lastWinY then
             pinnedX, pinnedY = lastWinX, lastWinY
@@ -2127,8 +2128,8 @@ local function renderLeftFeatureSidebar(colW)
     if pinPushed > 0 and ImGui and ImGui.PopStyleColor then
         pcall(ImGui.PopStyleColor, pinPushed)
     end
-    ImGui.SameLine()
-    if styledBtn("Fit##sb_fit", halfW, false, false) then
+
+    if styledBtn("Fit Layar##sb_fit", btnW, false, false) then
         local dw, dh = getScreenSize()
         local fw = math.max(760, math.min(880, math.floor(dw - 24)))
         local fh = math.max(380, math.min(500, math.floor(dh - 24)))
