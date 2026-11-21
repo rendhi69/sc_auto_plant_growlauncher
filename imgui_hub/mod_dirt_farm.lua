@@ -144,6 +144,7 @@ DF.CFG = {
     auto_trash        = true,
     trash_thresh      = 180,
     trash_list_raw    = "14,4,5,10,11", -- Default: Cave BG (14), Lava (4), Lava Seed (5), Rock (10), Rock Seed (11) — TANPA Cave BG Seed (15)!
+    save_seed_list_raw = "3,2",         -- Default: Dirt Seed (3), Dirt (2)
     -- Delays & Cheats
     punch_delay       = 160,
     place_delay       = 160,
@@ -188,6 +189,7 @@ DF.STATE = {
     selected_idx       = 0,
     selected_st        = 0,
     selected_sw        = 0,
+    selected_ssid      = 0,
     selected_tr        = 0,
     found_count        = 0,
     df_stash_spots     = {},   -- Petak drop sementara Dirt/Seed di DF agar tidak langsung terhisap balik saat break
@@ -202,6 +204,7 @@ local addStorageBuf = ""
 local addStorageDoorBuf = ""
 local addSaveBuf = ""
 local addSaveDoorBuf = ""
+local addSaveSeedItemBuf = ""
 local addTrashBuf = ""
 local uiNotice = ""
 local CACHED_PATH = nil
@@ -401,6 +404,35 @@ local function setSaveWorldList(list)
     DF.saveData()
 end
 
+local DEFAULT_SAVE_SEED_RAW = "3,2"
+
+local function getSaveSeedList()
+    local list, seen = {}, {}
+    local raw = trimStr(DF.CFG.save_seed_list_raw)
+    if raw == "" then raw = DEFAULT_SAVE_SEED_RAW end
+    for tok in raw:gmatch("[^,%s;|\r\n]+") do
+        local n = math.floor(tonumber(tok) or 0)
+        if n > 0 and not seen[n] then
+            seen[n] = true
+            table.insert(list, n)
+        end
+    end
+    return list
+end
+
+local function setSaveSeedList(list)
+    local out, seen = {}, {}
+    for _, id in ipairs(list or {}) do
+        local n = math.floor(tonumber(id) or 0)
+        if n > 0 and not seen[n] then
+            seen[n] = true
+            table.insert(out, tostring(n))
+        end
+    end
+    DF.CFG.save_seed_list_raw = table.concat(out, ",")
+    DF.saveData()
+end
+
 local function getTrashList()
     local list, seen = {}, {}
     local raw = trimStr(DF.CFG.trash_list_raw)
@@ -433,6 +465,7 @@ function DF.saveData()
         "CFGVER=4",
         "STORAGE=" .. tostring(DF.CFG.storage_raw or ""),
         "SAVEW=" .. tostring(DF.CFG.save_world or ""),
+        "SAVESIDELIST=" .. tostring(DF.CFG.save_seed_list_raw or DEFAULT_SAVE_SEED_RAW),
         "TRASHLIST=" .. tostring(DF.CFG.trash_list_raw or ""),
         "LOOP=" .. (DF.CFG.loop_enabled and "1" or "0"),
         "FINDMODE=" .. (DF.CFG.find_world_mode and "1" or "0"),
@@ -482,11 +515,13 @@ function DF.loadData()
     DF.STATE.rows = {}
     local cfgVer = 0
     local sawTrashList = false
+    local sawSaveSeedList = false
     for line in txt:gmatch("[^\r\n]+") do
         local k, v = line:match("^([A-Z0-9]+)=(.*)$")
         if k == "CFGVER" then cfgVer = tonumber(v) or 0
         elseif k == "STORAGE" then DF.CFG.storage_raw = trimStr(v)
         elseif k == "SAVEW" then DF.CFG.save_world = trimStr(v)
+        elseif k == "SAVESIDELIST" then DF.CFG.save_seed_list_raw = trimStr(v); sawSaveSeedList = true
         elseif k == "TRASHLIST" then DF.CFG.trash_list_raw = trimStr(v); sawTrashList = true
         elseif k == "LOOP" then DF.CFG.loop_enabled = (v == "1")
         elseif k == "FINDMODE" then DF.CFG.find_world_mode = (v == "1")
@@ -544,6 +579,9 @@ function DF.loadData()
         DF.saveData()
     elseif cfgVer < 3 then
         DF.saveData()
+    end
+    if not sawSaveSeedList or DF.CFG.save_seed_list_raw == "" then
+        DF.CFG.save_seed_list_raw = DEFAULT_SAVE_SEED_RAW
     end
 end
 
@@ -2083,6 +2121,7 @@ local function collectFloatingItemInDF(targetID, stopAtAmt)
 end
 
 -- Simpan sisa Dirt Block (2) & Dirt Seed (3) ke daftar Storage Seed / Save World bila diisi; bila kosong biarkan di Dirt Farm!
+-- Simpan sisa item Save Seed (Dirt Seed 3, Dirt 2, dll) ke daftar Storage Seed / Save World bila diisi; bila kosong biarkan di Dirt Farm!
 local function saveLeftoverDirtToSaveWorld(farmRow)
     local allSaves = getSaveWorldList()
     local saveList = {}
@@ -2093,9 +2132,12 @@ local function saveLeftoverDirtToSaveWorld(farmRow)
         end
     end
     if #saveList == 0 then
-        addLog("[DF] Storage Seed / Save World kosong — sisa Dirt Block & Dirt Seed dibiarkan di Dirt Farm.")
+        addLog("[DF] Storage Seed / Save World kosong — sisa item Save Seed dibiarkan di Dirt Farm.")
         return true
     end
+
+    local saveItems = getSaveSeedList()
+    if #saveItems == 0 then saveItems = { 3, 2 } end
 
     DF.STATE.df_stash_spots = {}
     farmRow.status = "Save Sisa Dirt..."
@@ -2105,7 +2147,7 @@ local function saveLeftoverDirtToSaveWorld(farmRow)
         if not DF.STATE.running then return false end
         if saveIdx > #saveList then break end
 
-        -- 1. Pastikan sedang di world DF untuk menyapu sisa Dirt Block & Dirt Seed di lantai/atas DF
+        -- 1. Pastikan sedang di world DF untuk menyapu item Save Seed di lantai/atas DF
         if getCurrentWorldSafe() ~= farmName then
             if not warpToWorld(farmRow.name, farmRow.door) then break end
             DF.STATE.in_storage = false
@@ -2114,18 +2156,23 @@ local function saveLeftoverDirtToSaveWorld(farmRow)
             safeSleep(450)
         end
 
-        collectFloatingItemInDF(ITEM.DIRT, 195)
-        collectFloatingItemInDF(ITEM.DIRT_SEED, 195)
+        for _, itmId in ipairs(saveItems) do
+            collectFloatingItemInDF(itmId, 195)
+        end
 
         -- Cek apakah masih ada sisa floating di DF yang tidak muat 1 tas
+        local saveItemSet = {}
+        for _, itmId in ipairs(saveItems) do saveItemSet[itmId] = true end
         local moreFloatingInDF = false
         forEachWorldObject(function(oid)
-            if oid == ITEM.DIRT or oid == ITEM.DIRT_SEED then moreFloatingInDF = true end
+            if saveItemSet[oid] then moreFloatingInDF = true end
         end)
 
-        local hasDirt = getInvCount(ITEM.DIRT)
-        local hasSeed = getInvCount(ITEM.DIRT_SEED)
-        if hasDirt <= 0 and hasSeed <= 0 then
+        local totalToSave = 0
+        for _, itmId in ipairs(saveItems) do
+            totalToSave = totalToSave + getInvCount(itmId)
+        end
+        if totalToSave <= 0 then
             break
         end
 
@@ -2134,19 +2181,22 @@ local function saveLeftoverDirtToSaveWorld(farmRow)
         while saveIdx <= #saveList and DF.STATE.running do
             local target = saveList[saveIdx]
             DF.STATE.status_text = "Save -> " .. target.name
-            addLog(string.format("[DF Save #%d] Menyimpan sisa Dirt=%d & Seed=%d ke %s...", trip, getInvCount(ITEM.DIRT), getInvCount(ITEM.DIRT_SEED), target.name))
+            addLog(string.format("[DF Save #%d] Menyimpan sisa item ke %s (total %d item di tas)...", trip, target.name, totalToSave))
             DF.STATE.in_storage = true
             activeTargetWorld = ""
             if warpToWorld(target.name, target.door) then
                 safeSleep(600)
-                if getInvCount(ITEM.DIRT) > 0 then
-                    dropExcessItemAtStorage(ITEM.DIRT, 0, "Sisa Dirt Block")
-                end
-                if getInvCount(ITEM.DIRT_SEED) > 0 then
-                    dropExcessItemAtStorage(ITEM.DIRT_SEED, 0, "Sisa Dirt Seed")
+                for _, itmId in ipairs(saveItems) do
+                    if getInvCount(itmId) > 0 then
+                        dropExcessItemAtStorage(itmId, 0, "Sisa " .. resolveDoorItemName(itmId))
+                    end
                 end
                 DF.STATE.in_storage = false
-                if getInvCount(ITEM.DIRT) <= 0 and getInvCount(ITEM.DIRT_SEED) <= 0 then
+                local remCnt = 0
+                for _, itmId in ipairs(saveItems) do
+                    remCnt = remCnt + getInvCount(itmId)
+                end
+                if remCnt <= 0 then
                     droppedAll = true
                     break
                 else
@@ -2161,7 +2211,7 @@ local function saveLeftoverDirtToSaveWorld(farmRow)
         end
 
         if not droppedAll then
-            addLog("[DF Save] Semua Storage Seed gagal dimasuki/penuh, sisa Dirt dibiarkan.")
+            addLog("[DF Save] Semua Storage Seed gagal dimasuki/penuh, sisa item dibiarkan.")
             break
         end
         if not moreFloatingInDF then
@@ -2172,11 +2222,10 @@ local function saveLeftoverDirtToSaveWorld(farmRow)
     DF.STATE.in_storage = false
     DF.STATE.anti_take_active = false
     setAutoCollectActive(DF.CFG.auto_collect == true)
-    addLog("[DF Save] Sisa Dirt Block & Dirt Seed selesai disimpan ke Storage Seed!")
+    addLog("[DF Save] Sisa item Save Seed selesai disimpan ke Storage Seed!")
     return true
 end
 
--- Auto Plant & Harvest Dirt Seed di baris Y=23 (HANYA dijalankan setelah Dirt Block di tas & world habis!)
 local function farmDirtOnce(doorX, doorY, minX, maxX)
     if not DF.CFG.auto_farm_dirt then return false end
     local farmY = 23
@@ -4018,21 +4067,26 @@ local function renderStorageSub()
         ImGui.EndTable()
     end
 
-    uiSectionWithKetik("Tambah Storage Seed / Save World", "df_ktk_sw", function()
-        uiOpenDialog("boren_in_df_sw", "Tambah Storage Seed & Sisa Dirt", {
-            { id = "f_world", label = "Save World", default = addSaveBuf,     maxLen = 32 },
-            { id = "f_door",  label = "Door ID",    default = addSaveDoorBuf, maxLen = 32 },
-        }, "Tambah & Simpan", function(vals)
-            local wn = trimStr(vals.f_world or ""):upper()
-            local dn = trimStr(vals.f_door or ""):upper()
+    local function ketikSaveSeedForm()
+        local wPre = cleanDialogField(addSaveBuf)
+        local dPre = cleanDialogField(addSaveDoorBuf)
+        uiOpenDialog("boren_in_df_sw", "Input Form Storage Seed / Save World", {
+            { id = "f_world", label = "Save World", default = wPre, maxLen = 32 },
+            { id = "f_door",  label = "Door ID",    default = dPre, maxLen = 32 },
+        }, "Masukkan ke Form", function(vals)
+            local wn = cleanDialogField(vals.f_world or vals["f_world"]):upper()
+            local dn = cleanDialogField(vals.f_door or vals["f_door"]):upper()
             if wn ~= "" then
-                local swL = getSaveWorldList()
-                table.insert(swL, { name = wn, door = dn })
-                setSaveWorldList(swL); addSaveBuf = ""; addSaveDoorBuf = ""
-                uiNotice = "Tersimpan storage seed: " .. wn
+                addSaveBuf = wn
             end
+            if dn ~= "" then
+                addSaveDoorBuf = dn
+            end
+            formRevision = formRevision + 1
+            uiNotice = "Form Save World terisi: " .. tostring(addSaveBuf) .. (addSaveDoorBuf ~= "" and (":" .. addSaveDoorBuf) or "")
         end)
-    end)
+    end
+    uiSectionWithKetik("Tambah Storage Seed / Save World", "df_ktk_sw", ketikSaveSeedForm)
     if ImGui.BeginTable("BorenDFAddSw", 2) then
         ImGui.TableSetupColumn("Save World")
         ImGui.TableSetupColumn("Door ID")
@@ -4040,13 +4094,13 @@ local function renderStorageSub()
         ImGui.TableNextRow()
         ImGui.TableSetColumnIndex(0)
         ImGui.PushItemWidth(math.max(110, math.floor(w * 0.46)))
-        local chSw, nvSw = safeInputText("##df_add_sw", addSaveBuf, 256)
+        local chSw, nvSw = safeInputText("##df_add_sw", addSaveBuf, 256, ketikSaveSeedForm)
         ImGui.PopItemWidth()
         if chSw then addSaveBuf = nvSw end
 
         ImGui.TableSetColumnIndex(1)
         ImGui.PushItemWidth(math.max(90, math.floor(w * 0.44)))
-        local chSwD, nvSwD = safeInputText("##df_add_swd", addSaveDoorBuf, 128)
+        local chSwD, nvSwD = safeInputText("##df_add_swd", addSaveDoorBuf, 128, ketikSaveSeedForm)
         ImGui.PopItemWidth()
         if chSwD then addSaveDoorBuf = nvSwD end
         ImGui.EndTable()
@@ -4068,11 +4122,15 @@ local function renderStorageSub()
         if p then
             table.insert(saveWorlds, { name = p.name, door = p.door })
             setSaveWorldList(saveWorlds); addSaveBuf = ""; addSaveDoorBuf = ""
+            formRevision = formRevision + 1
             uiNotice = "Tersimpan storage seed: " .. p.name
         else uiNotice = "Isi Save World dulu!" end
     elseif actSw == 2 then
         local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then addSaveBuf = curW; uiNotice = "Terisi " .. curW .. " (klik + Tambah)"
+        if curW ~= "" and curW ~= "EXIT" then
+            addSaveBuf = curW
+            formRevision = formRevision + 1
+            uiNotice = "Terisi " .. curW .. " (isi Door ID jika ada lalu klik + Tambah)"
         else uiNotice = "Masuk ke world dulu!" end
     elseif actSw == 3 then
         local lines = uiReadClipLines()
@@ -4083,6 +4141,7 @@ local function renderStorageSub()
             local wP, dP = norm:match("^([^:]+):(.*)$")
             if wP then addSaveBuf = trimStr(wP); addSaveDoorBuf = trimStr(dP or "")
             else addSaveBuf = lines[1]; addSaveDoorBuf = "" end
+            formRevision = formRevision + 1
             uiNotice = "Paste ke form storage seed. Klik + Tambah."
         else
             local n = 0
@@ -4090,7 +4149,10 @@ local function renderStorageSub()
                 local p = parseWorldLine(ln)
                 if p then table.insert(saveWorlds, { name = p.name, door = p.door }); n = n + 1 end
             end
-            if n > 0 then setSaveWorldList(saveWorlds); uiNotice = "Smart Paste: +" .. tostring(n) .. " storage seed (tersimpan)!"
+            if n > 0 then
+                setSaveWorldList(saveWorlds)
+                formRevision = formRevision + 1
+                uiNotice = "Smart Paste: +" .. tostring(n) .. " storage seed (tersimpan)!"
             else uiNotice = "Format clipboard tidak valid." end
         end
     elseif actSw == 4 then
@@ -4098,11 +4160,112 @@ local function renderStorageSub()
         if idx < 1 or idx > #saveWorlds then idx = #saveWorlds end
         if idx >= 1 and idx <= #saveWorlds then
             table.remove(saveWorlds, idx); DF.STATE.selected_sw = 0; setSaveWorldList(saveWorlds)
+            formRevision = formRevision + 1
             uiNotice = (#saveWorlds == 0) and "Storage seed kosong (sisa dibiarkan di DF)." or "Storage seed dihapus."
         end
     end
-end
 
+    -- PEMISAH & LIST ITEM SAVE WORLD SEED (Seperti Trash List tapi untuk drop ke Save World)
+    uiGap(16)
+    if ImGui and ImGui.Separator then ImGui.Separator() end
+    uiGap(8)
+
+    local saveSeedList = getSaveSeedList()
+    local function ketikSaveSeedItemForm()
+        local idPre = cleanDialogField(addSaveSeedItemBuf)
+        uiOpenDialog("boren_in_df_ssid", "Input Item ID Save World Seed", {
+            { id = "f_sid", label = "Item ID (pisahkan koma jika banyak)", default = idPre, maxLen = 64 },
+        }, "Masukkan ke Form", function(vals)
+            local raw = cleanDialogField(vals.f_sid or vals["f_sid"])
+            if raw ~= "" then
+                addSaveSeedItemBuf = raw
+            end
+            formRevision = formRevision + 1
+            uiNotice = "Form Item ID Save terisi: " .. tostring(addSaveSeedItemBuf)
+        end)
+    end
+
+    uiSectionWithKetik("List Item Save World Seed (" .. tostring(#saveSeedList) .. " item)  [Default: Dirt Seed 3, Dirt 2]", "df_ktk_ssid", ketikSaveSeedItemForm)
+
+    if ImGui.BeginTable("BorenDFSaveSeedTable", 2) then
+        ImGui.TableSetupColumn("Item ID")
+        ImGui.TableSetupColumn("Nama Item")
+        ImGui.TableHeadersRow()
+        if #saveSeedList == 0 then
+            ImGui.TableNextRow()
+            ImGui.TableSetColumnIndex(0); ImGui.Text("(Kosong)")
+            ImGui.TableSetColumnIndex(1); ImGui.Text("Tidak ada item yang di-save ke world seed")
+        else
+            for i, sid in ipairs(saveSeedList) do
+                ImGui.TableNextRow()
+                ImGui.TableSetColumnIndex(0)
+                local sel = (DF.STATE.selected_ssid == i)
+                if autoBtn((sel and "> " or "") .. tostring(sid) .. "##dfssid" .. tostring(i)) then
+                    DF.STATE.selected_ssid = sel and 0 or i
+                end
+                ImGui.TableSetColumnIndex(1)
+                ImGui.Text(resolveDoorItemName(sid))
+            end
+        end
+        ImGui.EndTable()
+    end
+
+    uiGap(4)
+    ImGui.PushItemWidth(math.max(140, math.floor(w * 0.48)))
+    local chSsid, nvSsid = safeInputText("##df_add_ssid", addSaveSeedItemBuf, 64, ketikSaveSeedItemForm)
+    ImGui.PopItemWidth()
+    if chSsid then addSaveSeedItemBuf = nvSsid end
+    ImGui.SameLine()
+    ImGui.Text("ID Item (cth: 3 atau 3,2)")
+    uiGap(4)
+
+    local actSsid = uiActionBar("BorenDFSaveSeedActs", w, {
+        { label = "+ Tambah ID##dfssid_add", style = "accent" },
+        { label = "Hapus##dfssid_del",       style = "muted" },
+        { label = "Reset Default##dfssid_rst" },
+    })
+    if actSsid == 1 then
+        local raw = trimStr(addSaveSeedItemBuf)
+        local added = 0
+        for tok in raw:gmatch("[^,%s;|\r\n]+") do
+            local n = math.floor(tonumber(tok) or 0)
+            if n > 0 then
+                local exists = false
+                for _, ex in ipairs(saveSeedList) do
+                    if ex == n then exists = true; break end
+                end
+                if not exists then
+                    table.insert(saveSeedList, n)
+                    added = added + 1
+                end
+            end
+        end
+        if added > 0 then
+            setSaveSeedList(saveSeedList)
+            addSaveSeedItemBuf = ""
+            formRevision = formRevision + 1
+            uiNotice = "Save Seed List: +" .. tostring(added) .. " item tersimpan!"
+        else
+            uiNotice = "Masukkan angka Item ID dulu (cth: 3 atau 2)."
+        end
+    elseif actSsid == 2 then
+        local idx = DF.STATE.selected_ssid
+        if idx < 1 or idx > #saveSeedList then idx = #saveSeedList end
+        if idx >= 1 and idx <= #saveSeedList then
+            local rem = table.remove(saveSeedList, idx)
+            DF.STATE.selected_ssid = 0
+            setSaveSeedList(saveSeedList)
+            formRevision = formRevision + 1
+            uiNotice = "Dihapus dari Save Seed List: ID " .. tostring(rem)
+        end
+    elseif actSsid == 3 then
+        DF.CFG.save_seed_list_raw = DEFAULT_SAVE_SEED_RAW
+        DF.STATE.selected_ssid = 0
+        DF.saveData()
+        formRevision = formRevision + 1
+        uiNotice = "Save Seed List di-reset ke default (3,2 - Dirt Seed & Dirt)."
+    end
+end
 local function cyclePreset(presets, curId, delta)
     local curIdx = 1
     for i, p in ipairs(presets) do
