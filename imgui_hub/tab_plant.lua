@@ -1990,29 +1990,32 @@ local function renderLeftFeatureSidebar(colW)
     local btnW = (avX and avX > 80 and avX <= colWidth) and math.floor(avX - 2) or math.max(150, colWidth - 18)
     local P = getBorenPal()
     local singleKey = _G.__BOREN_SINGLE_FEATURE
-    if singleKey and singleKey ~= "" then
-        local featTitle = "FITUR AKTIF"
-        for _, f in ipairs(getDynamicFeatures()) do
-            if f.id == singleKey then featTitle = tostring(f.label or f.id):upper(); break end
-        end
-        if singleKey == "plant" then featTitle = "AUTO PLANT"
-        elseif singleKey == "harvest" then featTitle = "AUTO HARVEST"
-        elseif singleKey == "transfer" then featTitle = "AUTO TRANSFER"
-        elseif singleKey == "dirt_farm" then featTitle = "AUTO DIRT FARM"
-        elseif singleKey == "build_soil" then featTitle = "AUTO SOIL BUILDER"
-        elseif singleKey == "buy_pack" then featTitle = "AUTO BUY PACK"
-        elseif singleKey == "chemsynth" then featTitle = "AUTO CHEMSYNTH"
-        elseif singleKey == "database_id" then featTitle = "DATABASE ID" end
+    local dbFeat = nil
+    if singleKey and singleKey ~= "" and singleKey ~= "dashboard" then
+        centeredText("MENU", btnW, P.textCyan)
+        safeSpacing()
 
-        centeredText(featTitle, btnW, P.textCyan)
-        safeSpacing()
-        styledBtn(featTitle, btnW, true, false)
-        safeSpacing()
-        ImGui.Separator()
-        safeSpacing()
-        if styledBtn("Semua Menu", btnW, false, false) then
-            _G.__BOREN_SINGLE_FEATURE = nil
+        -- 1. Tombol Dashboard (Info pembuat / Boren Store credits & links)
+        if styledBtn("Dashboard", btnW, activeFeature == "dashboard", false) then
             selectFeature("dashboard")
+        end
+
+        -- 2. Tombol Fitur yang dituju
+        local featLabel = "Fitur"
+        for _, f in ipairs(getDynamicFeatures()) do
+            if f.id == singleKey then featLabel = tostring(f.label or f.id); break end
+        end
+        if singleKey == "plant" then featLabel = "Plant"
+        elseif singleKey == "harvest" then featLabel = "Harvest"
+        elseif singleKey == "transfer" then featLabel = "Transfer"
+        elseif singleKey == "dirt_farm" then featLabel = "Dirt Farm"
+        elseif singleKey == "build_soil" then featLabel = "Build Soil"
+        elseif singleKey == "buy_pack" then featLabel = "Buy Pack"
+        elseif singleKey == "chemsynth" then featLabel = "Chemsynth"
+        elseif singleKey == "database_id" then featLabel = "Database ID" end
+
+        if styledBtn(featLabel, btnW, activeFeature == singleKey, false) then
+            selectFeature(singleKey)
         end
     else
         centeredText("MENU", btnW, P.textCyan)
@@ -2023,7 +2026,6 @@ local function renderLeftFeatureSidebar(colW)
         if styledBtn("Plant", btnW, activeFeature == "plant", false) then
             selectFeature("plant")
         end
-        local dbFeat = nil
         for _, feat in ipairs(getDynamicFeatures()) do
             if feat.id == "database_id" then
                 dbFeat = feat
