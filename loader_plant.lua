@@ -1,54 +1,58 @@
 -- ============================================================================
--- LOADER AUTO PLANT & SPLICE - BOREN STORE (AUTO-FETCH DARI GITHUB)
+-- LOADER BOREN STORE - AUTO PLANT & SPLICE
+-- File: loader_plant.lua
 -- ============================================================================
--- Skrip ini otomatis mengambil dan menjalankan auto_plant.lua versi
--- terbaru dari GitHub repository: https://github.com/rendhi69/sc_auto_plant_growlauncher
--- Setiap kali ada update di GitHub, bot otomatis memakai kode terbaru tanpa perlu
--- mengganti atau copy-paste file manual lagi di Growlauncher!
--- Dilengkapi fallback file lokal dan pelaporan error runtime mendalam.
+-- Memuat script Auto Plant & Splice Tree standalone.
+-- Dilengkapi auto-fetch dari GitHub, cache-busting, dan fallback file lokal.
 -- ============================================================================
 
 local RAW_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/auto_plant.lua"
 
--- Parameter unik (?v=timestamp) untuk bypass CDN cache Fastly GitHub (selalu fresh)
-local cacheBuster = tostring(math.floor((os and os.time and os.time()) or (os and os.clock and os.clock() * 1000) or math.random(100000, 999999)))
-local fetchUrl = RAW_URL .. "?v=" .. cacheBuster
+local function makeTag()
+    if getTime then
+        local ok, ms = pcall(getTime)
+        if ok and tonumber(ms) then return tostring(math.floor(tonumber(ms))) end
+    end
+    if os and os.time then
+        local ok, t = pcall(os.time)
+        if ok and tonumber(t) then return tostring(math.floor(tonumber(t))) end
+    end
+    if os and os.clock then
+        local ok, c = pcall(os.clock)
+        if ok and tonumber(c) then return tostring(math.floor(tonumber(c) * 1000)) end
+    end
+    return tostring(math.random(100000, 999999))
+end
+
+local function logMsg(msg)
+    if LogToConsole then pcall(LogToConsole, "`e[BOREN PLANT] `w" .. tostring(msg)) end
+end
 
 local function notifyUser(msg)
-    if sendNotification then
-        pcall(sendNotification, msg)
-    elseif growtopia and growtopia.notify then
-        pcall(growtopia.notify, msg)
-    end
+    if sendNotification then pcall(sendNotification, tostring(msg))
+    elseif growtopia and growtopia.notify then pcall(growtopia.notify, tostring(msg)) end
 end
 
-if LogToConsole then
-    LogToConsole("`9[Boren Plant Loader] `0Menghubungkan ke GitHub (Auto Plant & Splice)...")
-end
-notifyUser("Menghubungkan ke GitHub...")
+logMsg("`9Menghubungkan ke GitHub dan memuat AUTO PLANT & SPLICE...")
+notifyUser("Memuat AUTO PLANT & SPLICE...")
 
-local content, err = nil, nil
+local content = nil
 if fetch then
-    local okFetch, res, fetchErr = pcall(fetch, fetchUrl)
-    if okFetch and res and type(res) == "string" and res ~= "" and not res:match("^404") and res:find("Auto Plant") then
+    local fetchUrl = RAW_URL .. "?v=" .. makeTag()
+    local okF, res = pcall(fetch, fetchUrl)
+    if okF and type(res) == "string" and res ~= "" and not res:match("^404") and not res:match("^<!DOCTYPE") then
         content = res
-    else
-        err = fetchErr or "Respons invalid atau kosong"
     end
 end
 
--- Fallback jika koneksi offline atau fetch timeout di Growlauncher
 if not content or content == "" then
-    if LogToConsole then
-        LogToConsole("`e[Boren Plant Loader] `0Fetch online dilewati / offline (" .. tostring(err or "timeout") .. "). Mencari file lokal...")
-    end
     local candidatePaths = {
         "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/auto_plant.lua",
-        "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/script code/auto_plant.lua",
         "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/auto_plant.lua",
         "/storage/emulated/0/Download/auto_plant.lua",
         "script/script code/auto_plant.lua",
-        "auto_plant.lua"
+        "script/auto_plant.lua",
+        "auto_plant.lua",
     }
     for _, p in ipairs(candidatePaths) do
         local okF, fh = pcall(io.open, p, "r")
@@ -57,37 +61,35 @@ if not content or content == "" then
             fh:close()
             if text and text ~= "" then
                 content = text
-                if LogToConsole then
-                    LogToConsole("`2[Boren Plant Loader] `0File lokal berhasil dimuat dari: " .. p)
-                end
+                logMsg("`2File lokal berhasil dimuat dari: " .. p)
                 break
             end
         end
     end
 end
 
-if content and content ~= "" then
-    local loaderFn = loadstring or load
-    local chunk, loadErr = loaderFn(content)
-    if chunk then
-        local okExec, runErr = pcall(chunk)
-        if okExec then
-            if LogToConsole then
-                LogToConsole("`2[Boren Plant Loader] `0Auto Plant berhasil dijalankan & menu siap di kategori 'Boren Plant'!")
-            end
-            notifyUser("Auto Plant Siap Digunakan!")
-        else
-            local errMsg = "Error runtime: " .. tostring(runErr)
-            if LogToConsole then LogToConsole("`4[Boren Plant Loader] `0" .. errMsg) end
-            notifyUser(errMsg)
-        end
-    else
-        local errMsg = "Error kompilasi script: " .. tostring(loadErr)
-        if LogToConsole then LogToConsole("`4[Boren Plant Loader] `0" .. errMsg) end
-        notifyUser(errMsg)
-    end
+if not content or content == "" then
+    local errMsg = "Gagal memuat auto_plant.lua! (Koneksi offline dan file lokal tidak ditemukan)."
+    logMsg("`4" .. errMsg)
+    notifyUser(errMsg)
+    return
+end
+
+local loaderFn = loadstring or load
+local chunk, loadErr = loaderFn(content)
+if not chunk then
+    local errMsg = "Error kompilasi script: " .. tostring(loadErr)
+    logMsg("`4" .. errMsg)
+    notifyUser(errMsg)
+    return
+end
+
+local okExec, runErr = pcall(chunk)
+if okExec then
+    logMsg("`2AUTO PLANT & SPLICE berhasil dimuat dan siap digunakan!")
+    notifyUser("AUTO PLANT & SPLICE Siap!")
 else
-    local errMsg = "Gagal memuat auto_plant.lua (koneksi offline dan file lokal tidak ditemukan)."
-    if LogToConsole then LogToConsole("`4[Boren Plant Loader] `0" .. errMsg) end
+    local errMsg = "Error runtime: " .. tostring(runErr)
+    logMsg("`4" .. errMsg)
     notifyUser(errMsg)
 end
