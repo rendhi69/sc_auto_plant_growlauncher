@@ -67,6 +67,7 @@ HV.STATE = {
     event_rows       = {},              -- { { name="W", door="D", limit=10000, count=0, status="Ready" }, ... }
     selected_ev      = 0,
     anti_take        = false,
+    is_dropping      = false,
     pending_drop_id  = 0,
     pending_drop_amt = 0,
     drop_confirmed   = false,
@@ -539,6 +540,13 @@ local function setCollectCheats(enable)
     if cheat and cheat.collect then pcall(cheat.collect, v) end
     if setCheat then pcall(setCheat, "collect", v) end
     if autoCollect then pcall(autoCollect, v) end
+    if bot then
+        pcall(function()
+            if bot.auto_collect ~= nil then bot.auto_collect = v end
+            if bot.collect ~= nil then bot.collect = v end
+            if bot.anti_collect ~= nil then bot.anti_collect = not v end
+        end)
+    end
     if editToggle then
         pcall(editToggle, "Auto Collect", v)
         pcall(editToggle, "Anti Collect", not v)
@@ -608,21 +616,27 @@ local function isTileBlocked(x, y)
     return false
 end
 
-local function moveSafeTo(tx, ty)
+local function moveSafeTo(tx, ty, exact)
     if not HV.STATE.running then return false end
     tx = math.max(0, math.min(99, math.floor(tx or 0)))
     ty = math.max(0, math.min(53, math.floor(ty or 0)))
 
     local curPx, curPy = getPlayerPos()
-    if curPx and curPy and math.abs(curPx - tx) <= 1 and math.abs(curPy - ty) <= 1 then
-        return true
+    if exact then
+        if curPx == tx and curPy == ty then return true end
+    else
+        if curPx and curPy and math.abs(curPx - tx) <= 1 and math.abs(curPy - ty) <= 1 then
+            return true
+        end
     end
 
     local sx, sy = tx, ty
-    local t = getTileSafe(tx, ty)
-    if t and t.collidable then
-        local tUp = getTileSafe(tx, ty - 1)
-        if tUp and not tUp.collidable then sx, sy = tx, ty - 1 end
+    if not exact then
+        local t = getTileSafe(tx, ty)
+        if t and t.collidable then
+            local tUp = getTileSafe(tx, ty - 1)
+            if tUp and not tUp.collidable then sx, sy = tx, ty - 1 end
+        end
     end
 
     local pFn = FindPath or findPath
@@ -642,15 +656,26 @@ local function moveSafeTo(tx, ty)
         local waited = 0
         while waited < maxWait and HV.STATE.running do
             local px, py = getPlayerPos()
-            if px and py and math.abs(px - sx) <= 1 and math.abs(py - sy) <= 1 then
-                safeSleep(HV.CFG.step_delay or 40)
-                return true
+            if exact then
+                if px == sx and py == sy then
+                    safeSleep(HV.CFG.step_delay or 40)
+                    return true
+                end
+            else
+                if px and py and math.abs(px - sx) <= 1 and math.abs(py - sy) <= 1 then
+                    safeSleep(HV.CFG.step_delay or 40)
+                    return true
+                end
             end
             safeSleep(25)
             waited = waited + 25
         end
         local fx, fy = getPlayerPos()
-        return (fx and fy and math.abs(fx - sx) <= 1 and math.abs(fy - sy) <= 1)
+        if exact then
+            return (fx == sx and fy == sy)
+        else
+            return (fx and fy and math.abs(fx - sx) <= 1 and math.abs(fy - sy) <= 1)
+        end
     end
 
     pcall(pFn, sx, sy)
@@ -664,9 +689,16 @@ local function moveSafeTo(tx, ty)
         waitedFar = waitedFar + 60
         local nx, ny = getPlayerPos()
         if nx and ny then
-            if math.abs(nx - sx) <= 1 and math.abs(ny - sy) <= 1 then
-                safeSleep(HV.CFG.step_delay or 50)
-                return true
+            if exact then
+                if nx == sx and ny == sy then
+                    safeSleep(HV.CFG.step_delay or 50)
+                    return true
+                end
+            else
+                if math.abs(nx - sx) <= 1 and math.abs(ny - sy) <= 1 then
+                    safeSleep(HV.CFG.step_delay or 50)
+                    return true
+                end
             end
             if nx == lastPx and ny == lastPy then
                 stuckTicks = stuckTicks + 1
@@ -681,7 +713,11 @@ local function moveSafeTo(tx, ty)
         end
     end
     local fx, fy = getPlayerPos()
-    return (fx and fy and math.abs(fx - sx) <= 1 and math.abs(fy - sy) <= 1)
+    if exact then
+        return (fx == sx and fy == sy)
+    else
+        return (fx and fy and math.abs(fx - sx) <= 1 and math.abs(fy - sy) <= 1)
+    end
 end
 
 local function warpToWorldInner(wName, doorID)
@@ -799,6 +835,10 @@ end
 
 local function onSendPacketRawHook(raw)
     if not HV.STATE.running then return end
+    -- Blokir packet pickup (11) selama bot sedang drop agar tidak mengambil kembali item yang di-drop
+    if (HV.STATE.is_dropping or HV.STATE.anti_take) and raw and raw.type == 11 then
+        return true
+    end
     if raw and raw.type == 10 and raw.value then
         if raw.value == ITEM.SORROWS or raw.value == ITEM.HARVESTER then
             if not HV.STATE.need_fuel then addLog("`2[Harvester] Berhasil equip Harvester!") end
@@ -814,21 +854,235 @@ local function onSendPacketRawHook(raw)
     end
 end
 
-local function waitInvDropTo(itemID, targetMax, timeoutMs)
-    local elapsed = 0
-    while elapsed < timeoutMs do
-        safeSleep(60); elapsed = elapsed + 60
-        if getInvCount(itemID) <= targetMax or HV.STATE.drop_confirmed then return true end
-    end
-    return getInvCount(itemID) <= targetMax
+-- Registrasi Global & Engine Hooks
+if AddHook then
+    pcall(AddHook, "OnSendPacketRaw", "boren_hv_raw_hook", onSendPacketRawHook)
+    pcall(AddHook, "OnVariantList", "boren_hv_var_hook", onVariantHook)
+elseif addHook then
+    pcall(addHook, onSendPacketRawHook, "onsendpacketraw")
+    pcall(addHook, "onSendPacketRaw", "boren_hv_raw_hook", onSendPacketRawHook)
+    pcall(addHook, "OnSendPacketRaw", "boren_hv_raw_hook", onSendPacketRawHook)
+    pcall(addHook, onVariantHook, "onvariantlist")
+    pcall(addHook, "onVariantList", "boren_hv_var_hook", onVariantHook)
+    pcall(addHook, "OnVariantList", "boren_hv_var_hook", onVariantHook)
+end
+onSendPacketRaw = onSendPacketRawHook
+OnSendPacketRaw = onSendPacketRawHook
+
+-- ============================================================================
+-- 4. DROP ENGINE (DROP SEBELAH DOOR, DARI KANAN KE KIRI, ZIGZAG TINGKAT KE ATAS/BAWAH)
+-- ============================================================================
+local function countDroppedOnTile(tx, ty)
+    local total = 0
+    forEachWorldObject(function(oid, uid, amt, ox, oy)
+        local otx = math.floor(((ox or 0) + 10) / 32)
+        local oty = math.floor(((oy or 0) + 10) / 32)
+        if otx == tx and oty == ty then
+            total = total + (tonumber(amt) or 1)
+        end
+    end)
+    return total
 end
 
-local function findCleanDropPositions()
-    local spots = {}
-    local px, py = getPlayerPos()
-    local doorX, doorY = px, py
+local function isTileCleanForDrop(tx, ty, doorX, doorY)
+    if tx < 2 or tx > 97 or ty < 1 or ty > 53 then return false end
+    if tx == doorX and ty == doorY then return false end
+    if isTileBlocked(tx, ty) then return false end
+    local t = getTileSafe(tx, ty)
+    if t and t.collidable then return false end
+    return true
+end
 
-    -- Cari koordinat pintu masuk kedatangan bot (fg == 6 atau door)
+local function isTileCleanForStand(tx, ty, doorX, doorY)
+    if tx < 2 or tx > 98 or ty < 1 or ty > 53 then return false end
+    if tx == doorX and ty == doorY then return false end
+    if isTileBlocked(tx, ty) then return false end
+    local t = getTileSafe(tx, ty)
+    if t and t.collidable then return false end
+    return true
+end
+
+local function faceLeft(standX, standY)
+    if sendPacketRaw then
+        pcall(sendPacketRaw, false, {
+            type  = 0,
+            pos   = { x = standX * 32, y = standY * 32 },
+            x     = standX * 32,
+            y     = standY * 32,
+            state = 48 -- 48 = Flipped / Menghadap ke kiri
+        })
+    end
+end
+
+local function moveToStand(standX, standY)
+    if not HV.STATE.running then return false end
+    standX = math.max(2, math.min(98, math.floor(standX or 0)))
+    standY = math.max(1, math.min(53, math.floor(standY or 0)))
+
+    if editToggle then
+        pcall(editToggle, "ModFly", true)
+        pcall(editToggle, "Anti Lava", true)
+        pcall(editToggle, "No Lava", true)
+    end
+
+    local curPx, curPy = getPlayerPos()
+    if curPx == standX and curPy == standY then
+        faceLeft(standX, standY)
+        return true
+    end
+
+    local pFn = FindPath or findPath
+    if pFn then
+        pcall(pFn, standX, standY)
+        local waited = 0
+        while waited < 1800 and HV.STATE.running do
+            safeSleep(50)
+            waited = waited + 50
+            local px, py = getPlayerPos()
+            if px == standX and py == standY then
+                faceLeft(standX, standY)
+                safeSleep(40)
+                return true
+            end
+        end
+    end
+
+    moveSafeTo(standX, standY, true)
+    faceLeft(standX, standY)
+    safeSleep(50)
+    local fx, fy = getPlayerPos()
+    return (fx == standX and fy == standY) or (fx and fy and math.abs(fx - standX) <= 1 and math.abs(fy - standY) <= 1)
+end
+
+local function executeDropBatch(itemID, batch)
+    if not HV.STATE.running then return false, 0 end
+    local cur = getInvCount(itemID)
+    if cur <= 0 then return true, 0 end
+    batch = math.min(batch, math.min(200, cur))
+
+    HV.STATE.is_dropping = true
+    HV.STATE.anti_take = true
+    HV.STATE.drop_confirmed = false
+    HV.STATE.pending_drop_id = itemID
+    HV.STATE.pending_drop_amt = batch
+
+    -- Matikan auto-collect & aktifkan anti-collect cheat
+    setCollectCheats(false)
+    safeSleep(50)
+
+    -- Metode 1: Standard action|drop (memicu OnDialogRequest di server)
+    if sendPacket then
+        pcall(sendPacket, 2, "action|drop\n|itemID|" .. tostring(itemID))
+        safeSleep(140)
+    end
+
+    -- Metode 2: C++ engine direct drop confirmation
+    if growtopia and growtopia.confirmDropItem then
+        pcall(growtopia.confirmDropItem, itemID, batch)
+        safeSleep(140)
+    end
+
+    -- Metode 3: Standard packet drop_item / drop dialog return
+    if sendPacket then
+        pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|drop_item\nitemID|%d|\ncount|%d\n", itemID, batch))
+        safeSleep(100)
+        pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|drop\nitemID|%d|\ncount|%d\n", itemID, batch))
+        safeSleep(100)
+    end
+
+    local waited = 0
+    while waited < 850 and HV.STATE.running do
+        safeSleep(50)
+        waited = waited + 50
+        if getInvCount(itemID) < cur or HV.STATE.drop_confirmed then
+            break
+        end
+    end
+
+    HV.STATE.pending_drop_id = 0
+    HV.STATE.pending_drop_amt = 0
+    HV.STATE.is_dropping = false
+    HV.STATE.anti_take = false
+
+    local after = getInvCount(itemID)
+    if after < cur then
+        local delta = cur - after
+        return true, delta
+    end
+    return false, 0
+end
+
+local function dropOntoTileFromRight(dropX, dropY, itemID, maxCanDrop)
+    local standX = dropX + 1
+    local standY = dropY
+
+    local existingOnTile = countDroppedOnTile(dropX, dropY)
+    if existingOnTile >= 4000 then
+        return false, 0, true
+    end
+
+    if not moveToStand(standX, standY) then
+        return false, 0, false
+    end
+    faceLeft(standX, standY)
+
+    local droppedOnTile = 0
+    local failCount = 0
+
+    while HV.STATE.running and failCount < 2 do
+        local curInv = getInvCount(itemID)
+        if curInv <= 0 then
+            return true, droppedOnTile, false
+        end
+
+        local tileSpace = 4000 - (existingOnTile + droppedOnTile)
+        if tileSpace <= 0 then
+            return true, droppedOnTile, true
+        end
+
+        local batch = math.min(200, math.min(curInv, tileSpace))
+        if maxCanDrop and maxCanDrop > 0 then
+            local remainQuota = maxCanDrop - droppedOnTile
+            if remainQuota <= 0 then
+                return true, droppedOnTile, false
+            end
+            batch = math.min(batch, remainQuota)
+        end
+
+        HV.STATE.status_text = string.format("Drop %d ke (%d,%d)...", batch, dropX, dropY)
+        faceLeft(standX, standY)
+        local ok, delta = executeDropBatch(itemID, batch)
+        if ok and delta > 0 then
+            droppedOnTile = droppedOnTile + delta
+            HV.STATE.total_dropped = HV.STATE.total_dropped + delta
+            failCount = 0
+            safeSleep(150)
+            if (existingOnTile + droppedOnTile) >= 4000 then
+                return true, droppedOnTile, true
+            end
+        else
+            failCount = failCount + 1
+            safeSleep(150)
+        end
+    end
+
+    local tileFull = (failCount >= 2) or ((existingOnTile + droppedOnTile) >= 4000)
+    return (droppedOnTile > 0), droppedOnTile, tileFull
+end
+
+local function dropItemAllInCurrentWorld(itemID, label, maxQuota)
+    local cur = getInvCount(itemID)
+    if cur <= 0 then return true, 0 end
+
+    if editToggle then
+        pcall(editToggle, "ModFly", true)
+        pcall(editToggle, "Anti Lava", true)
+        pcall(editToggle, "No Lava", true)
+    end
+    setCollectCheats(false)
+
+    local px, py = getPlayerPos()
+    local doorX, doorY = px or 2, py or 2
     for dy = -2, 2 do
         for dx = -2, 2 do
             local t = getTileSafe(px + dx, py + dy)
@@ -839,125 +1093,44 @@ local function findCleanDropPositions()
         end
     end
 
-    local function isDropSpotClean(sx, sy)
-        if sx < 2 or sx > 97 or sy < 1 or sy > 54 then return false end
-        -- Jangan drop pas di pintu kedatangan
-        if math.abs(sx - doorX) <= 1 and math.abs(sy - doorY) <= 1 then return false end
-        if isTileBlocked(sx, sy) then return false end
-        local t = getTileSafe(sx, sy)
-        if t and t.collidable then return false end
-        return true
+    -- 1. Baris utama sejajar pintu (y = doorY)
+    -- 2. Jika penuh naik satu tingkat lagi (doorY - 1, doorY - 2, ...)
+    -- 3. Jika atas habis, ke bawahnya (doorY + 1, doorY + 2, ...)
+    local candidateRows = { doorY }
+    for y = doorY - 1, 1, -1 do
+        table.insert(candidateRows, y)
+    end
+    for y = doorY + 1, 53 do
+        table.insert(candidateRows, y)
     end
 
-    -- 1. UTAMA: Sejajar horizontal dengan door saat dia masuk (y = doorY)
-    -- Prioritas dari kanan door (doorX + 2 .. 97), kemudian kiri door (doorX - 2 .. 2)
-    for x = doorX + 2, 97 do
-        if isDropSpotClean(x, doorY) then
-            table.insert(spots, { x = x, y = doorY })
-            if #spots >= 24 then return spots end
-        end
-    end
-    for x = doorX - 2, 2, -1 do
-        if isDropSpotClean(x, doorY) then
-            table.insert(spots, { x = x, y = doorY })
-            if #spots >= 24 then return spots end
-        end
-    end
+    local totalDropped = 0
 
-    -- Bila baris tepat sejajar door terbatas, coba baris tepat di atas door (doorY - 1)
-    if doorY > 2 then
-        for x = doorX + 2, 97 do
-            if isDropSpotClean(x, doorY - 1) then
-                table.insert(spots, { x = x, y = doorY - 1 })
-                if #spots >= 24 then return spots end
-            end
-        end
-        for x = doorX - 2, 2, -1 do
-            if isDropSpotClean(x, doorY - 1) then
-                table.insert(spots, { x = x, y = doorY - 1 })
-                if #spots >= 24 then return spots end
-            end
-        end
-    end
+    for _, rowY in ipairs(candidateRows) do
+        if getInvCount(itemID) <= 0 or not HV.STATE.running then break end
+        if maxQuota and maxQuota > 0 and totalDropped >= maxQuota then break end
 
-    -- 2. FALLBACK: "atau kalo tidak bisa drop di paling atas saja" (baris paling atas world y = 1..4)
-    if #spots < 6 then
-        for topY = 1, 4 do
-            for topX = 2, 97 do
-                if isDropSpotClean(topX, topY) then
-                    table.insert(spots, { x = topX, y = topY })
-                    if #spots >= 24 then return spots end
+        -- Sesuai gambar: Drop di sebelah door (area kosong) dari kanan tile target ke kiri
+        local startX = math.max(2, doorX + 1)
+        for dropX = startX, 97 do
+            if getInvCount(itemID) <= 0 or not HV.STATE.running then break end
+            if maxQuota and maxQuota > 0 and totalDropped >= maxQuota then break end
+
+            local standX = dropX + 1
+            if standX <= 98 and isTileCleanForDrop(dropX, rowY, doorX, doorY) and isTileCleanForStand(standX, rowY, doorX, doorY) then
+                local quotaLeft = (maxQuota and maxQuota > 0) and (maxQuota - totalDropped) or nil
+                local ok, droppedAmt, tileFull = dropOntoTileFromRight(dropX, rowY, itemID, quotaLeft)
+                if droppedAmt > 0 then
+                    totalDropped = totalDropped + droppedAmt
                 end
             end
         end
     end
 
-    -- Jaga-jaga jika world sangat padat
-    if #spots == 0 then
-        table.insert(spots, { x = math.max(2, math.min(97, doorX + 2)), y = doorY })
-    end
-    return spots
-end
-
-local function dropItemAllInCurrentWorld(itemID, label)
-    local cur = getInvCount(itemID)
-    if cur <= 0 then return true, 0 end
-
-    local spots = findCleanDropPositions()
-    local spotIdx = 1
-    if spots[1] then moveSafeTo(spots[1].x, spots[1].y); safeSleep(150) end
-
-    local droppedTotal = 0
-    local failMove = 0
-    while cur > 0 and HV.STATE.running and failMove < 15 do
-        local batch = math.min(200, cur)
-        HV.STATE.pending_drop_id  = itemID
-        HV.STATE.pending_drop_amt = batch
-        HV.STATE.drop_confirmed   = false
-        HV.STATE.status_text = string.format("Drop %s (%d)...", tostring(label or itemID), batch)
-
-        local ok = false
-        if growtopia and growtopia.confirmDropItem then
-            pcall(growtopia.confirmDropItem, itemID, batch)
-            ok = waitInvDropTo(itemID, cur - 1, 700)
-        end
-        if not ok and sendPacket and HV.STATE.running then
-            HV.STATE.drop_confirmed = false
-            pcall(sendPacket, 2, "action|drop\n|itemID|" .. tostring(itemID))
-            ok = waitInvDropTo(itemID, cur - 1, 950)
-        end
-        if not ok and sendPacket and HV.STATE.running then
-            for _, dn in ipairs({ "drop", "drop_item" }) do
-                pcall(sendPacket, 2, string.format("action|dialog_return\ndialog_name|%s\nitemID|%d|\ncount|%d\n", dn, itemID, batch))
-                ok = waitInvDropTo(itemID, cur - 1, 650)
-                if ok then break end
-            end
-        end
-
-        HV.STATE.pending_drop_id  = 0
-        HV.STATE.pending_drop_amt = 0
-
-        local after = getInvCount(itemID)
-        if after < cur then
-            droppedTotal = droppedTotal + (cur - after)
-            HV.STATE.total_dropped = HV.STATE.total_dropped + (cur - after)
-            cur = after
-            safeSleep(180)
-        else
-            failMove = failMove + 1
-            spotIdx = spotIdx + 1
-            if spots[spotIdx] then
-                moveSafeTo(spots[spotIdx].x, spots[spotIdx].y)
-            else
-                local px, py = getPlayerPos()
-                local nx = (px < 94) and (px + 2) or 2
-                local ny = (px < 94) and py or math.max(2, py - 2)
-                moveSafeTo(nx, ny)
-            end
-            safeSleep(220)
-        end
-    end
-    return (getInvCount(itemID) == 0), droppedTotal
+    HV.STATE.is_dropping = false
+    HV.STATE.anti_take = false
+    local remaining = getInvCount(itemID)
+    return (remaining == 0), totalDropped
 end
 
 local function dropToSaveWorlds(blockID, seedID, returnFarm)
@@ -1015,7 +1188,8 @@ local function dropToSaveWorlds(blockID, seedID, returnFarm)
                     targetRow.status = "Full"
                     HV.saveData()
                 else
-                    local okD = dropItemAllInCurrentWorld(itm.id, itm.name)
+                    local quotaLeft = (lim > 0) and math.max(0, lim - curInWorld) or nil
+                    local okD = dropItemAllInCurrentWorld(itm.id, itm.name, quotaLeft)
                     local afterInWorld = countDroppedObjectsInWorld(filterSet)
                     targetRow.count = afterInWorld
                     if lim > 0 and afterInWorld >= lim then
@@ -1086,7 +1260,8 @@ local function dropToEventWorlds(returnFarm)
                     targetRow.status = "Full"
                     HV.saveData()
                 else
-                    local okD = dropItemAllInCurrentWorld(itmID, "Item " .. itmID)
+                    local quotaLeft = (lim > 0) and math.max(0, lim - curInWorld) or nil
+                    local okD = dropItemAllInCurrentWorld(itmID, "Item " .. itmID, quotaLeft)
                     local afterInWorld = countDroppedObjectsInWorld(evMap)
                     targetRow.count = afterInWorld
                     if lim > 0 and afterInWorld >= lim then
