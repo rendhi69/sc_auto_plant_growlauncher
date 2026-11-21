@@ -43,6 +43,8 @@ HV.CFG = {
     loop_enabled       = false,
     auto_collect       = true,
     collect_range      = 4,
+    take_block         = true,          -- Opsi ambil block hasil panen sesuai ID
+    take_seed          = true,          -- Opsi ambil seed hasil panen sesuai ID,
     event_ids_raw      = "1058,1094,1096,1098,1828", -- Mooncakes default
     event_threshold    = 150,
     gear_world         = "",            -- 1 world khusus Magni / Fuel Pack / Gear
@@ -295,6 +297,8 @@ function HV.saveData()
         "FUELAMT="  .. tostring(c.fuel_target_amt),
         "STPFUEL="  .. (c.stop_if_no_fuel and "1" or "0"),
         "FLOAT="    .. (c.take_floating and "1" or "0"),
+        "TAKEBLOCK=".. (c.take_block ~= false and "1" or "0"),
+        "TAKESEED=" .. (c.take_seed ~= false and "1" or "0"),
     }
     for _, r in ipairs(HV.STATE.rows) do
         table.insert(lines, string.format("ROW=%s:%s:%d|%s", r.name, r.door or "", r.item_id or c.default_item_id, r.status or "Ready"))
@@ -343,6 +347,8 @@ function HV.loadData()
         elseif k == "FUELAMT" then c.fuel_target_amt = tonumber(v) or 100
         elseif k == "STPFUEL" then c.stop_if_no_fuel = (v ~= "0")
         elseif k == "FLOAT" then c.take_floating = (v ~= "0")
+        elseif k == "TAKEBLOCK" then c.take_block = (v ~= "0")
+        elseif k == "TAKESEED"  then c.take_seed  = (v ~= "0")
         elseif k == "MAGNI" or k == "FUEL" then if v == "1" then c.auto_magni_fuel = true end
         elseif k == "SAVEW" then legacySaveStr = trimStr(v)
         elseif k == "EVW" then legacyEventStr = trimStr(v)
@@ -443,6 +449,10 @@ local function setCollectCheats(enable)
     if cheat and cheat.collect then pcall(cheat.collect, v) end
     if setCheat then pcall(setCheat, "collect", v) end
     if autoCollect then pcall(autoCollect, v) end
+    if editToggle then
+        pcall(editToggle, "Auto Collect", v)
+        pcall(editToggle, "Anti Collect", not v)
+    end
 end
 
 local function setConnWarping(isWarping)
@@ -469,16 +479,26 @@ local function getTileSafe(x, y)
 end
 
 local function forEachWorldObject(callback)
-    if not getObjects then return end
-    local ok, objs = pcall(getObjects)
+    local getFn = getObjectList or getObjects or getWorldObjects
+    if not getFn then return end
+    local ok, objs = pcall(getFn)
     if not ok or type(objs) ~= "table" then return end
-    for _, o in pairs(objs) do
-        local oid = o.id or o.itemid or o.itemID
-        local uid = o.oid or o.uid or o.objID
-        local amt = o.count or o.amount or 1
-        local ox  = o.posX or (o.pos and o.pos.x) or 0
-        local oy  = o.posY or (o.pos and o.pos.y) or 0
-        if oid and uid then callback(tonumber(oid), tonumber(uid), tonumber(amt), ox, oy) end
+    local container = objs
+    pcall(function()
+        if type(objs) == "table" and objs.objects then container = objs.objects end
+    end)
+
+    for _, o in pairs(container) do
+        if type(o) == "table" or type(o) == "userdata" then
+            local itemID = tonumber(o.itemid or o.itemId or o.itemID or o.item_id)
+            local objUID = tonumber(o.id or o.oid or o.uid or o.objID)
+            local amt    = tonumber(o.count or o.amount or 1) or 1
+            local ox     = (o.pos and tonumber(o.pos.x)) or tonumber(o.posX or o.x) or 0
+            local oy     = (o.pos and tonumber(o.pos.y)) or tonumber(o.posY or o.y) or 0
+            if itemID and objUID then
+                callback(itemID, objUID, amt, ox, oy)
+            end
+        end
     end
 end
 
@@ -635,7 +655,7 @@ local function punchTile(tx, ty)
 end
 
 local function collectNearbyAllowed(allowedSet, radiusTiles)
-    if not HV.CFG.auto_collect or not sendPacketRaw then return end
+    if not HV.CFG.auto_collect then return end
     local px, py = getPlayerPos()
     local rad = radiusTiles or (tonumber(HV.CFG.collect_range) or 4)
     forEachWorldObject(function(oid, uid, _, ox, oy)
@@ -644,7 +664,11 @@ local function collectNearbyAllowed(allowedSet, radiusTiles)
             local otx = math.floor((ox + 10) / 32)
             local oty = math.floor((oy + 10) / 32)
             if math.abs(otx - px) <= rad and math.abs(oty - py) <= rad then
-                pcall(sendPacketRaw, false, { type = 11, value = uid, x = ox, y = oy })
+                if sendPacketRaw then
+                    pcall(sendPacketRaw, false, { type = 11, value = uid, x = ox, y = oy })
+                end
+                if collectObject then pcall(collectObject, uid)
+                elseif CollectObject then pcall(CollectObject, uid) end
             end
         end
     end)
@@ -1137,6 +1161,27 @@ local function isReadyTree(tx, ty, seedID, blockID)
     return isTileTreeReady(t)
 end
 
+-- Validasi pukulan pohon: memastikan pohon benar-benar telah dipanen (hancur)
+local function harvestTreeTile(tx, ty, seedID, blockID, hDelay)
+    for attempt = 1, 4 do
+        if not HV.STATE.running then return false end
+        punchTile(tx, ty)
+        safeSleep(hDelay)
+
+        -- Validasi: cek apakah pohon di tile (tx, ty) sudah pecah/habis
+        if not isReadyTree(tx, ty, seedID, blockID) then
+            HV.STATE.total_harvested = HV.STATE.total_harvested + 1
+            return true
+        end
+        safeSleep(50)
+    end
+    if not isReadyTree(tx, ty, seedID, blockID) then
+        HV.STATE.total_harvested = HV.STATE.total_harvested + 1
+        return true
+    end
+    return false
+end
+
 local function updateInvPreview(blockID, seedID, eventList)
     HV.STATE.inv_preview.block = getInvCount(blockID)
     HV.STATE.inv_preview.seed  = getInvCount(seedID)
@@ -1214,7 +1259,9 @@ local function processFarmWorld(row)
     if blockID <= 0 then row.status = "Invalid ID"; HV.saveData(); return false end
 
     local eventList, eventMap = parseEventIDs()
-    local allowedSet = { [blockID] = true, [seedID] = true }
+    local allowedSet = {}
+    if HV.CFG.take_block ~= false then allowedSet[blockID] = true end
+    if HV.CFG.take_seed ~= false then allowedSet[seedID] = true end
     for id in pairs(eventMap) do allowedSet[id] = true end
 
     if not ensureGearAndFuel(nil) then return false end
@@ -1261,8 +1308,8 @@ local function processFarmWorld(row)
         if bestFg and bestCnt > 0 then
             blockID, seedID = normalizeHarvestPair(bestFg)
             row.item_id = blockID
-            allowedSet[blockID] = true
-            allowedSet[seedID]  = true
+            if HV.CFG.take_block ~= false then allowedSet[blockID] = true end
+            if HV.CFG.take_seed ~= false then allowedSet[seedID] = true end
             HV.saveData()
             addLog(string.format("`a[Auto-Detect] Menemukan %d pohon matang di %s -> ID Block: %d, Seed: %d", bestCnt, row.name, blockID, seedID))
         end
@@ -1270,67 +1317,80 @@ local function processFarmWorld(row)
 
     local hDelay = math.max(90, tonumber(HV.CFG.harvest_delay) or 180)
     local isZigzag = (HV.CFG.harvest_mode == "3zigzag")
-    local rowCount = 0
 
-    for py = 52, 2, -2 do
+    -- 1. Scan semua baris di world yang memiliki pohon matang, urutkan dari PALING ATAS (ty = 1..53)
+    local treeRows = {}
+    for testY = 1, 53 do
+        local hasTree = false
+        for testX = 2, 97 do
+            if isReadyTree(testX, testY, seedID, blockID) then
+                hasTree = true
+                break
+            end
+        end
+        if hasTree then
+            table.insert(treeRows, testY)
+        end
+    end
+
+    -- 2. Mulai panen dari baris PALING ATAS, dari posisi PALING KIRI
+    local rowCount = 0
+    for _, ty in ipairs(treeRows) do
         if not HV.STATE.running then return false end
         rowCount = rowCount + 1
-        local l2r = (rowCount % 2 == 1)
+        local l2r = (rowCount % 2 == 1) -- Baris pertama (paling atas) selalu l2r = true (KIRI ke KANAN)
         local startX = l2r and 2 or 97
         local endX   = l2r and 97 or 2
         local stepX  = l2r and 1 or -1
 
-        local ty = py - 1
-        local hasTreeInRow = false
-        for x = 2, 97 do
-            if isReadyTree(x, ty, seedID, blockID) then hasTreeInRow = true; break end
-        end
+        local py = ty + 1 -- Lantai tempat pohon berpijak
 
-        if hasTreeInRow then
-            if not ensureHVOnline(row, true) then return false end
-            if isZigzag then
-                local x = startX
-                while (l2r and x <= endX) or ((not l2r) and x >= endX) do
-                    if not HV.STATE.running then return false end
-                    if not ensureHVOnline(row, true) then return false end
+        if not ensureHVOnline(row, true) then return false end
+        if isZigzag then
+            local x = startX
+            while (l2r and x <= endX) or ((not l2r) and x >= endX) do
+                if not HV.STATE.running then return false end
+                if not ensureHVOnline(row, true) then return false end
 
-                    local t1 = isReadyTree(x, ty, seedID, blockID)
-                    local t2 = isReadyTree(x + stepX, ty, seedID, blockID)
-                    local t3 = isReadyTree(x + (stepX * 2), ty, seedID, blockID)
+                local t1 = isReadyTree(x, ty, seedID, blockID)
+                local t2 = isReadyTree(x + stepX, ty, seedID, blockID)
+                local t3 = isReadyTree(x + (stepX * 2), ty, seedID, blockID)
 
-                    if t1 or t2 or t3 then
-                        if not checkAndDropIfFull(row, blockID, seedID, eventList, false) then return false end
-                        local standY = py
-                        local tFloor = getTileSafe(x, py)
-                        if tFloor and tFloor.collidable then standY = ty end
-                        moveSafeTo(x, standY)
-                        collectNearbyAllowed(allowedSet, 4)
+                if t1 or t2 or t3 then
+                    if not checkAndDropIfFull(row, blockID, seedID, eventList, false) then return false end
+                    local standY = py
+                    local tFloor = getTileSafe(x, py)
+                    if tFloor and tFloor.collidable then standY = ty end
+                    moveSafeTo(x, standY)
+                    collectNearbyAllowed(allowedSet, 4)
 
-                        if t1 then punchTile(x, ty); safeSleep(hDelay); HV.STATE.total_harvested = HV.STATE.total_harvested + 1 end
-                        if t2 then punchTile(x + stepX, ty); safeSleep(hDelay); HV.STATE.total_harvested = HV.STATE.total_harvested + 1 end
-                        if t3 then punchTile(x + (stepX * 2), ty); safeSleep(hDelay); HV.STATE.total_harvested = HV.STATE.total_harvested + 1 end
-                        collectNearbyAllowed(allowedSet, 4)
-                        x = x + (stepX * 3)
-                    else
-                        x = x + stepX
-                    end
+                    -- Validasi pukulan pohon matang
+                    if t1 then harvestTreeTile(x, ty, seedID, blockID, hDelay) end
+                    if t2 then harvestTreeTile(x + stepX, ty, seedID, blockID, hDelay) end
+                    if t3 then harvestTreeTile(x + (stepX * 2), ty, seedID, blockID, hDelay) end
+
+                    collectNearbyAllowed(allowedSet, 4)
+                    x = x + (stepX * 3)
+                else
+                    x = x + stepX
                 end
-            else
-                for x = startX, endX, stepX do
-                    if not HV.STATE.running then return false end
-                    if not ensureHVOnline(row, true) then return false end
-                    if isReadyTree(x, ty, seedID, blockID) then
-                        if not checkAndDropIfFull(row, blockID, seedID, eventList, false) then return false end
-                        local standY = py
-                        local tFloor = getTileSafe(x, py)
-                        if tFloor and tFloor.collidable then standY = ty end
-                        moveSafeTo(x, standY)
-                        collectNearbyAllowed(allowedSet, 4)
-                        punchTile(x, ty)
-                        safeSleep(hDelay)
-                        HV.STATE.total_harvested = HV.STATE.total_harvested + 1
-                        collectNearbyAllowed(allowedSet, 4)
-                    end
+            end
+        else
+            for x = startX, endX, stepX do
+                if not HV.STATE.running then return false end
+                if not ensureHVOnline(row, true) then return false end
+                if isReadyTree(x, ty, seedID, blockID) then
+                    if not checkAndDropIfFull(row, blockID, seedID, eventList, false) then return false end
+                    local standY = py
+                    local tFloor = getTileSafe(x, py)
+                    if tFloor and tFloor.collidable then standY = ty end
+                    moveSafeTo(x, standY)
+                    collectNearbyAllowed(allowedSet, 4)
+
+                    -- Validasi pukulan pohon matang
+                    harvestTreeTile(x, ty, seedID, blockID, hDelay)
+
+                    collectNearbyAllowed(allowedSet, 4)
                 end
             end
         end
@@ -1564,7 +1624,17 @@ local function renderFarmsSub()
         st.rows = {}; st.selected_idx = 0; HV.saveData(); uiNotice = "Daftar farm dikosongkan."
     end
 
-    uiGap(4)
+    uiGap(3)
+    ImGui.Text("Take Block :"); ImGui.SameLine()
+    if uiToggleBtn(c.take_block ~= false, "hv_tb_main") then
+        c.take_block = not (c.take_block ~= false); HV.saveData()
+    end
+    ImGui.SameLine(); ImGui.Text("   Take Seed :"); ImGui.SameLine()
+    if uiToggleBtn(c.take_seed ~= false, "hv_ts_main") then
+        c.take_seed = not (c.take_seed ~= false); HV.saveData()
+    end
+
+    uiGap(3)
     ImGui.Text(string.format("Status: %s   |   Farm: %d   |   Tree: %d   |   Drop: %d",
         tostring(st.status_text), #st.rows, st.total_harvested, st.total_dropped))
     uiNote(uiNotice)
@@ -2194,6 +2264,14 @@ local function renderSettingsSub()
     uiGap(2)
     ImGui.Text("Take Floating (Sapu Sisa)  :"); ImGui.SameLine()
     if uiToggleBtn(c.take_floating, "hv_tf") then c.take_floating = not c.take_floating; HV.saveData() end
+
+    uiGap(2)
+    ImGui.Text("Take Block Sesuai ID       :"); ImGui.SameLine()
+    if uiToggleBtn(c.take_block ~= false, "hv_tb") then c.take_block = not (c.take_block ~= false); HV.saveData() end
+
+    uiGap(2)
+    ImGui.Text("Take Seed Sesuai ID        :"); ImGui.SameLine()
+    if uiToggleBtn(c.take_seed ~= false, "hv_ts") then c.take_seed = not (c.take_seed ~= false); HV.saveData() end
 
     uiGap(2)
     ImGui.Text("Mode Traversal             :"); ImGui.SameLine()
