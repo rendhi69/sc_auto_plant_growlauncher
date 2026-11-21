@@ -164,33 +164,124 @@ local function isSystemWindows()
     return false
 end
 
-local function getDataPath()
-    if CACHED_PATH then return CACHED_PATH end
-    if isSystemWindows() then CACHED_PATH = "boren_hub_harvest_data.txt"; return CACHED_PATH end
-    local dirs = {
-        "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/",
-        "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/",
-        "/storage/emulated/0/Download/",
-    }
-    for _, d in ipairs(dirs) do
-        local p = d .. "boren_hub_harvest_data.txt"
-        local ok, f = pcall(io.open, p, "a")
-        if ok and f then f:close(); CACHED_PATH = p; return p end
+local function splitColons(str)
+    local parts = {}
+    for seg in (tostring(str or "") .. ":"):gmatch("([^:]*):") do
+        table.insert(parts, trimStr(seg))
     end
-    CACHED_PATH = "boren_hub_harvest_data.txt"
-    return CACHED_PATH
+    if #parts > 0 and parts[#parts] == "" then
+        table.remove(parts)
+    end
+    return parts
+end
+
+local function getStorageCandidates()
+    local fn = "boren_hub_harvest_data.txt"
+    if isSystemWindows() then
+        return { fn }
+    end
+    return {
+        "/storage/emulated/0/Download/" .. fn,
+        "/sdcard/Download/" .. fn,
+        "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/" .. fn,
+        "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/" .. fn,
+        fn,
+    }
+end
+
+local function readStorageContent()
+    local candidates = getStorageCandidates()
+    -- 1. Baca via readFile native GrowLauncher jika tersedia
+    if readFile then
+        for _, path in ipairs(candidates) do
+            local ok, txt = pcall(readFile, path)
+            if ok and type(txt) == "string" and (txt:find("ROW=", 1, true) or #txt > 10) then
+                return txt
+            end
+        end
+    end
+    -- 2. Baca via io.open
+    if io and io.open then
+        for _, path in ipairs(candidates) do
+            local ok, f = pcall(io.open, path, "r")
+            if ok and f then
+                local txt = nil
+                pcall(function() txt = f:read("*a"); f:close() end)
+                if txt and type(txt) == "string" and (txt:find("ROW=", 1, true) or #txt > 10) then
+                    return txt
+                end
+            end
+        end
+    end
+    -- 3. Fallback: baca file apa pun yang berhasil terbuka dan tidak kosong
+    if io and io.open then
+        for _, path in ipairs(candidates) do
+            local ok, f = pcall(io.open, path, "r")
+            if ok and f then
+                local txt = nil
+                pcall(function() txt = f:read("*a"); f:close() end)
+                if txt and type(txt) == "string" and txt ~= "" then
+                    return txt
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function writeStorageContent(content)
+    local candidates = getStorageCandidates()
+    local wroteAny = false
+
+    -- 1. Tulis via native writeFile jika tersedia di engine
+    if writeFile then
+        for _, path in ipairs(candidates) do
+            local ok = pcall(writeFile, path, content)
+            if ok then wroteAny = true end
+        end
+    end
+    if writeToLocal then
+        pcall(writeToLocal, "boren_hub_harvest_data.txt", content)
+        wroteAny = true
+    end
+
+    -- 2. Tulis via io.open ke seluruh direktori yang dapat diakses (Download HP, media, local)
+    if io and io.open then
+        for _, path in ipairs(candidates) do
+            local ok, f = pcall(io.open, path, "w")
+            if ok and f then
+                pcall(function()
+                    f:write(content .. "\n")
+                    f:close()
+                end)
+                wroteAny = true
+            end
+        end
+    end
+    return wroteAny
+end
+
+local function getDataPath()
+    local candidates = getStorageCandidates()
+    for _, path in ipairs(candidates) do
+        local ok, f = pcall(io.open, path, "r")
+        if ok and f then f:close(); return path end
+    end
+    for _, path in ipairs(candidates) do
+        local ok, f = pcall(io.open, path, "a")
+        if ok and f then f:close(); return path end
+    end
+    return "boren_hub_harvest_data.txt"
 end
 
 local function parseWorldDoor(raw)
     local s = trimStr(raw):gsub("|", ":")
     if s == "" or s:sub(1, 1) == "#" then return nil end
-    local w, d = s:match("^([^:]+):(.*)$")
-    if w then
-        w = cleanWorldName(w); d = cleanWorldName(d)
-        return (w ~= "") and { name = w, door = d } or nil
-    end
-    local wn = cleanWorldName(s)
-    return (wn ~= "") and { name = wn, door = "" } or nil
+    local parts = splitColons(s)
+    local w = cleanWorldName(parts[1] or "")
+    if w == "" then return nil end
+    local door = cleanWorldName(parts[2] or "")
+    return { name = w, door = door }
 end
 
 local function parseWorldList(raw)
@@ -205,10 +296,7 @@ end
 local function parseFarmRow(raw)
     local s = trimStr(raw):gsub("|", ":")
     if s == "" or s:sub(1, 1) == "#" then return nil end
-    local parts = {}
-    for tok in s:gmatch("[^:]+") do
-        table.insert(parts, trimStr(tok))
-    end
+    local parts = splitColons(s)
     local w = cleanWorldName(parts[1] or "")
     if w == "" then return nil end
     local door = cleanWorldName(parts[2] or "")
@@ -220,10 +308,7 @@ end
 local function parseSaveRow(raw)
     local s = trimStr(raw):gsub("|", ":")
     if s == "" or s:sub(1, 1) == "#" then return nil end
-    local parts = {}
-    for tok in s:gmatch("[^:]+") do
-        table.insert(parts, trimStr(tok))
-    end
+    local parts = splitColons(s)
     local w = cleanWorldName(parts[1] or "")
     if w == "" then return nil end
     local door = cleanWorldName(parts[2] or "")
@@ -244,10 +329,7 @@ end
 local function parseEventRow(raw)
     local s = trimStr(raw):gsub("|", ":")
     if s == "" or s:sub(1, 1) == "#" then return nil end
-    local parts = {}
-    for tok in s:gmatch("[^:]+") do
-        table.insert(parts, trimStr(tok))
-    end
+    local parts = splitColons(s)
     local w = cleanWorldName(parts[1] or "")
     if w == "" then return nil end
     local door = cleanWorldName(parts[2] or "")
@@ -310,21 +392,18 @@ function HV.saveData()
         table.insert(lines, string.format("EVROW=%s:%s:%d:%d|%s", r.name, r.door or "", r.limit or 10000, r.count or 0, r.status or "Ready"))
     end
 
-    local ok, f = pcall(io.open, getDataPath(), "w")
-    if ok and f then f:write(table.concat(lines, "\n")); f:close() end
+    local textContent = table.concat(lines, "\n")
+    writeStorageContent(textContent)
 end
 
 function HV.loadData()
-    local ok, f = pcall(io.open, getDataPath(), "r")
-    if not ok or not f then return end
-    local txt = f:read("*a"); f:close()
+    local txt = readStorageContent()
     if not txt or txt == "" then return end
     local c = HV.CFG
-    HV.STATE.rows       = {}
-    HV.STATE.save_rows  = {}
-    HV.STATE.event_rows = {}
 
+    local loadedRows, loadedSaveRows, loadedEventRows = {}, {}, {}
     local legacySaveStr, legacyEventStr = "", ""
+
     for line in txt:gmatch("[^\r\n]+") do
         local k, v = line:match("^([A-Z]+)=(.*)$")
         if k == "DEFID" then c.default_item_id = tonumber(v) or 4584
@@ -355,32 +434,43 @@ function HV.loadData()
         elseif k == "ROW" then
             local wd, st = v:match("^(.-)|(.*)$")
             local p = parseFarmRow(wd or v)
-            if p then p.status = (st and st ~= "") and st or "Ready"; table.insert(HV.STATE.rows, p) end
+            if p then p.status = (st and st ~= "") and st or "Ready"; table.insert(loadedRows, p) end
         elseif k == "SAVEROW" then
             local wd, st = v:match("^(.-)|(.*)$")
             local p = parseSaveRow(wd or v)
-            if p then p.status = (st and st ~= "") and st or "Ready"; table.insert(HV.STATE.save_rows, p) end
+            if p then p.status = (st and st ~= "") and st or "Ready"; table.insert(loadedSaveRows, p) end
         elseif k == "EVROW" then
             local wd, st = v:match("^(.-)|(.*)$")
             local p = parseEventRow(wd or v)
-            if p then p.status = (st and st ~= "") and st or "Ready"; table.insert(HV.STATE.event_rows, p) end
+            if p then p.status = (st and st ~= "") and st or "Ready"; table.insert(loadedEventRows, p) end
         end
     end
 
     -- Migrasi format legacy ke list tables bila sebelumnya berupa string
-    if #HV.STATE.save_rows == 0 and legacySaveStr ~= "" then
+    if #loadedSaveRows == 0 and legacySaveStr ~= "" then
         for _, sw in ipairs(parseWorldList(legacySaveStr)) do
-            table.insert(HV.STATE.save_rows, { name = sw.name, door = sw.door or "", save_type = "ALL", limit = c.default_save_limit, count = 0, status = "Ready" })
+            table.insert(loadedSaveRows, { name = sw.name, door = sw.door or "", save_type = "ALL", limit = c.default_save_limit, count = 0, status = "Ready" })
         end
     end
-    if #HV.STATE.event_rows == 0 and legacyEventStr ~= "" then
+    if #loadedEventRows == 0 and legacyEventStr ~= "" then
         for _, ew in ipairs(parseWorldList(legacyEventStr)) do
-            table.insert(HV.STATE.event_rows, { name = ew.name, door = ew.door or "", limit = c.default_ev_limit, count = 0, status = "Ready" })
+            table.insert(loadedEventRows, { name = ew.name, door = ew.door or "", limit = c.default_ev_limit, count = 0, status = "Ready" })
         end
     end
 
-    addFarmItemBuf  = tostring(c.default_item_id)
-    addSaveLimitBuf = tostring(c.default_save_limit)
+    -- Update state hanya jika hasil load berisi data atau memory kosong
+    if #loadedRows > 0 or #HV.STATE.rows == 0 then
+        HV.STATE.rows = loadedRows
+    end
+    if #loadedSaveRows > 0 or #HV.STATE.save_rows == 0 then
+        HV.STATE.save_rows = loadedSaveRows
+    end
+    if #loadedEventRows > 0 or #HV.STATE.event_rows == 0 then
+        HV.STATE.event_rows = loadedEventRows
+    end
+
+    addFarmItemBuf   = tostring(c.default_item_id)
+    addSaveLimitBuf  = tostring(c.default_save_limit)
     addEventLimitBuf = tostring(c.default_ev_limit)
 end
 
@@ -2322,6 +2412,10 @@ end
 
 function HV.render(hub)
     HUB_REF = hub or HUB_REF
+    if not HV.STATE.loaded then
+        HV.STATE.loaded = true
+        pcall(HV.loadData)
+    end
     local w = availX()
     local tabs = {
         { "farms", "Farm List" },
