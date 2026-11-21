@@ -726,7 +726,8 @@ local function warpToWorldInner(wName, doorID)
     unreachableMap = {}
     if getCurrentWorldSafe() == wName and doorID == "" then return true end
     if HUB_REF and HUB_REF.conn and HUB_REF.conn.isPlayerOnline and (not HUB_REF.conn.isPlayerOnline()) and (not HUB_REF.conn.isReconnecting()) then
-        local okOn = HUB_REF.conn.ensureOnline({ world = "", isRunning = function() return HV.STATE.running end })
+        local okOn = HUB_REF.conn.ensureOnline({ world = "", isRunning = function() HV.handleSendPacket = onSendPacketHook
+return HV.STATE.running end })
         if not okOn then return false end
     end
     local joinStr = (doorID ~= "") and (wName .. "|" .. doorID) or wName
@@ -914,30 +915,35 @@ local function onSendPacketHook(p1, p2)
     if not packet then return false end
     if packet:find("action|dialog_return", 1, true) then
         local dlgName = packet:match("dialog_name|([^\r\n|]+)")
-        if dlgName and activeNativeDialogs[dlgName] then
-            local cb = activeNativeDialogs[dlgName]
-            activeNativeDialogs[dlgName] = nil
-            local fields = {}
-            for line in packet:gmatch("[^\r\n]+") do
-                local k, v = line:match("^([^|]+)|(.*)$")
-                if k and k ~= "" then
-                    v = tostring(v or ""):gsub("|$", ""):gsub("^%s+", ""):gsub("%s+$", "")
-                    fields[k] = v
+        if dlgName then
+            local cb = activeNativeDialogs[dlgName] or (_G.__BOREN_ACTIVE_NATIVE_DIALOGS and _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dlgName])
+            if cb then
+                activeNativeDialogs[dlgName] = nil
+                if _G.__BOREN_ACTIVE_NATIVE_DIALOGS then _G.__BOREN_ACTIVE_NATIVE_DIALOGS[dlgName] = nil end
+                local fields = {}
+                for line in packet:gmatch("[^\r\n]+") do
+                    local k, v = line:match("^([^|]+)|(.*)$")
+                    if k and k ~= "" then
+                        k = k:gsub("^%s+", ""):gsub("%s+$", "")
+                        v = tostring(v or ""):gsub("|$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+                        fields[k] = v
+                    end
                 end
+                local btn = tostring(fields.buttonClicked or ""):lower()
+                if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
+                    pcall(cb, fields)
+                end
+                if HV and HV.STATE and HV.STATE._saved_ui_state ~= nil then
+                    HV.STATE.show_ui = HV.STATE._saved_ui_state
+                    HV.STATE._saved_ui_state = nil
+                elseif HV and HV.STATE and HV.STATE.show_ui ~= nil then
+                    HV.STATE.show_ui = true
+                end
+                return true
             end
-            local btn = tostring(fields.buttonClicked or ""):lower()
-            if btn ~= "batal" and btn ~= "cancel" and btn ~= "close" then
-                pcall(cb, fields)
-            end
-            if HV and HV.STATE and HV.STATE._saved_ui_state ~= nil then
-                HV.STATE.show_ui = HV.STATE._saved_ui_state
-                HV.STATE._saved_ui_state = nil
-            elseif HV and HV.STATE and HV.STATE.show_ui ~= nil then
-                HV.STATE.show_ui = true
-            end
-            return true
         end
     end
+    return false
 end
 
 -- Registrasi Global & Engine Hooks
@@ -960,6 +966,8 @@ onSendPacketRaw = onSendPacketRawHook
 OnSendPacketRaw = onSendPacketRawHook
 onSendPacket = onSendPacketHook
 OnSendPacket = onSendPacketHook
+if applyHook then pcall(applyHook) end
+if ApplyHook then pcall(ApplyHook) end
 
 -- ============================================================================
 -- 4. DROP ENGINE (DROP SEBELAH DOOR, DARI KANAN KE KIRI, ZIGZAG TINGKAT KE ATAS/BAWAH)
@@ -1866,6 +1874,10 @@ local function uiSectionWithKetik(title, btnId, onKetikClick, skipTopSep)
 end
 
 local function uiOpenDialog(id, title, fields, submitLbl, onSubmit)
+    activeNativeDialogs[id] = onSubmit
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS = _G.__BOREN_ACTIVE_NATIVE_DIALOGS or {}
+    _G.__BOREN_ACTIVE_NATIVE_DIALOGS[id] = onSubmit
+
     local k = uiKit()
     if k and k.openInputDialog then
         k.openInputDialog(id, title, fields, submitLbl, onSubmit)
@@ -2077,8 +2089,20 @@ local function renderFarmsSub()
             { id = "f_world", label = "World Farm (Nama atau Nama:DoorID)", default = wPre, maxLen = 64 },
             { id = "f_item",  label = "Item ID (Block atau Seed)", default = iPre, maxLen = 16 },
         }, "Masukkan ke Form", function(vals)
-            local wn = cleanDialogField(vals.f_world or vals["f_world"]):upper()
-            local iidStr = cleanDialogField(vals.f_item or vals["f_item"]):gsub("[^0-9]", "")
+            local rawW = vals.f_world or vals["f_world"] or ""
+            if rawW == "" then
+                for k, v in pairs(vals) do
+                    if tostring(k):lower():find("world") then rawW = v; break end
+                end
+            end
+            local rawI = vals.f_item or vals["f_item"] or ""
+            if rawI == "" then
+                for k, v in pairs(vals) do
+                    if tostring(k):lower():find("item") then rawI = v; break end
+                end
+            end
+            local wn = cleanDialogField(rawW):upper()
+            local iidStr = cleanDialogField(rawI):gsub("[^0-9]", "")
             if wn ~= "" then
                 addFarmWorldBuf = wn
             end
@@ -2158,6 +2182,7 @@ local function renderFarmsSub()
         local curW = getCurrentWorldSafe()
         if curW ~= "" and curW ~= "EXIT" then
             addFarmWorldBuf = curW .. ":"
+            formRevision = formRevision + 1
             uiNotice = "Terisi " .. curW .. ": (masukkan Door ID jika ada, lalu klik + Tambah)"
         else uiNotice = "Masuk ke world dulu!" end
 
