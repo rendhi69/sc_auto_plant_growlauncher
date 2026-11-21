@@ -1532,6 +1532,7 @@ local function isCurrentWorldFreeForDF()
 end
 
 local function autoSetupLockAndJammer(doorX, doorY)
+    if DF.CFG.ignore_lock then return end
     if not doorX or not doorY then return end
 
     if DF.CFG.auto_lock_wl and getInvCount(ITEM.WORLD_LOCK) > 0 then
@@ -1952,7 +1953,9 @@ local function findOneFreeWorld()
             local okFree, reason, dx, dy = isCurrentWorldFreeForDF()
             if okFree then
                 addLog("`2[Find World] Ketemu world kosong: " .. cand .. "!")
-                autoSetupLockAndJammer(dx, dy)
+                if not DF.CFG.ignore_lock then
+                    autoSetupLockAndJammer(dx, dy)
+                end
                 local targetRow = nil
                 for _, r in ipairs(DF.STATE.rows) do
                     if r.name == cand then targetRow = r; r.status = "Ready"; break end
@@ -2696,7 +2699,7 @@ end
 local function processDirtFarmWorld(row, skipPreKitCheck)
     -- 0A. Mode Find World: WAJIB siapkan & validasi alat di Storage SEBELUM cari world random!
     --     Mode Add World sendiri: masuk world target dulu -> jika posisi lock sudah lengkap, hemat trip Storage!
-    if (not skipPreKitCheck) and DF.CFG.find_world_mode then
+    if (not skipPreKitCheck) and DF.CFG.find_world_mode and (not DF.CFG.ignore_lock) then
         if not prepareAndValidateDFKit() then
             row.status = "Alat Kurang"
             DF.saveData()
@@ -2723,6 +2726,20 @@ local function processDirtFarmWorld(row, skipPreKitCheck)
     safeSleep(550)
 
     local doorX, doorY = findMainDoor()
+    if not doorX or not doorY then
+        local wDoor = 0
+        while wDoor < 3000 and isActive() do
+            safeSleep(250); wDoor = wDoor + 250
+            doorX, doorY = findMainDoor()
+            if doorX and doorY then break end
+        end
+    end
+    if not doorX or not doorY then
+        addLog("[DF] Main Door tidak terdeteksi di world " .. row.name .. " (sinkronisasi lambat / world tidak valid).")
+        row.status = "No Main Door"
+        DF.saveData()
+        return false
+    end
     local minX, maxX = getDFRowBounds()
     local sideCols = getSideColumns()
 
@@ -3196,26 +3213,71 @@ local function mainLoop()
     addLog("Auto Dirt Farm dimulai.")
 
     if DF.CFG.find_world_mode then
-        -- 1. Selesaikan dulu world pending yang sudah ada di List World
-        for _, row in ipairs(DF.STATE.rows) do
-            if not DF.STATE.running then break end
-            if row.status ~= "Done" and row.status ~= "Inaccessible" then
-                processDirtFarmWorld(row, false)
-                safeSleep(450)
-            end
-        end
-        -- 2. Cari world random kosong sebanyak find_target_cnt
-        -- WAJIB ambil & validasi alat di storage (masing-masing 1 + drop kelebihan) SEBELUM find world!
         local targetCnt = math.max(1, tonumber(DF.CFG.find_target_cnt) or 1)
-        for _ = 1, targetCnt do
-            if not DF.STATE.running then break end
-            if not prepareAndValidateDFKit() then
-                addLog("[DF] Berhenti: alat di storage belum lengkap atau kelebihan belum ter-drop.")
-                break
+        DF.STATE.found_count = 0
+        local rowAttempts = {}
+
+        while DF.STATE.running do
+            -- 1. Cari apakah masih ada world di list yang belum 'Done' dan bukan 'Inaccessible'
+            local pendingRow = nil
+            for _, r in ipairs(DF.STATE.rows) do
+                if r.status ~= "Done" and r.status ~= "Inaccessible" then
+                    pendingRow = r
+                    break
+                end
             end
-            local foundRow = findOneFreeWorld()
-            if foundRow and DF.STATE.running then
-                processDirtFarmWorld(foundRow, true)
+
+            if pendingRow then
+                local rKey = pendingRow.name
+                rowAttempts[rKey] = (rowAttempts[rKey] or 0) + 1
+                addLog(string.format("[DF Queue] Menyelesaikan world di list: %s (Percobaan #%d | Status: %s)...", pendingRow.name, rowAttempts[rKey], tostring(pendingRow.status)))
+                
+                local okDone = processDirtFarmWorld(pendingRow, false)
+                safeSleep(450)
+
+                if pendingRow.status == "Done" then
+                    rowAttempts[rKey] = nil
+                else
+                    -- Jika world belum selesai karena kehabisan bahan / alat di storage
+                    if pendingRow.status == "Alat Kurang" or pendingRow.status == "No Plat" or pendingRow.status == "Drop Kelebihan Gagal" then
+                        addLog(string.format("[DF] Berhenti: World %s belum selesai karena '%s'. Lengkapi bahan di storage terlebih dahulu!", pendingRow.name, tostring(pendingRow.status)))
+                        break
+                    end
+                    -- Jika sudah 3x gagal tanpa progress, hentikan agar tidak loop terus menerus
+                    if (rowAttempts[rKey] or 0) >= 3 then
+                        addLog(string.format("[DF] World %s masih berstatus '%s' setelah 3x percobaan. Proses dihentikan untuk dicek manual!", pendingRow.name, tostring(pendingRow.status)))
+                        break
+                    end
+                    addLog(string.format("[DF Queue] World %s masih berstatus '%s'. Mengulang penyelesaian world ini hingga Done...", pendingRow.name, tostring(pendingRow.status)))
+                    safeSleep(1000)
+                end
+            else
+                -- 2. SEMUA world yang ada di list sudah berstatus "Done" (atau Inaccessible).
+                -- Cek apakah target find world sudah tercapai
+                if DF.STATE.found_count >= targetCnt then
+                    addLog(string.format("`2[DF Selesai] Semua world di list sudah Done & target find world (%d/%d) sudah tercapai!", DF.STATE.found_count, targetCnt))
+                    break
+                end
+
+                addLog(string.format("[DF Queue] Semua world di list sudah Done. Mencari world kosong baru (#%d/%d)...", DF.STATE.found_count + 1, targetCnt))
+                
+                -- Validasi alat storage sebelum find world (hanya jika ignore_lock tidak aktif)
+                if not DF.CFG.ignore_lock then
+                    if not prepareAndValidateDFKit() then
+                        addLog("[DF] Berhenti: alat di storage belum lengkap atau kelebihan belum ter-drop.")
+                        break
+                    end
+                end
+
+                local foundRow = findOneFreeWorld()
+                if not foundRow then
+                    addLog("[DF] Tidak berhasil menemukan world kosong baru. Proses dihentikan.")
+                    break
+                end
+
+                -- foundRow otomatis masuk ke DF.STATE.rows dengan status = 'Ready'
+                -- Iterasi while berikutnya akan langsung memproses foundRow sampai 'Done'
+                -- sebelum mencari world berikutnya!
                 safeSleep(500)
             end
         end
