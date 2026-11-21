@@ -188,14 +188,42 @@ function BOOT.start(baseRawUrl, initialFeature)
             manifest = getFallbackManifest()
         end
 
-        local featList = type(manifest.features) == "table" and manifest.features or {}
-        local totalSteps = #manifest.core + #featList
+        local singleKey = _G.__BOREN_SINGLE_FEATURE
+
+        -- Saring core: plant_engine.lua hanya dimuat jika mode All-in-One ATAU singleKey == "plant"
+        local coreList = {}
+        for _, c in ipairs(manifest.core) do
+            if c.key == "plant" then
+                if (not singleKey) or singleKey == "" or singleKey == "plant" then
+                    table.insert(coreList, c)
+                end
+            else
+                table.insert(coreList, c)
+            end
+        end
+
+        -- Saring fitur: hanya muat fitur yang dituju jika mode single-feature aktif
+        local featList = {}
+        local rawFeatures = type(manifest.features) == "table" and manifest.features or {}
+        if singleKey and singleKey ~= "" and singleKey ~= "dashboard" then
+            for _, entry in ipairs(rawFeatures) do
+                if entry.id == singleKey then
+                    table.insert(featList, entry)
+                end
+            end
+        elseif singleKey == "dashboard" then
+            featList = {} -- Dashboard hanya butuh UI core, tidak perlu bot lain
+        else
+            featList = rawFeatures -- Mode Hub All-in-One: muat semua fitur
+        end
+
+        local totalSteps = #coreList + #featList
         local stepIdx = 0
         local loadedCnt, failCnt, skipCnt = 0, 0, 0
 
-        -- 1. Muat core engine (plant_engine.lua dulu, ui nanti setelah fitur terdaftar)
+        -- 1. Muat core engine (hanya yang relevan)
         local uiEntry = nil
-        for _, c in ipairs(manifest.core) do
+        for _, c in ipairs(coreList) do
             if c.key == "ui" then
                 uiEntry = c
             else
@@ -214,7 +242,7 @@ function BOOT.start(baseRawUrl, initialFeature)
             end
         end
 
-        -- 2. Muat & validasi semua fitur dinamis dari manifest (Lapis 1 + 2 + 3!)
+        -- 2. Muat & validasi fitur yang disaring (hanya yang relevan!)
         local newFeatures = {}
         for _, entry in ipairs(featList) do
             stepIdx = stepIdx + 1
