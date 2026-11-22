@@ -2,34 +2,55 @@
 
 Script otomatisasi tanam (Plant) dan kawin bibit (Splice) untuk Growlauncher Android & PC.
 
-## Fitur Utama & Pembaruan
-1. **Deteksi Cerdas Seed Terakhir & Arah Tanam Otomatis (Smart Resume)**:
-   - Bot mendeteksi koordinat seed terakhir yang sudah ditanam pada baris aktif.
-   - Bot langsung menghampiri petak kosong di sebelahnya dan menentukan arah tanam (`Kiri -> Kanan` atau `Kanan -> Kiri`) secara otomatis tanpa harus berjalan ke ujung kanan/kiri terlebih dahulu.
-   - Menghilangkan waktu tempuh sia-sia saat menyambung tanam world yang sudah terisi sebagian.
-2. **Navigasi Serpentine Dinamis (S-Pattern Traversal)**:
-   - Dari ujung kanan baris platform (`x >= 50`), bot langsung turun ke baris bawahnya dan menanam ke arah kiri (`Kanan -> Kiri`).
-   - Dari ujung kiri baris platform (`x < 50`), bot langsung turun dan menanam ke arah kanan (`Kiri -> Kanan`).
-3. **Pacing Delay Riil 180ms Terintegrasi**:
-   - Delay default terset ke **180 ms** (`plant_delay` & `splice_delay`).
-   - Eksekusi real delay presisi tanpa clamping / batas minimum palsu.
-   - Sinkronisasi dua arah real-time antara slider UI dan input teks angka.
-4. **Batch Section Splicing & Auto-Recovery (Punch Sprouted Trees)**:
-   - Splicing batch 3 petak sekaligus (tanam bibit 1, tunggu cooldown server, lalu timpa bibit 2).
-   - Validasi kepastian splice dengan verifikasi multi-retry langsung di tempat.
-   - Fitur pemulihan cerdas: jika terdeteksi bibit yang gagal splice dan telanjur bertunas, bot otomatis memukul (punch) untuk mereset petak dan menanam bibit baru.
-5. **Anti False Completion saat Disconnect**:
-   - Jika koneksi terputus saat proses tanam berlangsung, status world TIDAK ditandai selesai (DONE). World tetap berstatus ANTRI untuk dilanjutkan saat reconnect.
-6. **Penyimpanan Daftar World & Storage Otomatis & Anti-Hilang**:
-   - ID Door kini tersimpan sempurna saat menambahkan World Farm maupun Storage World.
-   - Sinkronisasi instan dua arah ke file penyimpanan fisik di memori HP (`boren_plant_worlds.txt` & `boren_plant_storage.txt`), mencegah daftar world hilang meskipun Growlauncher di-force close atau crash.
-7. **Pendeteksian & Pengabaian Otomatis Area Lock Orang Lain**:
-   - Bot otomatis memindai area perlindungan kunci milik pemain lain (Small Lock, Big Lock, Huge Lock, Builder's Lock, dan World Lock) saat masuk ke world.
-   - Area yang dilindungi lock orang lain secara cerdas dilewati dan tidak akan dipaksa tanam maupun dipukul.
-   - Dilengkapi sistem *reactive failure blacklist*: jika sebuah petak gagal ditanam sebanyak 2x akibat proteksi lock server, petak otomatis di-blacklist sehingga bot langsung melanjutkan ke petak berikutnya tanpa stuck.
-8. **Kompatibilitas Penuh Android & PC**:
-   - Bebas error `os.getenv` di Android Growlauncher dengan safe environment guards dan native file fallback.
+Repository ini menyediakan **2 Versi Antarmuka (UI)** yang terpisah dan terorganisir:
 
-## Cara Menggunakan
-1. **Via Loader**: Jalankan `loader_plant.lua` pada Growlauncher untuk memuat script secara otomatis dari GitHub.
-2. **Via Standalone File**: Jalankan langsung `auto_plant.lua` di Script Manager Growlauncher (100% offline, bebas ketergantungan jaringan).
+---
+
+## 1. Versi Native UI (Bawaan Growlauncher)
+Tampilan terintegrasi langsung di **menu samping / drawer resmi Growlauncher**. Ringan, stabil, dan tanpa jendela melayang di layar game.
+
+* **Folder:** `sc_plant_native/`
+* **File Script Utama:** `sc_plant_native/auto_plant.lua`
+* **Loader Cepat:** `loader_plant_native.lua` (Jalankan file ini untuk memuat menu Native secara otomatis dari GitHub).
+
+---
+
+## 2. Versi Console ImGui (Floating Window Melayang)
+Tampilan berupa **jendela console ImGui semi-transparan yang melayang di atas layar game Growtopia**. Dapat digeser, ditutup, atau di-*minimize* menjadi Mini HUD ringkas saat bot bekerja.
+
+* **Folder:** `sc_plant_console/`
+* **File Script Utama:** `sc_plant_console/tab_plant.lua` + `sc_plant_console/plant_engine.lua`
+* **Loader Cepat:** `loader_plant_console.lua` (Jalankan file ini untuk memuat Console ImGui secara otomatis dari GitHub).
+
+---
+
+## Struktur Lengkap File Repository
+```text
+├── loader_plant_native.lua       # Loader untuk memuat Versi Native UI
+├── loader_plant_console.lua      # Loader untuk memuat Versi Console ImGui
+├── auto_plant.lua                # Standalone script offline Native UI
+├── sc_plant_native/              # Folder Khusus Native UI
+│   ├── auto_plant.lua
+│   └── loader_plant_native.lua
+├── sc_plant_console/             # Folder Khusus Console ImGui
+│   ├── tab_plant.lua
+│   ├── plant_engine.lua
+│   └── loader_plant_console.lua
+├── imgui_hub/                    # Engine ImGui Hub Core
+│   ├── boot.lua
+│   ├── manifest.lua
+│   ├── plant_engine.lua
+│   ├── tab_plant.lua
+│   └── theme_widgets.lua
+└── component/                    # Komponen mesin zigzag & pathfinding
+    └── component_plant_engine_3zigzag.lua
+```
+
+## Fitur Unggulan Engine
+1. **Smart Resume**: Deteksi cerdas koordinat bibit terakhir dan menentukan arah tanam otomatis (`Kiri -> Kanan` atau `Kanan -> Kiri`).
+2. **Navigasi Serpentine (S-Pattern)**: Menuruni platform secara otomatis tanpa bolak-balik kosong.
+3. **Pacing Delay Riil 180ms**: Delay presisi tinggi tanpa penundaan palsu.
+4. **Auto-Recovery Failed Splice**: Memukul tunas yang gagal kawin dan menanam ulang secara otomatis.
+5. **Anti False Completion saat Disconnect**: Status antrean tetap terjaga saat terputus dari server.
+6. **Penyimpanan World Anti-Hilang**: Terhubung ke file lokal (`boren_plant_worlds.txt` & `boren_plant_storage.txt`).
+7. **Deteksi & Bypass Lock Pemain Lain**: Menghindari area yang terkunci lock orang lain secara otomatis.

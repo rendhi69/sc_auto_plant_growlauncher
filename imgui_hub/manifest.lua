@@ -1,5 +1,5 @@
 -- ============================================================================
--- BOREN STORE - FEATURE MANIFEST (DEDICATED AUTO PLANT REPOSITORY)
+-- BOREN STORE - FEATURE MANIFEST (AUTO PLANT CONSOLE)
 -- File: imgui_hub/manifest.lua
 -- ============================================================================
 

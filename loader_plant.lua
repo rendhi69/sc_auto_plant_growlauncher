@@ -1,9 +1,9 @@
 -- ============================================================================
 -- LOADER BOREN STORE - AUTO PLANT & SPLICE (CONSOLE IMGUI)
--- File: loader_plant.lua
+-- File: loader_plant_console.lua
 -- ============================================================================
 -- Memuat antarmuka Console ImGui khusus Auto Plant & Splice Tree.
--- 100% Berbasis antarmuka Console ImGui Modern (Bukan Menu Native Lama).
+-- Tampilan floating console mengambang langsung di atas layar game Growtopia.
 -- Dilengkapi auto-fetch dari GitHub, cache-busting, dan fallback file lokal.
 -- ============================================================================
 
@@ -32,7 +32,7 @@ local function makeTag()
 end
 
 local function logMsg(msg)
-    if LogToConsole then pcall(LogToConsole, "`e[BOREN PLANT] `w" .. tostring(msg)) end
+    if LogToConsole then pcall(LogToConsole, "`e[BOREN PLANT CONSOLE] `w" .. tostring(msg)) end
 end
 
 local function notifyUser(msg)
@@ -57,6 +57,8 @@ if not code or code == "" then
         "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/",
         "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/",
         "/storage/emulated/0/Download/",
+        "script/script done dont edit/sc_plant_console/",
+        "script/script done dont edit/sc plant/",
         "script/",
         "",
     }
