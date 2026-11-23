@@ -3670,8 +3670,7 @@ local function startBot()
 
     local function safeMainLoop()
         local ok, err = xpcall(autoPlantMainLoop, function(e)
-            return tostring(e) .. "
-" .. debug.traceback()
+            return tostring(e) .. "\n" .. debug.traceback()
         end)
         if not ok then
             addLog("`4[Runtime Crash] `w" .. tostring(err))
@@ -4569,8 +4568,9 @@ local function plantDialogOnSendPacket(arg1, arg2)
     local chatText = pStr:match("text|([^\r\n]+)")
     if chatText then
         local trimmed = chatText:gsub("^%s+", ""):gsub("%s+$", ""):lower()
-        if trimmed == "/plant" or trimmed == "/p" or trimmed == "/boren" or trimmed == "/menu" or trimmed == "/dialog" or trimmed:find("^/plant%s*") or trimmed:find("^/p%s*") then
-            showPlantMainDialog()
+        if trimmed == "/plant" or trimmed == "/p" or trimmed == "/boren" or trimmed == "/menu" or trimmed == "/dialog"
+           or trimmed:match("^/plant%s") or trimmed:match("^/p%s") then
+            pcall(showPlantMainDialog)
             if LogToConsole then
                 pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via chat command: `e" .. trimmed)
             end
@@ -4581,10 +4581,11 @@ local function plantDialogOnSendPacket(arg1, arg2)
     -- Fallback deteksi jika paket input chat terformat khusus
     local lowerP = pStr:lower()
     if (lowerP:find("action|input", 1, true) or lowerP:find("action|chat", 1, true)) then
-        if lowerP:find("/plant", 1, true) or lowerP:find("|text|/p\r") or lowerP:find("|text|/p\n") or lowerP:find("|text|/menu") or lowerP:find("|text|/boren") then
-            showPlantMainDialog()
+        local cmd = lowerP:match("|text|(/[%%w_]+)")
+        if cmd == "/plant" or cmd == "/p" or cmd == "/menu" or cmd == "/boren" or cmd == "/dialog" then
+            pcall(showPlantMainDialog)
             if LogToConsole then
-                pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via fallback command!")
+                pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via fallback command: `e" .. cmd)
             end
             return true
         end
@@ -4609,15 +4610,11 @@ OnSendPacket = plantDialogOnSendPacket
 _G.onSendPacket = plantDialogOnSendPacket
 _G.OnSendPacket = plantDialogOnSendPacket
 
--- Registrasi hook resmi Growlauncher via addHook dan AddHookCallback
+-- Registrasi hook resmi Growlauncher via addHook & applyHook
 if addHook then
     pcall(addHook, plantDialogOnSendPacket, "onsendpacket")
     pcall(addHook, plantDialogOnSendPacket, "onSendPacket")
     pcall(addHook, onSendPacketRawCollectHook, "onsendpacketraw")
-end
-if AddHookCallback then
-    pcall(AddHookCallback, plantDialogOnSendPacket, "onSendPacket")
-    pcall(AddHookCallback, plantDialogOnSendPacket, "onsendpacket")
 end
 if applyHook then
     pcall(applyHook)
