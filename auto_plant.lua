@@ -422,6 +422,14 @@ local STATE = {
     reconnecting        = false,
 }
 
+-- UI & Shield State
+local UI_STATE = {
+    touch_shield = false
+}
+_G.UI_STATE = UI_STATE
+_G.__BOREN_APEX_UI_STATE = UI_STATE
+
+
 -- Forward Declarations
 local updatePowerStatusList
 local updateSeedStatusDisplay
@@ -1211,32 +1219,25 @@ local function safeSleep(ms)
 end
 
 local function setCheatToggle(name, enabled)
-    local boolVal = (enabled == true)
-    local numVal = boolVal and 1 or 0
+    local val = (enabled == true)
     if editToggle then
-        pcall(editToggle, name, boolVal)
-        pcall(editToggle, name, numVal)
+        pcall(editToggle, name, val)
     end
-    if editValue then
-        pcall(editValue, name, boolVal)
-        pcall(editValue, name, numVal)
+    if editValue and editValue ~= editToggle then
+        pcall(editValue, name, val)
     end
     if setValue then
-        pcall(setValue, name, boolVal)
-        pcall(setValue, name, numVal)
+        pcall(setValue, name, val)
     end
-    if growlauncher then
+    if growlauncher and type(growlauncher) == "table" then
         if growlauncher.editToggle then
-            pcall(growlauncher.editToggle, name, boolVal)
-            pcall(growlauncher.editToggle, name, numVal)
+            pcall(growlauncher.editToggle, name, val)
         end
-        if growlauncher.editValue then
-            pcall(growlauncher.editValue, name, boolVal)
-            pcall(growlauncher.editValue, name, numVal)
+        if growlauncher.editValue and growlauncher.editValue ~= growlauncher.editToggle then
+            pcall(growlauncher.editValue, name, val)
         end
         if growlauncher.setValue then
-            pcall(growlauncher.setValue, name, boolVal)
-            pcall(growlauncher.setValue, name, numVal)
+            pcall(growlauncher.setValue, name, val)
         end
     end
 end
@@ -2521,7 +2522,12 @@ local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
             moveSafeTo(ox, oy)
             safeSleep(100)
 
-            -- Ambil objek via packet 11 (Collect Object)
+            -- Ambil objek via collectObject dan packet 11 (Collect Object)
+            if collectObject then
+                pcall(collectObject, obj.id)
+            elseif CollectObject then
+                pcall(CollectObject, obj.id)
+            end
             if sendPacketRaw then
                 pcall(sendPacketRaw, false, {
                     type  = 11,
@@ -2551,6 +2557,22 @@ local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
 end
 
 local function restockFromStorage()
+    -- Coba ambil floating seed target di world saat ini terlebih dahulu sebelum jeda
+    local c1_curr = collectFloatingSeedsInStorage(CFG.seed_1_id, CFG.target_seed_bp or 150)
+    local c2_curr = 0
+    if CFG.splice_mode then
+        c2_curr = collectFloatingSeedsInStorage(CFG.seed_2_id, CFG.target_seed_bp or 150)
+    end
+    syncInventoryCache()
+    local s1_id = CFG.seed_1_id
+    local s2_id = CFG.seed_2_id
+    local bp1_now = math.max(getInvCount(s1_id), getInvCount(ensureSeedID(s1_id)))
+    local bp2_now = CFG.splice_mode and math.max(getInvCount(s2_id), getInvCount(ensureSeedID(s2_id))) or 999
+    if bp1_now > 0 and (not CFG.splice_mode or bp2_now > 0) then
+        addLog(string.format("[Ambil Seed] Berhasil mengambil floating seed di world saat ini (S1:%d, BP:%d). Lanjut tanam!", c1_curr, bp1_now))
+        return true
+    end
+
     if #CFG.storage_world_list == 0 then
         setStatus("Seed di Tas Habis", "Seed di tas telah habis & tidak ada World Storage!")
         addLog("[Peringatan] Seed di tas habis dan tidak ada daftar world storage. Bot dijeda.")
@@ -3390,7 +3412,7 @@ local function autoPlantMainLoop()
         local curW = getCurrentWorldSafe()
         if curW ~= "" and curW ~= "EXIT" then
             addLog("[Info] List world kosong, otomatis menggunakan world saat ini: " .. curW)
-            table.insert(CFG.world_list, { name = curW, door = "", done = false, status = "ANTRE" })
+            table.insert(CFG.world_list, { name = curW, door = "", done = false, status = "ANTRI" })
             updateWorldDisplayList()
         else
             setStatus("List World Kosong", "Silakan tambahkan world farm terlebih dahulu di menu!")
@@ -3399,6 +3421,25 @@ local function autoPlantMainLoop()
             if editToggle then pcall(editToggle, "ap_run_power", false) end
             return
         end
+    end
+
+    -- Cek jika seluruh antrean world sudah berstatus DONE, auto-reset ke Siap agar bot bisa berjalan
+    local anyPendingWorld = false
+    for _, w in ipairs(CFG.world_list) do
+        if not w.done then
+            anyPendingWorld = true
+            break
+        end
+    end
+    if not anyPendingWorld and #CFG.world_list > 0 then
+        for _, w in ipairs(CFG.world_list) do
+            w.done = false
+            w.status = "ANTRI"
+        end
+        STATE.active_world_idx = 1
+        persistConfig()
+        updateWorldDisplayList()
+        addLog("[Info] Seluruh world di antrean di-reset ke status Siap untuk penanaman baru.")
     end
 
     if STATE.active_world_idx > #CFG.world_list then
@@ -3453,6 +3494,14 @@ local function autoPlantMainLoop()
                         dropLeftoverSeedsToStorage(s1, s2)
                     end
                 elseif initialHoles > 0 then
+                    -- Cek stok awal: Coba ambil floating seed lokal jika tas kosong
+                    if not hasEnoughSeedInBackpack() then
+                        collectFloatingSeedsInStorage(CFG.seed_1_id, CFG.target_seed_bp or 150)
+                        if CFG.splice_mode then
+                            collectFloatingSeedsInStorage(CFG.seed_2_id, CFG.target_seed_bp or 150)
+                        end
+                    end
+
                     -- Cek stok awal HANYA jika world masih membutuhkan penanaman
                     if not hasEnoughSeedInBackpack() then
                         local okR = restockFromStorage()
@@ -3606,25 +3655,36 @@ local function autoPlantMainLoop()
 end
 
 local function startBot()
-    if STATE.running then return end
+    STATE.running = false
+    STATE.paused  = false
     STATE.blocked_tiles = {}
     STATE.plant_fail_count = {}
     pcall(scanForeignLocksInWorld)
     pcall(applyCheatToggles)
+    if editToggle then
+        pcall(editToggle, "Auto Collect", true)
+        pcall(editToggle, "AutoCollect", true)
+        pcall(editToggle, "Anti Collect", false)
+        pcall(editToggle, "Anti-Collect", false)
+    end
 
     local function safeMainLoop()
         local ok, err = xpcall(autoPlantMainLoop, function(e)
-            return tostring(e) .. "\n" .. debug.traceback()
+            return tostring(e) .. "
+" .. debug.traceback()
         end)
         if not ok then
             addLog("`4[Runtime Crash] `w" .. tostring(err))
             STATE.running = false
+            STATE.paused  = false
             if editToggle then pcall(editToggle, "ap_run_power", false) end
         end
     end
 
     if runCoroutine then
         pcall(runCoroutine, safeMainLoop)
+    elseif runThread then
+        pcall(runThread, safeMainLoop)
     else
         local co = coroutine.create(safeMainLoop)
         coroutine.resume(co)
@@ -3649,6 +3709,10 @@ local function stopBot()
 end
 
 -- ============================================================================
+local UI_STATE = _G.UI_STATE or { touch_shield = false }
+_G.UI_STATE = UI_STATE
+_G.__BOREN_APEX_UI_STATE = UI_STATE
+
 -- 16. DIALOG MANAGEMENT (UNIFIED MANAGER: COPY, QUICK PASTE, EDIT & HAPUS)
 -- ============================================================================
 local function showClientDialog(dText)
@@ -4569,8 +4633,19 @@ if sendNotification then
 end
 
 -- Otomatis terapkan cheat dan buka dialog saat pertama kali di-run via coroutine
-runCoroutine(function()
-    safeSleep(200)
+if runCoroutine then
+    pcall(runCoroutine, function()
+        safeSleep(200)
+        pcall(applyCheatToggles)
+        showPlantMainDialog()
+    end)
+elseif runThread then
+    pcall(runThread, function()
+        safeSleep(200)
+        pcall(applyCheatToggles)
+        showPlantMainDialog()
+    end)
+else
     pcall(applyCheatToggles)
-    showPlantMainDialog()
-end)
+    pcall(showPlantMainDialog)
+end
