@@ -54,3 +54,15 @@ Tampilan berupa **jendela console ImGui semi-transparan yang melayang di atas la
 5. **Anti False Completion saat Disconnect**: Status antrean tetap terjaga saat terputus dari server.
 6. **Penyimpanan World Anti-Hilang**: Terhubung ke file lokal (`boren_plant_worlds.txt` & `boren_plant_storage.txt`).
 7. **Deteksi & Bypass Lock Pemain Lain**: Menghindari area yang terkunci lock orang lain secara otomatis.
+
+
+## Edisi Khusus: sc_plant_dialog (100% In-Game Dialog UI)
+Folder: `sc_plant_dialog/`  
+Loader: `loader_plant_dialog.lua` (tersedia di root dan folder `sc_plant_dialog/`)
+
+### Fitur Utama Edisi Dialog:
+- **100% In-Game Growtopia Dialog**: Menggunakan sistem dialog asli game (`OnDialogRequest` & `action|dialog_return`). 0% ImGui, 0% Native GL Drawer, sangat ringan dan anti-crash di semua HP Android & PC.
+- **Intersepsi Chat Command**: Buka menu kapan saja dengan mengetik `/plant`, `/p`, atau `/boren` di chat game.
+- **Form Khusus Tambah World Saat Ini**: Mengatur Door ID dan ID benih yang akan ditanam secara interaktif langsung lewat formulir in-game.
+- **Database 16.480 Item**: Pencarian benih instan berdasarkan ID angka atau nama item, otomatis konversi blok/pohon ke seed via `BOREN_ITEM_DB`.
+- **Deteksi Floating Seed Pintar**: Menggunakan `getUnifiedWorldObjects` dan `isMatchingSeedID` untuk menjamin seed di world storage terdeteksi dan diambil sempurna.
