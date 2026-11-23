@@ -431,6 +431,15 @@ local updateFileInfoDisplayList
 local updateBagDisplayList
 local syncInventoryCache
 local updateLogDisplayList
+local showPlantMainDialog
+local showPlantSettingsDialog
+local showPlantSeedsDialog
+local showPlantAddCurrentWorldDialog
+local showPlantQueueDialog
+local showPlantStorageDialog
+local showPlantPacingDialog
+local showPlantLogsDialog
+local showPlantItemSearchDialog
 local openWorldListManagerDialog
 local openEditWorldEntryDialog
 local openStorageListManagerDialog
@@ -442,6 +451,18 @@ local parseAndValidateStorageBatch
 local resolvePickedItemID
 local savePlantWorldsToFile
 local savePlantStoragesToFile
+local getCurrentWorldSafe
+
+getCurrentWorldSafe = function()
+    local fn = getCurrentWorldName or getWorld or getCurrentWorld
+    if not fn then return "" end
+    local ok, res = pcall(fn)
+    if ok and res then
+        if type(res) == "string" then return res:upper() end
+        if type(res) == "table" and res.name then return tostring(res.name):upper() end
+    end
+    return ""
+end
 
 -- JSON Encoder Sederhana
 local function jsonEncode(val)
@@ -525,81 +546,234 @@ end
 -- ============================================================================
 -- 3. ITEM & INVENTORY HELPERS
 -- ============================================================================
-local SEED_NAMES = {
-    [3]   = "Dirt Seed",
-    [5]   = "Grass Seed",
-    [11]  = "Lava Seed",
-    [15]  = "Rock Seed",
-    [17]  = "Cave Background Seed",
-    [27]  = "Wood Block Seed",
-    [103] = "Wooden Platform Seed",
-    [340] = "Chandelier Seed",
-    [4585]= "Pepper Tree Seed",
-    [5667]= "Laser Grid Seed",
+-- ============================================================================
+-- 5B. BOREN ITEM DATABASE & SEED RESOLVER ENGINE (16.480 ITEM DARI ITEM_DATABASE.TXT)
+-- ============================================================================
+local BOREN_ITEM_DB = {
+    loaded = false,
+    by_name = {},
+    by_id = {},
+    items_array = {},
+    total_items = 0
 }
+_G.BOREN_ITEM_DB = BOREN_ITEM_DB
+
+local COMMON_SEED_ALIASES = {
+    ["PEPPER"]            = 4585,
+    ["PEPPER TREE"]       = 4585,
+    ["PEPPER SEED"]       = 4585,
+    ["PEPPER TREE SEED"]  = 4585,
+    ["LGRID"]             = 5667,
+    ["L-GRID"]            = 5667,
+    ["LASER GRID"]        = 5667,
+    ["LASER GRID SEED"]   = 5667,
+    ["CHAND"]             = 341,
+    ["CHANDELIER"]        = 341,
+    ["CHANDELIER SEED"]   = 341,
+    ["GRASS"]             = 881,
+    ["GRASS SEED"]        = 881,
+    ["DIRT"]              = 3,
+    ["DIRT SEED"]         = 3,
+    ["ROCK"]              = 15,
+    ["ROCK SEED"]         = 15,
+    ["CAVE"]              = 17,
+    ["CAVE SEED"]         = 17,
+    ["CAVE BG"]           = 17,
+    ["LAVA"]              = 11,
+    ["LAVA SEED"]         = 11,
+    ["WOOD"]              = 27,
+    ["WOOD BLOCK"]        = 27,
+    ["WOOD SEED"]         = 27,
+    ["PLATFORM"]          = 103,
+    ["WOODEN PLATFORM"]   = 103,
+    ["FISHTANK"]          = 1043,
+    ["FISH TANK"]         = 1043,
+    ["FISH TANK SEED"]    = 1043,
+    ["SHELF"]             = 1523,
+    ["DISPLAY SHELF"]     = 1523,
+    ["BELL"]              = 2595,
+    ["MAGIC BELL"]        = 2595,
+    ["SOIL"]              = 8773,
+    ["FERTILE SOIL"]      = 8773,
+    ["SOIL SEED"]         = 8773,
+}
+
+local SEARCH_PATHS_ITEM_DB = {
+    "item_database.txt",
+    "script/item_database.txt",
+    "script/component/item_database.txt",
+    "sc_plant_dialog/item_database.txt",
+    "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/item_database.txt",
+    "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/item_database.txt",
+    "/storage/emulated/0/Download/item_database.txt"
+}
+
+function BOREN_ITEM_DB:findFile()
+    for _, path in ipairs(SEARCH_PATHS_ITEM_DB) do
+        local okF, fh = pcall(io.open, path, "r")
+        if okF and fh then
+            fh:close()
+            return path
+        end
+    end
+    return nil
+end
+
+function BOREN_ITEM_DB:load()
+    if self.loaded then return true, self.total_items end
+    local filePath = self:findFile()
+    local rawText = nil
+
+    if filePath then
+        local okF, fh = pcall(io.open, filePath, "r")
+        if okF and fh then
+            rawText = fh:read("*a")
+            fh:close()
+        end
+    end
+
+    -- Cloud Fallback jika file lokal belum ada di perangkat
+    if (not rawText or #rawText < 100) and fetch then
+        local okFetch, res = pcall(fetch, "https://raw.githubusercontent.com/rendhi69/data-_id_item/main/item_database.txt")
+        if okFetch and res and type(res) == "string" and #res > 1000 then
+            rawText = res
+            local okW, fhW = pcall(io.open, "item_database.txt", "w")
+            if okW and fhW then
+                fhW:write(res)
+                fhW:close()
+            end
+        end
+    end
+
+    if rawText and #rawText > 100 then
+        self.by_name = {}
+        self.by_id = {}
+        self.items_array = {}
+        local count = 0
+        for line in rawText:gmatch("[^\r\n]+") do
+            local clean = line:gsub("^%s+", ""):gsub("%s+$", "")
+            if clean ~= "" and clean:sub(1, 2) ~= "--" and clean:sub(1, 1) ~= "#" then
+                local name, idStr = clean:match("^([^=]+)%s*=%s*(%d+)$")
+                if name and idStr then
+                    local id = tonumber(idStr)
+                    local nm = name:gsub("^%s+", ""):gsub("%s+$", "")
+                    if id and nm ~= "" then
+                        self.by_name[nm:upper()] = id
+                        self.by_id[id] = nm
+                        self.items_array[#self.items_array + 1] = { name = nm, id = id }
+                        count = count + 1
+                    end
+                end
+            end
+        end
+        self.total_items = count
+        self.loaded = (count > 0)
+        addLog(string.format("[Item Database] Berhasil memuat %d item dari %s!", count, filePath or "Cloud"))
+        return true, count
+    end
+
+    self.loaded = true
+    return false, 0
+end
+
+function BOREN_ITEM_DB:resolveName(idOrName)
+    if not self.loaded then self:load() end
+    local num = tonumber(idOrName)
+    if num and num > 0 then
+        num = math.floor(num)
+        if self.by_id[num] then return self.by_id[num] end
+        return "Item #" .. num
+    end
+    local s = tostring(idOrName or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+    local alias = COMMON_SEED_ALIASES[s]
+    if alias and self.by_id[alias] then return self.by_id[alias] end
+    if self.by_name[s] then return self.by_id[self.by_name[s]] end
+    return tostring(idOrName or "")
+end
+
+function BOREN_ITEM_DB:resolveSeedID(input)
+    if not self.loaded then self:load() end
+    if not input then return 0, "" end
+
+    local num = tonumber(input)
+    if num ~= nil then
+        if num <= 0 then return 0, "NONAKTIF" end
+        num = math.floor(num)
+        -- Standar Growtopia: Jika user input block/tree (genap), jadikan seed (ID + 1)
+        local seedID = (num % 2 == 0) and (num + 1) or num
+        local name = self:resolveName(seedID)
+        return seedID, name
+    end
+
+    local s = tostring(input):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+    if s == "" or s == "0" or s == "NONE" or s == "NONAKTIF" or s == "OFF" then
+        return 0, "NONAKTIF"
+    end
+
+    if COMMON_SEED_ALIASES[s] then
+        local id = COMMON_SEED_ALIASES[s]
+        return id, self:resolveName(id)
+    end
+
+    if self.by_name[s] then
+        local id = self.by_name[s]
+        local seedID = (id % 2 == 0) and (id + 1) or id
+        return seedID, self:resolveName(seedID)
+    end
+
+    local seedKey = s .. " SEED"
+    if self.by_name[seedKey] then
+        local id = self.by_name[seedKey]
+        return id, self:resolveName(id)
+    end
+
+    for _, it in ipairs(self.items_array) do
+        local u = it.name:upper()
+        if u == s or u == seedKey or (u:find(s, 1, true) and u:find("SEED", 1, true)) then
+            local id = it.id
+            local seedID = (id % 2 == 0) and (id + 1) or id
+            return seedID, it.name
+        end
+    end
+
+    return 0, ""
+end
+
+function BOREN_ITEM_DB:search(query, maxResults)
+    if not self.loaded then self:load() end
+    maxResults = maxResults or 8
+    local results = {}
+    local q = tostring(query or ""):gsub("^%s+", ""):gsub("%s+$", ""):upper()
+    if q == "" then return results end
+
+    local qNum = tonumber(q)
+    if qNum and qNum > 0 and self.by_id[qNum] then
+        results[#results + 1] = { id = qNum, name = self.by_id[qNum] }
+    end
+
+    for _, it in ipairs(self.items_array) do
+        if it.name:upper():find(q, 1, true) then
+            if not qNum or it.id ~= qNum then
+                results[#results + 1] = it
+                if #results >= maxResults then break end
+            end
+        end
+    end
+    return results
+end
 
 local function getItemNameSafe(itemID)
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return "" end
-    if SEED_NAMES[itemID] then return SEED_NAMES[itemID] end
-
-    if getItemInfoByID then
-        local ok, info = pcall(getItemInfoByID, itemID)
-        if ok and info then
-            local okName, nameVal = pcall(function() return info.name end)
-            if okName and nameVal and nameVal ~= "" then
-                return tostring(nameVal)
-            end
-        end
-    end
-
-    if growtopia and growtopia.getItemName then
-        local ok, n = pcall(growtopia.getItemName, itemID)
-        if ok and n and n ~= "" then
-            return tostring(n)
-        end
-    end
-
-    if item_info_manager and item_info_manager.getItemName then
-        local ok, n = pcall(item_info_manager.getItemName, itemID)
-        if ok and n and n ~= "" then
-            return tostring(n)
-        end
-    end
-
-    if ItemInfo and ItemInfo.getItem then
-        local ok, info = pcall(ItemInfo.getItem, itemID)
-        if ok and info then
-            local okName, nameVal = pcall(function() return info.name end)
-            if okName and nameVal and nameVal ~= "" then
-                return tostring(nameVal)
-            end
-        end
-    end
-
-    return ""
+    return BOREN_ITEM_DB:resolveName(itemID)
 end
+_G.getItemNameSafe = getItemNameSafe
 
 local function ensureSeedID(itemID)
-    itemID = math.floor(tonumber(itemID) or 0)
-    if itemID <= 0 then return 0 end
-
-    -- Kasus 1: ID sudah ganjil (identifikasi standar Seed di Growtopia)
-    -- Contoh: Dirt Seed = 3, Lava Seed = 5, Rock Seed = 11, Cave Seed = 15, Pepper Seed = 4585, Laser Grid Seed = 5667
-    if itemID % 2 == 1 then
-        return itemID
-    end
-
-    -- Kasus 2: ID genap (User memilih Block / Tree di tas backpack, bukan Seed-nya)
-    -- Sesuai standar Lucifer (Farhad Auto Harvest / Lucifer scripts):
-    -- Rumus resmi Growtopia: SeedID = BlockID + 1 !
-    -- Contoh: Cave Background (14) -> Cave Seed (15)
-    --         Pepper Tree (4584) -> Pepper Seed (4585)
-    --         Dirt (2) -> Dirt Seed (3)
-    --         Rock (10) -> Rock Seed (11)
-    --         Laser Grid (5666) -> Laser Grid Seed (5667)
-    return itemID + 1
+    local sID, _ = BOREN_ITEM_DB:resolveSeedID(itemID)
+    return (sID and sID > 0) and sID or (tonumber(itemID) or 0)
 end
+_G.ensureSeedID = ensureSeedID
 
 local function resolveSeedName(itemID)
     itemID = tonumber(itemID) or 0
@@ -656,6 +830,12 @@ end
 local function getInvCount(itemID)
     itemID = tonumber(itemID) or 0
     if itemID <= 0 then return 0 end
+
+    -- Guard: Jangan pernah akses inventory C++ bila di Title Screen (mencegah SIGSEGV NULL pointer)
+    local curW = getCurrentWorldSafe()
+    if curW == "" or curW:upper() == "EXIT" then
+        return 0
+    end
 
     -- 1. Metode cepat C++ Growlauncher (Paling akurat & live)
     if growtopia and growtopia.checkInventoryCount then
@@ -764,6 +944,11 @@ resolvePickedItemID = function(value)
 end
 
 syncInventoryCache = function()
+    local curW = getCurrentWorldSafe()
+    if curW == "" or curW:upper() == "EXIT" then
+        STATE.cached_inv = {}
+        return
+    end
     local inv = getInventorySafe()
     local map = {}
     for _, it in pairs(inv) do
@@ -1023,18 +1208,90 @@ local function safeSleep(ms)
     if fn then pcall(fn, ms) end
 end
 
+local function setCheatToggle(name, enabled)
+    local boolVal = (enabled == true)
+    local numVal = boolVal and 1 or 0
+    if editToggle then
+        pcall(editToggle, name, boolVal)
+        pcall(editToggle, name, numVal)
+    end
+    if editValue then
+        pcall(editValue, name, boolVal)
+        pcall(editValue, name, numVal)
+    end
+    if setValue then
+        pcall(setValue, name, boolVal)
+        pcall(setValue, name, numVal)
+    end
+    if growlauncher then
+        if growlauncher.editToggle then
+            pcall(growlauncher.editToggle, name, boolVal)
+            pcall(growlauncher.editToggle, name, numVal)
+        end
+        if growlauncher.editValue then
+            pcall(growlauncher.editValue, name, boolVal)
+            pcall(growlauncher.editValue, name, numVal)
+        end
+        if growlauncher.setValue then
+            pcall(growlauncher.setValue, name, boolVal)
+            pcall(growlauncher.setValue, name, numVal)
+        end
+    end
+end
+
 local function applyCheatToggles()
-    if not editToggle then return end
+    -- 1. ModFly: Terbang Bebas & Tembus Blok
     if CFG.use_modfly then
-        pcall(editToggle, "ModFly", true)
+        setCheatToggle("ModFly", true)
+        setCheatToggle("Mod Fly", true)
+        setCheatToggle("modfly", true)
+        setCheatToggle("Fly", true)
+    else
+        setCheatToggle("ModFly", false)
+        setCheatToggle("Mod Fly", false)
+        setCheatToggle("modfly", false)
+        setCheatToggle("Fly", false)
     end
+
+    -- 2. Anti Lava & Anti Bounce: Kebal Lava, Duri, & Pantulan Jamur/Bumper
     if CFG.anti_lava then
-        pcall(editToggle, "Anti Lava", true)
-        pcall(editToggle, "No Lava", true)
+        -- Anti-Lava aliases
+        setCheatToggle("Anti Lava", true)
+        setCheatToggle("No Lava", true)
+        setCheatToggle("Anti-Lava", true)
+        setCheatToggle("AntiLava", true)
+        setCheatToggle("anti_lava", true)
+        setCheatToggle("no_lava", true)
+        -- Anti-Bounce aliases
+        setCheatToggle("Anti Bounce", true)
+        setCheatToggle("No Bounce", true)
+        setCheatToggle("Anti-Bounce", true)
+        setCheatToggle("AntiBounce", true)
+        setCheatToggle("anti_bounce", true)
+        setCheatToggle("no_bounce", true)
+        setCheatToggle("Bounce", true)
+        -- Hazard immunity aliases
+        setCheatToggle("Anti Spike", true)
+        setCheatToggle("No Spike", true)
+        setCheatToggle("No Damage", true)
+        setCheatToggle("God Mode", true)
+    else
+        setCheatToggle("Anti Lava", false)
+        setCheatToggle("No Lava", false)
+        setCheatToggle("Anti-Lava", false)
+        setCheatToggle("AntiLava", false)
+        setCheatToggle("Anti Bounce", false)
+        setCheatToggle("No Bounce", false)
+        setCheatToggle("Anti-Bounce", false)
+        setCheatToggle("AntiBounce", false)
     end
+
+    -- 3. Auto Reconnect
     if CFG.auto_reconnect then
-        pcall(editToggle, "Auto Reconnect", true)
-        pcall(editToggle, "AutoReconnect", true)
+        setCheatToggle("Auto Reconnect", true)
+        setCheatToggle("AutoReconnect", true)
+        setCheatToggle("auto_reconnect", true)
+        setCheatToggle("Reconnect", true)
     end
 end
 
@@ -1046,6 +1303,13 @@ local function onSendPacketRawCollectHook(pkt)
 
     -- Packet Type 11 = PACKET_ITEM_ACTIVATE_OBJECT_REQUEST (Collect Object)
     local pktType = tonumber(pkt.type)
+        -- Touch Shield: Mencegah sentuhan saat form terbuka memukul pohon/blok di game
+        if _G.__BOREN_APEX_UI and _G.__BOREN_APEX_UI.open and not _G.__BOREN_APEX_UI.minimized and _G.__BOREN_APEX_UI_STATE and _G.__BOREN_APEX_UI_STATE.touch_shield then
+            if pktType == 3 or pktType == 7 then
+                return true -- Blokir punch & wrench saat form UI aktif
+            end
+        end
+
     if pktType == 11 then
         local objUID = tonumber(pkt.value) or 0
 
@@ -1614,9 +1878,9 @@ local function moveSafeTo(tx, ty)
     local pFn = FindPath or findPath
     if not pFn then return false end
 
-    -- Pastikan cheat ModFly aktif jika di-enable agar bot bisa bergerak bebas antar lantai
-    if CFG.use_modfly and editToggle then
-        pcall(editToggle, "ModFly", true)
+    -- Pastikan cheat ModFly, Anti-Lava, & Anti-Bounce tetap aktif selama bot bergerak
+    if CFG.use_modfly or CFG.anti_lava then
+        pcall(applyCheatToggles)
     end
 
     local startPx, startPy = getPlayerTilePos()
@@ -2111,49 +2375,176 @@ end
 -- ============================================================================
 -- 13. SEED STORAGE RESTOCK & AUTO-SKIP EMPTY STORAGE
 -- ============================================================================
-local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
-    local getObjsFn = getObjects or getObjectList
-    if not getObjsFn then return 0 end
+local function getUnifiedWorldObjects()
+    local getFn = getObjectList or getObjects or getWorldObjects
+    if not getFn then return {} end
+    local ok, objs = pcall(getFn)
+    if not ok or not objs then return {} end
 
+    local container = objs
+    pcall(function()
+        if type(objs) == "table" and objs.objects then
+            container = objs.objects
+        end
+    end)
+
+    local results = {}
+    local function parseObj(o)
+        if not o then return end
+        local t = type(o)
+        if t ~= "table" and t ~= "userdata" then return end
+
+        local itemID, uid, amt, rx, ry = nil, nil, nil, nil, nil
+        pcall(function() itemID = tonumber(o.itemid or o.itemId or o.item_id or o.itemID) end)
+        pcall(function() uid = tonumber(o.id or o.oid or o.uid or o.objID or o.netid) end)
+        pcall(function() amt = tonumber(o.amount or o.count or o.cnt or 1) or 1 end)
+        pcall(function()
+            if o.pos then
+                rx = tonumber(o.pos.x or o.pos[1])
+                ry = tonumber(o.pos.y or o.pos[2])
+            end
+        end)
+        if not rx then pcall(function() rx = tonumber(o.x or o.posX) end) end
+        if not ry then pcall(function() ry = tonumber(o.y or o.posY) end) end
+
+        if itemID and uid and rx and ry then
+            results[#results + 1] = {
+                id      = uid,
+                itemid  = itemID,
+                amount  = amt,
+                x       = rx,
+                y       = ry,
+                tileX   = math.floor((rx + 10) / 32),
+                tileY   = math.floor((ry + 10) / 32),
+                raw     = o,
+            }
+        end
+    end
+
+    -- 1. Coba iterasi standar pairs
+    pcall(function()
+        for _, o in pairs(container) do
+            parseObj(o)
+        end
+    end)
+
+    -- 2. Jika pairs kosong / userdata array tanpa metamethod __pairs
+    if #results == 0 then
+        local len = 0
+        pcall(function() len = #container end)
+        if not len or len <= 0 then
+            pcall(function() len = container:size() end)
+        end
+        if not len or len <= 0 then
+            pcall(function() len = container.count or container.length end)
+        end
+        local maxN = (len and tonumber(len) and tonumber(len) > 0) and tonumber(len) or 1000
+        local consecutiveNil = 0
+        for i = 0, maxN do
+            local itemOk, o = pcall(function() return container[i] end)
+            if itemOk and o then
+                parseObj(o)
+                consecutiveNil = 0
+            else
+                consecutiveNil = consecutiveNil + 1
+                if consecutiveNil >= 30 and i > 5 then break end
+            end
+        end
+    end
+
+    return results
+end
+_G.getUnifiedWorldObjects = getUnifiedWorldObjects
+
+local function isMatchingSeedID(floatingItemID, targetSeedID)
+    floatingItemID = tonumber(floatingItemID) or 0
+    targetSeedID = tonumber(targetSeedID) or 0
+    if floatingItemID <= 0 or targetSeedID <= 0 then return false end
+
+    -- 1. Cocok persis
+    if floatingItemID == targetSeedID then return true end
+
+    -- 2. Normalisasi via ensureSeedID
+    local normFloat = ensureSeedID(floatingItemID)
+    local normTarget = ensureSeedID(targetSeedID)
+    if normFloat > 0 and normTarget > 0 and normFloat == normTarget then
+        return true
+    end
+
+    -- 3. Selisih 1 (Block <-> Seed di Growtopia)
+    if math.abs(floatingItemID - targetSeedID) == 1 then
+        return true
+    end
+
+    -- 4. BOREN_ITEM_DB resolusi ganda
+    if BOREN_ITEM_DB and BOREN_ITEM_DB.loaded then
+        local sFloat, _ = BOREN_ITEM_DB:resolveSeedID(floatingItemID)
+        local sTarget, _ = BOREN_ITEM_DB:resolveSeedID(targetSeedID)
+        if sFloat > 0 and sTarget > 0 and sFloat == sTarget then
+            return true
+        end
+    end
+
+    return false
+end
+_G.isMatchingSeedID = isMatchingSeedID
+
+local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
     targetSeedID = math.floor(tonumber(targetSeedID) or 0)
     if targetSeedID <= 0 then return 0 end
 
-    local curBP = getInvCount(targetSeedID)
+    local normTarget = ensureSeedID(targetSeedID)
+    local curBP = math.max(getInvCount(targetSeedID), getInvCount(normTarget))
     local needed = math.max(0, targetAmount - curBP)
     if needed <= 0 then return 0 end
 
+    local allObjs = getUnifiedWorldObjects()
+    if #allObjs == 0 then
+        addLog(string.format("[Storage] Tidak ada objek floating di world saat ini (#objs = 0)."))
+        return 0
+    end
+
     local collected = 0
-    local ok, objs = pcall(getObjsFn)
-    if not ok or type(objs) ~= "table" then return 0 end
+    local matchedCount = 0
 
-    for _, obj in pairs(objs) do
+    for _, obj in ipairs(allObjs) do
         if not STATE.running then break end
-        local objItemID = tonumber(obj and (obj.itemid or obj.itemId or obj.item_id or 0)) or 0
-        if obj and obj.id and objItemID == targetSeedID then
-            local rawX = (obj.pos and obj.pos.x) or obj.posX or obj.x or 0
-            local rawY = (obj.pos and obj.pos.y) or obj.posY or obj.y or 0
-            local ox = math.floor((rawX + 10) / 32)
-            local oy = math.floor((rawY + 10) / 32)
+        if isMatchingSeedID(obj.itemid, targetSeedID) then
+            matchedCount = matchedCount + 1
+            local ox = obj.tileX
+            local oy = obj.tileY
 
-            addLog(string.format("[Storage] Menghampiri seed ID %d di tile (%d, %d)...", targetSeedID, ox, oy))
+            addLog(string.format("[Storage] Menemukan floating seed (ID: %d, UID: %d, Jml: %d) di tile (%d, %d). Menghampiri...",
+                obj.itemid, obj.id, obj.amount, ox, oy))
             moveSafeTo(ox, oy)
             safeSleep(100)
 
-            -- Ambil objek via packet 11
+            -- Ambil objek via packet 11 (Collect Object)
             if sendPacketRaw then
                 pcall(sendPacketRaw, false, {
                     type  = 11,
                     value = obj.id,
-                    x     = rawX,
-                    y     = rawY,
+                    x     = obj.x,
+                    y     = obj.y,
                 })
             end
-            safeSleep(150)
-            collected = collected + (tonumber(obj.amount) or 1)
+            safeSleep(180)
+            collected = collected + obj.amount
             syncInventoryCache()
-            if getInvCount(targetSeedID) >= targetAmount then break end
+
+            local nowBP = math.max(getInvCount(targetSeedID), getInvCount(normTarget))
+            if nowBP >= targetAmount then
+                addLog(string.format("[Storage] Target seed tercapai di tas: %d/%d", nowBP, targetAmount))
+                break
+            end
         end
     end
+
+    if matchedCount == 0 then
+        addLog(string.format("[Storage] Tidak menemukan seed ID %d (atau norm ID %d) di antara %d objek floating.",
+            targetSeedID, normTarget, #allObjs))
+    end
+
     return collected
 end
 
@@ -2194,9 +2585,8 @@ local function restockFromStorage()
             safeSleep(800)
             -- Tunggu hingga objek world termuat di memori
             for _ = 1, 8 do
-                local getObjsFn = getObjects or getObjectList
-                local objs = getObjsFn and getObjsFn()
-                if objs and #objs > 0 then break end
+                local objs = getUnifiedWorldObjects()
+                if #objs > 0 then break end
                 safeSleep(150)
             end
             syncInventoryCache()
@@ -2214,8 +2604,10 @@ local function restockFromStorage()
             end
 
             -- Tunggu toleransi sinkronisasi paket inventori dari server
-            local bp1 = getInvCount(CFG.seed_1_id)
-            local bp2 = CFG.splice_mode and getInvCount(CFG.seed_2_id) or 999
+            local normS1 = ensureSeedID(CFG.seed_1_id)
+            local normS2 = ensureSeedID(CFG.seed_2_id)
+            local bp1 = math.max(getInvCount(CFG.seed_1_id), getInvCount(normS1))
+            local bp2 = CFG.splice_mode and math.max(getInvCount(CFG.seed_2_id), getInvCount(normS2)) or 999
             local hasSeedNow = (not CFG.splice_mode and (bp1 > 0 or c1 > 0))
                             or (CFG.splice_mode and (bp1 > 0 or c1 > 0) and (bp2 > 0 or c2 > 0))
 
@@ -2223,8 +2615,8 @@ local function restockFromStorage()
                 for _ = 1, 5 do
                     safeSleep(200)
                     syncInventoryCache()
-                    bp1 = getInvCount(CFG.seed_1_id)
-                    bp2 = CFG.splice_mode and getInvCount(CFG.seed_2_id) or 999
+                    bp1 = math.max(getInvCount(CFG.seed_1_id), getInvCount(normS1))
+                    bp2 = CFG.splice_mode and math.max(getInvCount(CFG.seed_2_id), getInvCount(normS2)) or 999
                     if (not CFG.splice_mode and bp1 > 0) or (CFG.splice_mode and bp1 > 0 and bp2 > 0) then
                         hasSeedNow = true
                         break
@@ -2233,8 +2625,8 @@ local function restockFromStorage()
             else
                 safeSleep(300)
                 syncInventoryCache()
-                bp1 = getInvCount(CFG.seed_1_id)
-                if CFG.splice_mode then bp2 = getInvCount(CFG.seed_2_id) end
+                bp1 = math.max(getInvCount(CFG.seed_1_id), getInvCount(normS1))
+                if CFG.splice_mode then bp2 = math.max(getInvCount(CFG.seed_2_id), getInvCount(normS2)) end
             end
 
             local canPlantNow = (not CFG.splice_mode and bp1 > 0)
@@ -2974,13 +3366,13 @@ local function autoPlantMainLoop()
     ensureHooksInstalled()
     applyCheatToggles()
 
-    if STATE.buf_seed_1_id and STATE.buf_seed_1_id > 0 then
-        CFG.seed_1_id = ensureSeedID(STATE.buf_seed_1_id)
+    if CFG.seed_1_id and CFG.seed_1_id > 0 then
+        CFG.seed_1_id = ensureSeedID(CFG.seed_1_id)
         CFG.seed_1_name = resolveSeedName(CFG.seed_1_id)
         STATE.buf_seed_1_id = CFG.seed_1_id
     end
-    if CFG.splice_mode and STATE.buf_seed_2_id and STATE.buf_seed_2_id > 0 then
-        CFG.seed_2_id = ensureSeedID(STATE.buf_seed_2_id)
+    if CFG.splice_mode and CFG.seed_2_id and CFG.seed_2_id > 0 then
+        CFG.seed_2_id = ensureSeedID(CFG.seed_2_id)
         CFG.seed_2_name = resolveSeedName(CFG.seed_2_id)
         STATE.buf_seed_2_id = CFG.seed_2_id
     end
@@ -3216,6 +3608,7 @@ local function startBot()
     STATE.blocked_tiles = {}
     STATE.plant_fail_count = {}
     pcall(scanForeignLocksInWorld)
+    pcall(applyCheatToggles)
 
     local function safeMainLoop()
         local ok, err = xpcall(autoPlantMainLoop, function(e)
@@ -3273,192 +3666,390 @@ local function safeSendRawDialog(dText)
     return false
 end
 
-openWorldListManagerDialog = function(fmt)
-    fmt = fmt or "colon"
+-- ============================================================================
+-- 19. DIALOG BUILDERS & UNIFIED DIALOG MANAGEMENT
+-- PURE IN-GAME DIALOG (IMAGE 3 ACCENTS: WHITE FONT, NEON BADGES, NO AMBIGUITY)
+-- ============================================================================
 
-    local copyLines = {}
-    for _, e in ipairs(CFG.world_list) do
-        local door = e.door or ""
-        if fmt == "colon" then
-            table.insert(copyLines, (door ~= "") and (e.name .. ":" .. door) or e.name)
-        elseif fmt == "pipe" then
-            table.insert(copyLines, (door ~= "") and (e.name .. "|" .. door) or e.name)
-        else
-            table.insert(copyLines, e.name)
-        end
-    end
-    local rawCopy = table.concat(copyLines, "\n")
-    local rawBoxText = table.concat(copyLines, ", ")
-    if ImGui and ImGui.SetClipboardText and rawCopy ~= "" then
-        pcall(ImGui.SetClipboardText, rawCopy)
-    end
+-- Forward bindings to ensure all functions are in global and local scope
+_G.showPlantMainDialog = function() if showPlantMainDialog then showPlantMainDialog() end end
+_G.showPlantQueueDialog = function() if showPlantQueueDialog then showPlantQueueDialog() end end
+_G.showPlantStorageDialog = function() if showPlantStorageDialog then showPlantStorageDialog() end end
+_G.showPlantSeedsDialog = function() if showPlantSeedsDialog then showPlantSeedsDialog() end end
+_G.showPlantSettingsDialog = function() if showPlantSettingsDialog then showPlantSettingsDialog() end end
+_G.showPlantPacingDialog = function() if showPlantPacingDialog then showPlantPacingDialog() end end
+_G.showPlantLogsDialog = function() if showPlantLogsDialog then showPlantLogsDialog() end end
+_G.showPlantAddCurrentWorldDialog = function(cw) if showPlantAddCurrentWorldDialog then showPlantAddCurrentWorldDialog(cw) end end
 
-    local dLines = {
+-- 1. QUEUE MANAGER DIALOG (LIST AT TOP, NO AMBIGUOUS WORDS, WHITE TEXT, NEON BADGES)
+showPlantQueueDialog = function()
+    local totalWorlds = #CFG.world_list
+    local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`wKelola, Salin & Tempel World (%d)``|left|2|", #CFG.world_list),
-        "add_textbox|`oDi sini Anda bisa salin antrean, tempel banyak world baru, dan edit/hapus world.|left|",
+        string.format("add_label_with_icon|big|`wKelola Antrean Farm World``|left|2|"),
         "add_spacer|small|",
-
-        -- Bagian 1: Salin Semua World
-        "add_textbox|`2[1. Salin Semua World Farm ke Clipboard]|left|",
-        string.format("add_text_input|boren_wcopy_box|Salin Antrean|%s|9999|", rawBoxText),
-        "add_button|boren_btn_wfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_wfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_wfmt_name|Hanya Nama World|noflags|0|0|",
+        "add_textbox|`p[ Catatan: `bDaftar antrean farm world yang akan ditanam bot `p]|left|",
         "add_spacer|small|",
+        string.format("add_textbox|`p[ `wDaftar Antrean Saat Ini (Total: %d World) `p]|left|", totalWorlds)
+    }
 
-        -- Bagian 2: Tempel Banyak / Tambah World
-        "add_textbox|`2[2. Tempel / Tambah World ke Antrean]|left|",
-        "add_textbox|`eTempel 1 atau banyak world (Format: WORLD:ID / WORLD|ID / WORLD). Bebas koma, spasi, enter.|left|",
-        "add_text_input|boren_wpaste_raw|Tempel World di sini:||9999|",
-        "add_checkbox|boren_wpaste_replace|Ganti semua antrean (Replace)|0|",
-        "add_button|boren_submit_wpaste|`2+ Tempel / Tambah ke Antrean|noflags|0|0|",
+    -- DAFTAR WORLD DI ATAS (SEBELUM FORM INPUT)
+    if totalWorlds == 0 then
+        lines[#lines + 1] = "add_textbox|`w(Antrean masih kosong. Tambahkan world baru pada form di bawah)|left|"
+    else
+        for idx, w in ipairs(CFG.world_list) do
+            local dStr = (w.door and w.door ~= "") and (":" .. w.door) or ""
+            local isAct = (idx == STATE.active_world_idx and STATE.running)
+            local stBadge = isAct and "`b[AKTIF]" or (w.done and "`p[SELESAI]" or "`2[SIAP]")
+            lines[#lines + 1] = string.format("add_textbox|`b⦿ `w#%d. `w%s%s %s|left|", idx, w.name, dStr, stBadge)
+            lines[#lines + 1] = string.format("add_button|queue_del_%d|`4[ 🗑️ Hapus #%d ]|noflags|0|0|", idx, idx)
+        end
+    end
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- FORM TAMBAH WORLD KE ANTREAN (KATA JELAS, BUKAN TEMPEL)
+    lines[#lines + 1] = "add_textbox|`p[ `wTambah World ke Antrean `p]|left|"
+    lines[#lines + 1] = "add_smalltext|`p* `bFormat: `wKetik WORLD atau WORLD:DOOR|left|"
+    lines[#lines + 1] = "add_text_input|in_new_world|Nama World:||24|"
+    lines[#lines + 1] = "add_text_input|in_new_door|Door ID (Opsional):||12|"
+    lines[#lines + 1] = "add_button|btn_add_world_entry|`2[ ➕ ] Tambah World ke Antrean|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- TAMBAH BANYAK WORLD SEKALIGUS (BATCH)
+    lines[#lines + 1] = "add_textbox|`p[ `wTambah Banyak World Sekaligus `p]|left|"
+    lines[#lines + 1] = "add_smalltext|`p* `bPisahkan dengan spasi atau koma (contoh: FARM1:DOOR FARM2):|left|"
+    lines[#lines + 1] = "add_text_input|in_batch_worlds|Daftar World:||30|"
+    lines[#lines + 1] = "add_button|btn_add_batch_worlds|`2[ ➕ ] Tambah Banyak World|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- TOMBOL KONTROL & FILE
+    lines[#lines + 1] = "add_button|btn_queue_reset_all|`b[ 🔄 ] Reset Status Semua World ke Siap|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_queue_clear_all|`4[ 🗑️ ] Kosongkan Seluruh Antrean|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_queue_save_file|`w[ 💾 ] Simpan Antrean ke File txt|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_queue_load_file|`w[ 📂 ] Muat Antrean dari File txt|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- TOMBOL KEMBALI KE MENU UTAMA (FIX BUG 1)
+    lines[#lines + 1] = "add_button|btn_back_main|`p[ ↩ ] Kembali ke Menu Utama /plant|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_queue|Tutup||"
+
+    showClientDialog(table.concat(lines, "\n"))
+end
+openWorldListManagerDialog = showPlantQueueDialog
+
+-- 2. STORAGE MANAGER DIALOG (LIST AT TOP, NO AMBIGUOUS WORDS, WHITE TEXT, NEON BADGES)
+showPlantStorageDialog = function()
+    local totalStorages = #CFG.storage_world_list
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        string.format("add_label_with_icon|big|`wKelola Gudang Seed Vault``|left|3802|"),
         "add_spacer|small|",
+        "add_textbox|`p[ Catatan: `bGudang penyimpanan untuk restock otomatis bibit `p]|left|",
+        "add_spacer|small|",
+        string.format("add_textbox|`p[ `wDaftar Gudang Seed (Total: %d Gudang) `p]|left|", totalStorages)
+    }
 
-        -- Bagian 3: Daftar World & Aksi Edit/Hapus
-        string.format("add_textbox|`2[3. Daftar Antrean Saat Ini (%d World)]|left|", #CFG.world_list),
-        "add_button|boren_btn_wreset_all|`2🔄 Reset Semua Status World (Tanam Ulang)|noflags|0|0|",
+    -- DAFTAR GUDANG DI ATAS
+    if totalStorages == 0 then
+        lines[#lines + 1] = "add_textbox|`w(Belum ada gudang seed. Tambahkan gudang pada form di bawah)|left|"
+    else
+        for idx, s in ipairs(CFG.storage_world_list) do
+            local dStr = (s.door and s.door ~= "") and (":" .. s.door) or ""
+            local isAct = (idx == STATE.active_storage_idx)
+            local stBadge = isAct and "`b[AKTIF RESTOCK]" or "`p[VAULT]"
+            lines[#lines + 1] = string.format("add_textbox|`b⦿ `w#%d. `w%s%s %s|left|", idx, s.name, dStr, stBadge)
+            lines[#lines + 1] = string.format("add_button|stor_del_%d|`4[ 🗑️ Hapus #%d ]|noflags|0|0|", idx, idx)
+        end
+    end
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- FORM TAMBAH GUDANG SEED BARU
+    lines[#lines + 1] = "add_textbox|`p[ `wTambah Gudang Seed Baru `p]|left|"
+    lines[#lines + 1] = "add_smalltext|`p* `bKetik nama world gudang & Door ID:|left|"
+    lines[#lines + 1] = "add_text_input|in_new_stor_world|Nama World Gudang:||24|"
+    lines[#lines + 1] = "add_text_input|in_new_stor_door|Door ID:||12|"
+    lines[#lines + 1] = "add_button|btn_add_stor_entry|`2[ ➕ ] Tambah Gudang Seed|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- PENGATURAN THRESHOLD BENIH DI TAS
+    lines[#lines + 1] = "add_textbox|`p[ `wBatas Pengambilan Seed di Tas `p]|left|"
+    lines[#lines + 1] = string.format("add_text_input|in_min_bp|Ambil saat seed di tas sisa:|%d|5|", tonumber(CFG.min_seed_bp) or 20)
+    lines[#lines + 1] = string.format("add_text_input|in_tar_bp|Target isi seed ke dalam tas:|%d|5|", tonumber(CFG.target_seed_bp) or 190)
+    lines[#lines + 1] = "add_button|btn_save_stor_thresh|`2[ ✔ ] Simpan Batas Pengambilan Tas|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- FILE & KONTROL
+    lines[#lines + 1] = "add_button|btn_stor_save_file|`w[ 💾 ] Simpan Daftar Gudang ke File txt|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_stor_load_file|`w[ 📂 ] Muat Daftar Gudang dari File txt|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_stor_clear_all|`4[ 🗑️ ] Kosongkan Seluruh Gudang|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- TOMBOL KEMBALI KE MENU UTAMA
+    lines[#lines + 1] = "add_button|btn_back_main|`p[ ↩ ] Kembali ke Menu Utama /plant|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_storage|Tutup||"
+
+    showClientDialog(table.concat(lines, "\n"))
+end
+openStorageListManagerDialog = showPlantStorageDialog
+
+-- 3. SEARCH ITEM DATABASE SUB-DIALOG
+showPlantItemSearchDialog = function(query, results)
+    query = query or ""
+    results = results or {}
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wDatabase Item Growtopia (16K)``|left|4585|",
+        "add_spacer|small|",
+        "add_textbox|`p[ Catatan: `bCari nama atau ID item untuk memilih benih `p]|left|",
+        "add_spacer|small|",
+        string.format("add_text_input|in_search_q|Nama atau ID Item:|%s|16|", query),
+        "add_button|btn_do_search|`b[ 🔍 ] Cari di Database|noflags|0|0|",
         "add_spacer|small|"
     }
 
-    if #CFG.world_list == 0 then
-        table.insert(dLines, "add_textbox|`4(Antrean World Farm masih kosong. Silakan tempel di atas!)|left|")
-    else
-        for i, e in ipairs(CFG.world_list) do
-            local st = getWorldEntryStatusTag(e)
-            local d = (e.door and e.door ~= "") and e.door or "-"
-            table.insert(dLines, string.format("add_textbox|`w%d. `9%s `o[Door: %s] `2[%s]|left|", i, e.name, d, st))
-            table.insert(dLines, string.format("add_button|boren_wreset_%d|Reset Status|noflags|0|0|", i))
-            table.insert(dLines, string.format("add_button|boren_wedit_%d|Edit|noflags|0|0|", i))
-            table.insert(dLines, string.format("add_button|boren_whapus_%d|Hapus|noflags|0|0|", i))
-            table.insert(dLines, "add_spacer|small|")
+    if #results > 0 then
+        lines[#lines + 1] = string.format("add_textbox|`p[ `wHasil Pencarian (%d Item Ditemukan) `p]|left|", #results)
+        for i, it in ipairs(results) do
+            local seedID, seedName = BOREN_ITEM_DB:resolveSeedID(it.id)
+            if seedID <= 0 then seedID = (it.id % 2 == 0) and (it.id + 1) or it.id end
+            local sName = (seedName ~= "") and seedName or BOREN_ITEM_DB:resolveName(seedID)
+            lines[#lines + 1] = string.format("add_textbox|`b⦿ `w%d. %s `p(#%d) `w-> Seed `b#%d (%s)|left|", i, it.name, it.id, seedID, sName)
+            lines[#lines + 1] = string.format("add_button|use_s1_%d|`2[ Jadikan Seed 1 (#%d) ]|noflags|0|0|", seedID, seedID)
+            lines[#lines + 1] = string.format("add_button|use_s2_%d|`p[ Jadikan Seed 2 (#%d) ]|noflags|0|0|", seedID, seedID)
+            lines[#lines + 1] = "add_spacer|small|"
         end
+    elseif query ~= "" then
+        lines[#lines + 1] = string.format("add_textbox|`4Tidak ditemukan item dengan kata kunci '%s'.|left|", query)
+        lines[#lines + 1] = "add_spacer|small|"
     end
 
-    table.insert(dLines, "end_dialog|boren_plant_world_mgr|Tutup||")
-    return safeSendRawDialog(table.concat(dLines, "\n"))
+    lines[#lines + 1] = "add_button|btn_back_seeds|`b[ 🌱 ] Kembali ke Pilihan Benih|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_main|`p[ ↩ ] Kembali ke Menu Utama /plant|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_search_db|Tutup||"
+    showClientDialog(table.concat(lines, "\n"))
 end
 
-openStorageListManagerDialog = function(fmt)
-    fmt = fmt or "colon"
-
-    local copyLines = {}
-    for _, e in ipairs(CFG.storage_world_list) do
-        local door = e.door or ""
-        if fmt == "colon" then
-            table.insert(copyLines, (door ~= "") and (e.name .. ":" .. door) or e.name)
-        elseif fmt == "pipe" then
-            table.insert(copyLines, (door ~= "") and (e.name .. "|" .. door) or e.name)
-        else
-            table.insert(copyLines, e.name)
-        end
+-- 4. ADD CURRENT WORLD SUB-DIALOG
+showPlantAddCurrentWorldDialog = function(currentWorld)
+    currentWorld = tostring(currentWorld or getCurrentWorldSafe() or ""):upper()
+    if currentWorld == "" or currentWorld == "EXIT" then
+        currentWorld = "MYWORLD"
     end
-    local rawCopy = table.concat(copyLines, "\n")
-    local rawBoxText = table.concat(copyLines, ", ")
-    if ImGui and ImGui.SetClipboardText and rawCopy ~= "" then
-        pcall(ImGui.SetClipboardText, rawCopy)
-    end
+    local s1Display = (CFG.seed_1_id and CFG.seed_1_id > 0) and tostring(CFG.seed_1_id) or "17"
+    local s2Display = (CFG.seed_2_id and CFG.seed_2_id > 0) and tostring(CFG.seed_2_id) or ""
+    local isSplice = CFG.splice_mode and 1 or 0
 
-    local dLines = {
+    local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`wKelola, Salin & Tempel Gudang (%d)``|left|242|", #CFG.storage_world_list),
-        "add_textbox|`oDi sini Anda bisa salin daftar gudang, tempel banyak gudang baru, dan edit/hapus gudang.|left|",
+        "add_label_with_icon|big|`wTambah World Saat Ini``|left|2|",
         "add_spacer|small|",
-
-        -- Bagian 1: Salin Semua Gudang
-        "add_textbox|`2[1. Salin Semua Gudang Seed ke Clipboard]|left|",
-        string.format("add_text_input|boren_stcopy_box|Salin Gudang|%s|9999|", rawBoxText),
-        "add_button|boren_btn_stfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_stfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_stfmt_name|Hanya Nama Gudang|noflags|0|0|",
+        string.format("add_textbox|`p[ Catatan: `bTambah world `w%s`b ke antrean tanam `p]|left|", currentWorld),
         "add_spacer|small|",
-
-        -- Bagian 2: Tempel Banyak / Tambah Gudang
-        "add_textbox|`2[2. Tempel / Tambah Gudang Seed ke Antrean]|left|",
-        "add_textbox|`eTempel 1 atau banyak gudang (Format: WORLD:ID / WORLD|ID / WORLD). Bebas koma, spasi, enter.|left|",
-        "add_text_input|boren_stpaste_raw|Tempel Gudang di sini:||9999|",
-        "add_checkbox|boren_stpaste_replace|Ganti semua gudang (Replace)|0|",
-        "add_button|boren_submit_stpaste|`2+ Tempel / Tambah ke Antrean|noflags|0|0|",
+        string.format("add_text_input|in_cur_world|Nama World:|%s|16|", currentWorld),
+        "add_text_input|in_cur_door|Door ID (Opsional):||12|",
+        string.format("add_text_input|in_cur_s1|ID Seed 1:|%s|16|", s1Display),
+        string.format("add_text_input|in_cur_s2|ID Seed 2 (Splice):|%s|16|", s2Display),
+        string.format("add_checkbox|chk_cur_splice|`b⦿ `wMode Kawin Benih (Splice)|%d|", isSplice),
         "add_spacer|small|",
+        "add_button|btn_submit_cur_world|`2[ ➕ ] Tambahkan World ke Antrean|noflags|0|0|",
+        "add_button|btn_back_main|`4[ ✕ ] Batal & Kembali|noflags|0|0|",
+        "end_dialog|plant_add_curr|Batal||"
+    }
+    return showClientDialog(table.concat(lines, "\n"))
+end
 
-        -- Bagian 3: Daftar Gudang & Aksi Edit/Hapus
-        string.format("add_textbox|`2[3. Daftar Antrean Gudang (%d Gudang)]|left|", #CFG.storage_world_list)
+-- 5. MAIN DASHBOARD DIALOG (/plant) - WHITE FONT, NEON BADGES, DETAIL ICONS
+showPlantMainDialog = function()
+    local isRun = (STATE.running == true)
+    local curW = getCurrentWorldSafe()
+    if curW == "" then curW = "EXIT" end
+
+    -- Load Database item jika belum
+    if not BOREN_ITEM_DB.loaded then
+        pcall(function() BOREN_ITEM_DB:load() end)
+    end
+
+    local s1ID = tonumber(CFG.seed_1_id) or 17
+    local s2ID = tonumber(CFG.seed_2_id) or 0
+    local s1Name = getItemNameSafe(s1ID)
+    if s1Name == "" or s1Name:find("Unknown") then s1Name = resolveSeedName(s1ID) end
+    local s2Name = (s2ID > 0) and getItemNameSafe(s2ID) or "NONAKTIF"
+    if s2ID > 0 and (s2Name == "" or s2Name:find("Unknown")) then s2Name = resolveSeedName(s2ID) end
+    local s1Count = getInvCount(s1ID)
+
+    -- Ikon Header: Gunakan Tree/Block ID (misal Pepper Tree 4584) atau Seed ID
+    local headerIcon = (s1ID > 1 and s1ID % 2 == 1) and (s1ID - 1) or s1ID
+    if headerIcon <= 0 then headerIcon = 4584 end
+
+    local spliceTag = CFG.splice_mode and string.format(" `p+ `wSplice `b#%d", s2ID) or ""
+    local stBadge = isRun and "`b[AKTIF BERJALAN]" or "`4[BERHENTI / IDLE]"
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        string.format("add_label_with_icon|big|`wBoren Auto Plant Pro``|left|%d|", headerIcon),
+        "add_spacer|small|",
+        "add_textbox|`p[ Catatan: `bOtomasi Tanam & Splice Cepat Presisi Tinggi `p]|left|",
+        "add_spacer|small|",
+        string.format("add_textbox|`wStatus: %s `p• `wWorld: `b%s `p• `wTas: `b%d `wseed|left|", stBadge, curW, s1Count),
+        string.format("add_textbox|`wBenih Aktif: `b#%d (%s)%s|left|", s1ID, s1Name, spliceTag),
+        string.format("add_textbox|`wStatistik: `b%d `wPohon Ditanam `p• `b%d `wSplice Berhasil|left|", STATE.trees_planted or 0, STATE.trees_spliced or 0),
+        "add_spacer|small|",
     }
 
-    if #CFG.storage_world_list == 0 then
-        table.insert(dLines, "add_textbox|`4(Daftar Gudang Seed masih kosong. Silakan tempel di atas!)|left|")
+    -- Tombol Utama Kontrol Bot
+    if not isRun then
+        lines[#lines + 1] = "add_button|btn_start_bot|`2[ ▶ ] MULAI BOT AUTO PLANT|noflags|0|0|"
     else
-        for i, e in ipairs(CFG.storage_world_list) do
-            local d = (e.door and e.door ~= "") and e.door or "-"
-            local act = (i == STATE.active_storage_idx) and " `2[AKTIF]" or ""
-            table.insert(dLines, string.format("add_textbox|`w%d. `9%s `o[Door: %s]%s|left|", i, e.name, d, act))
-            table.insert(dLines, string.format("add_button|boren_stedit_%d|Edit|noflags|0|0|", i))
-            table.insert(dLines, string.format("add_button|boren_sthapus_%d|Hapus|noflags|0|0|", i))
-            table.insert(dLines, "add_spacer|small|")
+        lines[#lines + 1] = "add_button|btn_stop_bot|`4[ ■ ] HENTIKAN BOT AUTO PLANT|noflags|0|0|"
+    end
+    lines[#lines + 1] = "add_button|btn_sync_curr|`b[ ➕ ] Tambah World Saat Ini|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+
+    -- Menu Navigasi Rapi & Vertikal Sesuai Contoh Gambar
+    lines[#lines + 1] = string.format("add_button|btn_menu_queue|`b⦿ `w[ 📋 ] Kelola Antrean Farm World (%d)|noflags|0|0|", #CFG.world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_storage|`b⦿ `w[ 📦 ] Kelola Gudang Seed Vault (%d)|noflags|0|0|", #CFG.storage_world_list)
+    lines[#lines + 1] = "add_button|btn_menu_seeds|`b⦿ `w[ 🌱 ] Pengaturan Benih & Splice|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_menu_settings|`b⦿ `w[ ⚙️ ] Fitur & Cheat Shield (ModFly)|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_menu_pacing|`b⦿ `w[ ⚡ ] Kecepatan & Delay Bot|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_menu_logs|`b⦿ `w[ 📜 ] Catatan Log Aktivitas Bot|noflags|0|0|"
+    lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_button|btn_close_menu|`4[ ✕ ] Tutup Menu Dialog|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_main|Tutup||"
+
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 6. SETTINGS & CHEAT SHIELD SUB-DIALOG (CLEAN & SHORT LABELS, NEON BADGES)
+showPlantSettingsDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wFitur Bot & Cheat Shield``|left|32|",
+        "add_spacer|small|",
+        "add_textbox|`p[ Catatan: `bAktifkan proteksi pergerakan dan mode kerja bot `p]|left|",
+        "add_spacer|small|",
+        string.format("add_checkbox|chk_modfly|`b⦿ `wModFly (Terbang Bebas Tembus Rintangan)|%d|", CFG.use_modfly and 1 or 0),
+        string.format("add_checkbox|chk_antilava|`b⦿ `wAnti-Lava & Anti-Bounce Shield|%d|", CFG.anti_lava and 1 or 0),
+        string.format("add_checkbox|chk_mode3|`b⦿ `wMode 3-Petak (3zigzag Cepat)|%d|", (CFG.plant_mode == "3zigzag") and 1 or 0),
+        string.format("add_checkbox|chk_splice|`p⦿ `wKawin Benih (Mode Splice 2 Seed)|%d|", CFG.splice_mode and 1 or 0),
+        string.format("add_checkbox|chk_reconnect|`b⦿ `wAuto Reconnect Saat Terputus|%d|", CFG.auto_reconnect and 1 or 0),
+        string.format("add_checkbox|chk_ignoregems|`b⦿ `wAbaikan Gems di Tas|%d|", CFG.ignore_gems and 1 or 0),
+        string.format("add_checkbox|chk_shield|`b⦿ `wTouch Shield (Anti-Punch Dialog)|%d|", (UI_STATE.touch_shield ~= false) and 1 or 0),
+        "add_spacer|small|",
+        "add_button|btn_save_settings|`2[ ✔ ] Simpan & Terapkan Pengaturan|noflags|0|0|",
+        "add_button|btn_back_main|`p[ ↩ ] Kembali ke Menu Utama /plant|noflags|0|0|",
+        "end_dialog|plant_settings|Batal||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 7. SEEDS & SPLICE SUB-DIALOG (FIX BUG 2: PROPER ID PERSISTENCE)
+showPlantSeedsDialog = function()
+    local s1ID = tonumber(CFG.seed_1_id) or 17
+    local s2ID = tonumber(CFG.seed_2_id) or 0
+    local s1Name = getItemNameSafe(s1ID)
+    if s1Name == "" or s1Name:find("Unknown") then s1Name = resolveSeedName(s1ID) end
+    local s2Name = (s2ID > 0) and getItemNameSafe(s2ID) or "NONAKTIF"
+    if s2ID > 0 and (s2Name == "" or s2Name:find("Unknown")) then s2Name = resolveSeedName(s2ID) end
+    local s1Count = getInvCount(s1ID)
+    local s2Count = getInvCount(s2ID)
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wPengaturan Benih & Splice``|left|4585|",
+        "add_spacer|small|",
+        "add_textbox|`p[ Catatan: `bTentukan jenis benih yang akan ditanam atau dikawin `p]|left|",
+        "add_spacer|small|",
+        string.format("add_textbox|`b⦿ `wBenih Utama (Seed 1): `b#%d (%s) `p• `wDi Tas: `b%d `wbibit|left|", s1ID, s1Name, s1Count),
+        string.format("add_textbox|`p⦿ `wBenih Kawin (Seed 2): `p#%d (%s) `p• `wDi Tas: `p%d `wbibit|left|", s2ID, s2Name, s2Count),
+        "add_spacer|small|",
+        "add_textbox|`wKetik ID atau Nama benih (contoh: Pepper Seed atau 4585 atau 17):|left|",
+        string.format("add_text_input|in_seed1|ID/Nama Seed 1:|%s|16|", tostring(s1ID)),
+        string.format("add_text_input|in_seed2|ID/Nama Seed 2 (Splice):|%s|16|", (s2ID > 0) and tostring(s2ID) or ""),
+        "add_button|btn_apply_seeds|`2[ ✔ ] Simpan & Terapkan Benih|noflags|0|0|",
+        "add_spacer|small|",
+        "add_button|btn_open_search_item|`b[ 🔍 ] Cari di Database Item (16K Item)|noflags|0|0|",
+        "add_button|btn_back_main|`p[ ↩ ] Kembali ke Menu Utama /plant|noflags|0|0|",
+        "end_dialog|plant_seeds|Batal||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 8. PACING SUB-DIALOG
+showPlantPacingDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wKecepatan & Delay Bot``|left|1422|",
+        "add_spacer|small|",
+        "add_textbox|`p[ Catatan: `bSesuaikan kecepatan langkah dan jeda penanaman bot `p]|left|",
+        "add_spacer|small|",
+        "add_button|preset_speed_fast|`b⦿ `w[ ⚡ ] Profil Agresif (120ms Plant / 85ms Step)|noflags|0|0|",
+        "add_button|preset_speed_norm|`2⦿ `w[ ⭐ ] Profil Standar (180ms Plant / 110ms Step)|noflags|0|0|",
+        "add_button|preset_speed_safe|`p⦿ `w[ 🛡️ ] Profil Aman Anti-Lag (250ms Plant / 140ms Step)|noflags|0|0|",
+        "add_spacer|small|",
+        "add_textbox|`p[ `wPengaturan Jeda Kustom (milidetik) `p]|left|",
+        string.format("add_text_input|in_plant_delay|Plant Delay (ms):|%d|5|", CFG.plant_delay or 180),
+        string.format("add_text_input|in_splice_delay|Splice Delay (ms):|%d|5|", CFG.splice_delay or 160),
+        string.format("add_text_input|in_step_delay|Step Delay (ms):|%d|5|", CFG.step_delay or 110),
+        string.format("add_text_input|in_warp_delay|Warp Delay (ms):|%d|5|", CFG.warp_delay or 3500),
+        "add_spacer|small|",
+        "add_button|btn_save_pacing|`2[ ✔ ] Simpan Jeda Kustom|noflags|0|0|",
+        "add_button|btn_back_main|`p[ ↩ ] Kembali ke Menu Utama /plant|noflags|0|0|",
+        "end_dialog|plant_pacing|Batal||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+-- 9. LOGS SUB-DIALOG
+showPlantLogsDialog = function()
+    local curLogs = STATE.logs or {}
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wCatatan Log Aktivitas Bot``|left|1422|",
+        "add_spacer|small|",
+        string.format("add_textbox|`p[ Catatan: `bRiwayat 8 aktivitas terakhir bot (Total: %d) `p]|left|", #curLogs),
+        "add_spacer|small|"
+    }
+
+    local startIdx = math.max(1, #curLogs - 7)
+    if #curLogs == 0 then
+        lines[#lines + 1] = "add_textbox|`wBelum ada aktivitas tercatat.|left|"
+    else
+        for i = #curLogs, startIdx, -1 do
+            local l = tostring(curLogs[i])
+            local col = "`w"
+            if l:find("Err") or l:find("Gagal") then col = "`4"
+            elseif l:find("Berhasil") or l:find("Siap") or l:find("Dispatch") or l:find("Sukses") then col = "`2"
+            elseif l:find("Warp") or l:find("Tanam") or l:find("Plant") then col = "`b"
+            end
+            lines[#lines + 1] = string.format("add_textbox|`b⦿ %s%s|left|", col, l:gsub("|", "/"))
         end
     end
 
-    table.insert(dLines, "end_dialog|boren_plant_stor_mgr|Tutup||")
-    return safeSendRawDialog(table.concat(dLines, "\n"))
+    lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_button|btn_logs_clear|`4[ 🗑️ ] Bersihkan Catatan Log|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_logs_refresh|`b[ 🔄 ] Refresh Catatan Log|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_main|`p[ ↩ ] Kembali ke Menu Utama /plant|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_logs|Tutup||"
+    showClientDialog(table.concat(lines, "\n"))
 end
 
-openEditWorldEntryDialog = function(idx)
-    idx = tonumber(idx) or 0
-    local e = CFG.world_list[idx]
-    if not e then return false end
-    local dLines = {
-        "set_default_color|`o",
-        string.format("add_label_with_icon|big|`wEdit World Farm #%d``|left|2|", idx),
-        "add_textbox|`oUbah nama world atau Door ID di bawah ini:|left|",
-        "add_spacer|small|",
-        string.format("add_text_input|boren_ed_wname|Nama World|%s|32|", e.name or ""),
-        string.format("add_text_input|boren_ed_wdoor|Door ID (Kosong = White Door)|%s|32|", e.door or ""),
-        "add_spacer|small|",
-        string.format("add_button|boren_save_wedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
-        "end_dialog|boren_edit_w_dlg|Batal||"
-    }
-    return safeSendRawDialog(table.concat(dLines, "\n"))
-end
+-- ============================================================================
+-- 20. DIALOG PACKET HANDLER (action|dialog_return)
+-- 100% BULLETPROOF ROUTING: NO SILENT CLOSES, INSTANT BACK NAVIGATION
+-- ============================================================================
+local function handleDialogReturn(pkt)
+    if not pkt or type(pkt) ~= "string" then return false end
 
-openEditStorageEntryDialog = function(idx)
-    idx = tonumber(idx) or 0
-    local e = CFG.storage_world_list[idx]
-    if not e then return false end
-    local dLines = {
-        "set_default_color|`o",
-        string.format("add_label_with_icon|big|`wEdit Gudang Seed #%d``|left|242|", idx),
-        "add_textbox|`oUbah nama gudang atau Door ID di bawah ini:|left|",
-        "add_spacer|small|",
-        string.format("add_text_input|boren_ed_sname|Nama Gudang|%s|32|", e.name or ""),
-        string.format("add_text_input|boren_ed_sdoor|Door ID (Kosong = White Door)|%s|32|", e.door or ""),
-        "add_spacer|small|",
-        string.format("add_button|boren_save_stedit_%d|`2Simpan Perubahan|noflags|0|0|", idx),
-        "end_dialog|boren_edit_s_dlg|Batal||"
-    }
-    return safeSendRawDialog(table.concat(dLines, "\n"))
-end
-
-openPasteWorldListDialog = function(isStorage)
-    if isStorage then
-        return openStorageListManagerDialog()
-    else
-        return openWorldListManagerDialog()
-    end
-end
-
-openCopyAllWorldsDialog = function(isStorage, fmt)
-    if isStorage then
-        return openStorageListManagerDialog(fmt)
-    else
-        return openWorldListManagerDialog(fmt)
-    end
-end
-
--- Hook dialog return untuk memproses submit Quick Paste & Copy Format & Edit/Hapus
-local function onSendPacketDialogHook(ptype, pkt)
-    if type(pkt) ~= "string" or not pkt:find("action|dialog_return", 1, true) then return false end
+    -- Helper untuk parsing fields secara aman
     local fields = {}
     for line in pkt:gmatch("[^\r\n]+") do
         local k, v = line:match("^([^|]+)|(.*)$")
@@ -3467,8 +4058,72 @@ local function onSendPacketDialogHook(ptype, pkt)
     local dName = fields.dialog_name or ""
     local btn = fields.buttonClicked or ""
 
-    if dName == "boren_plant_world_mgr" or dName == "boren_paste_farm_mgr" or dName == "boren_copy_farm_mgr" then
-        if btn == "boren_btn_wreset_all" then
+    -- A. MAIN DASHBOARD DIALOG (/plant)
+    if dName == "plant_main" or pkt:find("dialog_name|plant_main") then
+        if btn == "btn_start_bot" or pkt:find("buttonClicked|btn_start_bot") then
+            startBot()
+            showPlantMainDialog()
+            return true
+        elseif btn == "btn_stop_bot" or pkt:find("buttonClicked|btn_stop_bot") then
+            stopBot()
+            showPlantMainDialog()
+            return true
+        elseif btn == "btn_sync_curr" or pkt:find("buttonClicked|btn_sync_curr") then
+            local cw = getCurrentWorldSafe()
+            showPlantAddCurrentWorldDialog(cw)
+            return true
+        elseif btn == "btn_menu_queue" or pkt:find("buttonClicked|btn_menu_queue") then
+            showPlantQueueDialog()
+            return true
+        elseif btn == "btn_menu_storage" or pkt:find("buttonClicked|btn_menu_storage") then
+            showPlantStorageDialog()
+            return true
+        elseif btn == "btn_menu_seeds" or pkt:find("buttonClicked|btn_menu_seeds") then
+            showPlantSeedsDialog()
+            return true
+        elseif btn == "btn_menu_settings" or pkt:find("buttonClicked|btn_menu_settings") then
+            showPlantSettingsDialog()
+            return true
+        elseif btn == "btn_menu_pacing" or pkt:find("buttonClicked|btn_menu_pacing") then
+            showPlantPacingDialog()
+            return true
+        elseif btn == "btn_menu_logs" or pkt:find("buttonClicked|btn_menu_logs") then
+            showPlantLogsDialog()
+            return true
+        elseif btn == "btn_close_menu" or pkt:find("buttonClicked|btn_close_menu") then
+            return true
+        end
+        return true
+
+    -- B. QUEUE MANAGER DIALOG (FIX BUG 1: SAFE RETURN TO /plant)
+    elseif dName == "plant_queue" or dName == "boren_plant_world_mgr" or pkt:find("dialog_name|plant_queue") or pkt:find("dialog_name|boren_plant_world_mgr") then
+        if btn == "btn_back_main" or btn == "boren_btn_back_main" or pkt:find("buttonClicked|btn_back_main") or pkt:find("buttonClicked|boren_btn_back_main") then
+            showPlantMainDialog()
+            return true
+        elseif btn == "btn_add_world_entry" or pkt:find("buttonClicked|btn_add_world_entry") then
+            local wName = fields.in_new_world or pkt:match("in_new_world|([^|\r\n]+)") or ""
+            local dId = fields.in_new_door or pkt:match("in_new_door|([^|\r\n]+)") or ""
+            wName = wName:gsub("^%s+", ""):gsub("%s+$", ""):upper()
+            dId = dId:gsub("^%s+", ""):gsub("%s+$", "")
+            if wName ~= "" then
+                local token = (dId ~= "") and (wName .. ":" .. dId) or wName
+                local added, _, _, summary = parseAndValidateWorldBatch(token, false)
+                addLog(string.format("[+ World] %s ditambahkan ke antrean.", token))
+                if sendNotification then pcall(sendNotification, "World " .. token .. " ditambahkan!") end
+            end
+            showPlantQueueDialog()
+            return true
+        elseif btn == "btn_add_batch_worlds" or pkt:find("buttonClicked|btn_add_batch_worlds") then
+            local batchRaw = fields.in_batch_worlds or pkt:match("in_batch_worlds|([^|\r\n]+)") or ""
+            batchRaw = batchRaw:gsub("^%s+", ""):gsub("%s+$", "")
+            if batchRaw ~= "" then
+                local added, _, _, summary = parseAndValidateWorldBatch(batchRaw, false)
+                addLog("[+ Batch] " .. summary)
+                if sendNotification then pcall(sendNotification, summary) end
+            end
+            showPlantQueueDialog()
+            return true
+        elseif btn == "btn_queue_reset_all" or btn == "boren_btn_wreset_all" or pkt:find("buttonClicked|btn_queue_reset_all") then
             for _, w in ipairs(CFG.world_list) do
                 w.done = false
                 w.status = "ANTRI"
@@ -3476,160 +4131,347 @@ local function onSendPacketDialogHook(ptype, pkt)
             STATE.active_world_idx = 1
             persistConfig()
             updateWorldDisplayList()
-            addLog("[World Farm] Semua status world berhasil di-reset ke ANTRE!")
-            if sendNotification then pcall(sendNotification, "Semua status world di-reset ke ANTRE!") end
-            openWorldListManagerDialog()
+            addLog("[Antrean World] Semua status world berhasil di-reset ke Siap!")
+            if sendNotification then pcall(sendNotification, "Semua world di-reset ke Siap!") end
+            showPlantQueueDialog()
+            return true
+        elseif btn == "btn_queue_clear_all" or btn == "boren_btn_wclear" or pkt:find("buttonClicked|btn_queue_clear_all") then
+            CFG.world_list = {}
+            STATE.active_world_idx = 1
+            persistConfig()
+            updateWorldDisplayList()
+            addLog("[Antrean World] Seluruh antrean world berhasil dikosongkan.")
+            if sendNotification then pcall(sendNotification, "Antrean world dikosongkan!") end
+            showPlantQueueDialog()
+            return true
+        elseif btn == "btn_queue_save_file" or btn == "boren_btn_wsave" or pkt:find("buttonClicked|btn_queue_save_file") then
+            savePlantWorldsToFile(false)
+            showPlantQueueDialog()
+            return true
+        elseif btn == "btn_queue_load_file" or btn == "boren_btn_wload" or pkt:find("buttonClicked|btn_queue_load_file") then
+            loadPlantWorldsFromFile()
+            showPlantQueueDialog()
             return true
         end
 
-        local resetIdx = btn:match("^boren_wreset_(%d+)$")
-        if resetIdx then
-            local idx = tonumber(resetIdx)
-            if idx and CFG.world_list[idx] then
-                CFG.world_list[idx].done = false
-                CFG.world_list[idx].status = "ANTRI"
-                persistConfig()
-                updateWorldDisplayList()
-                addLog(string.format("[World Farm] Status %s di-reset ke ANTRE.", CFG.world_list[idx].name))
-                if sendNotification then pcall(sendNotification, "Status " .. CFG.world_list[idx].name .. " di-reset!") end
-                openWorldListManagerDialog()
-            end
-            return true
-        end
-
-        if btn == "boren_btn_wfmt_colon" or btn == "boren_btn_fmt_colon" then
-            openWorldListManagerDialog("colon")
-            return true
-        elseif btn == "boren_btn_wfmt_pipe" or btn == "boren_btn_fmt_pipe" then
-            openWorldListManagerDialog("pipe")
-            return true
-        elseif btn == "boren_btn_wfmt_name" or btn == "boren_btn_fmt_name" then
-            openWorldListManagerDialog("name_only")
-            return true
-        elseif btn == "boren_submit_wpaste" or btn == "boren_submit_paste" then
-            local raw = pkt:match("boren_wpaste_raw|(.-)\nboren_wpaste_replace|")
-                or pkt:match("boren_paste_raw|(.-)\nboren_paste_replace|")
-                or pkt:match("boren_wpaste_raw|(.-)\nbuttonClicked|")
-                or pkt:match("boren_paste_raw|(.-)\nbuttonClicked|")
-                or fields.boren_wpaste_raw or fields.boren_paste_raw or ""
-            local isReplace = (fields.boren_wpaste_replace == "1" or fields.boren_paste_replace == "1")
-            local added, dups, ignored, summary = parseAndValidateWorldBatch(raw, isReplace)
-            addLog("[Quick Paste Farm] " .. summary)
-            if sendNotification then pcall(sendNotification, summary) end
-            openWorldListManagerDialog()
-            return true
-        end
-
-        local editIdx = btn:match("^boren_wedit_(%d+)$")
-        if editIdx then
-            openEditWorldEntryDialog(tonumber(editIdx))
-            return true
-        end
-
-        local hapusIdx = btn:match("^boren_whapus_(%d+)$")
-        if hapusIdx then
-            local idx = tonumber(hapusIdx)
+        local delIdx = btn:match("^queue_del_(%d+)$") or btn:match("^boren_whapus_(%d+)$")
+        if delIdx then
+            local idx = tonumber(delIdx)
             if idx and CFG.world_list[idx] then
                 local removed = table.remove(CFG.world_list, idx)
-                if STATE.active_world_idx > #CFG.world_list then
-                    STATE.active_world_idx = 1
-                end
+                if STATE.active_world_idx > #CFG.world_list then STATE.active_world_idx = 1 end
                 persistConfig()
                 updateWorldDisplayList()
-                addLog(string.format("[World Farm] Dihapus dari antrean: %s", removed.name))
+                addLog(string.format("[Antrean World] Dihapus: %s", removed.name))
                 if sendNotification then pcall(sendNotification, "Dihapus: " .. removed.name) end
-                openWorldListManagerDialog()
             end
+            showPlantQueueDialog()
             return true
         end
+
+        -- Jika user menutup dialog tanpa klik tombol
         return true
 
-    elseif dName == "boren_plant_stor_mgr" or dName == "boren_paste_stor_mgr" or dName == "boren_copy_stor_mgr" then
-        if btn == "boren_btn_stfmt_colon" or btn == "boren_btn_fmt_colon" then
-            openStorageListManagerDialog("colon")
+    -- C. STORAGE MANAGER DIALOG (FIX BUG 1: SAFE RETURN TO /plant)
+    elseif dName == "plant_storage" or dName == "boren_plant_stor_mgr" or pkt:find("dialog_name|plant_storage") or pkt:find("dialog_name|boren_plant_stor_mgr") then
+        if btn == "btn_back_main" or btn == "boren_btn_back_main" or pkt:find("buttonClicked|btn_back_main") or pkt:find("buttonClicked|boren_btn_back_main") then
+            showPlantMainDialog()
             return true
-        elseif btn == "boren_btn_stfmt_pipe" or btn == "boren_btn_fmt_pipe" then
-            openStorageListManagerDialog("pipe")
+        elseif btn == "btn_add_stor_entry" or pkt:find("buttonClicked|btn_add_stor_entry") then
+            local sName = fields.in_new_stor_world or pkt:match("in_new_stor_world|([^|\r\n]+)") or ""
+            local dId = fields.in_new_stor_door or pkt:match("in_new_stor_door|([^|\r\n]+)") or ""
+            sName = sName:gsub("^%s+", ""):gsub("%s+$", ""):upper()
+            dId = dId:gsub("^%s+", ""):gsub("%s+$", "")
+            if sName ~= "" then
+                local token = (dId ~= "") and (sName .. ":" .. dId) or sName
+                local added, _, _, summary = parseAndValidateStorageBatch(token, false)
+                addLog(string.format("[+ Gudang] %s ditambahkan.", token))
+                if sendNotification then pcall(sendNotification, "Gudang " .. token .. " ditambahkan!") end
+            end
+            showPlantStorageDialog()
             return true
-        elseif btn == "boren_btn_stfmt_name" or btn == "boren_btn_fmt_name" then
-            openStorageListManagerDialog("name_only")
+        elseif btn == "btn_save_stor_thresh" or pkt:find("buttonClicked|btn_save_stor_thresh") then
+            local minBp = tonumber(fields.in_min_bp or pkt:match("in_min_bp|(%d+)"))
+            local tarBp = tonumber(fields.in_tar_bp or pkt:match("in_tar_bp|(%d+)"))
+            if minBp then CFG.min_seed_bp = minBp end
+            if tarBp then CFG.target_seed_bp = tarBp end
+            persistConfig()
+            addLog(string.format("[Gudang] Batas restock tas disimpan: Min=%d, Target=%d", CFG.min_seed_bp, CFG.target_seed_bp))
+            if sendNotification then pcall(sendNotification, "Batas pengambilan tas disimpan!") end
+            showPlantStorageDialog()
             return true
-        elseif btn == "boren_submit_stpaste" or btn == "boren_submit_paste" then
-            local raw = pkt:match("boren_stpaste_raw|(.-)\nboren_stpaste_replace|")
-                or pkt:match("boren_paste_raw|(.-)\nboren_paste_replace|")
-                or pkt:match("boren_stpaste_raw|(.-)\nbuttonClicked|")
-                or pkt:match("boren_paste_raw|(.-)\nbuttonClicked|")
-                or fields.boren_stpaste_raw or fields.boren_paste_raw or ""
-            local isReplace = (fields.boren_stpaste_replace == "1" or fields.boren_paste_replace == "1")
-            local added, dups, ignored, summary = parseAndValidateStorageBatch(raw, isReplace)
-            addLog("[Quick Paste Gudang] " .. summary)
-            if sendNotification then pcall(sendNotification, summary) end
-            openStorageListManagerDialog()
+        elseif btn == "btn_stor_save_file" or btn == "boren_btn_stsave" or pkt:find("buttonClicked|btn_stor_save_file") then
+            savePlantStoragesToFile(false)
+            showPlantStorageDialog()
+            return true
+        elseif btn == "btn_stor_load_file" or btn == "boren_btn_stload" or pkt:find("buttonClicked|btn_stor_load_file") then
+            loadPlantStoragesFromFile()
+            showPlantStorageDialog()
+            return true
+        elseif btn == "btn_stor_clear_all" or btn == "boren_btn_stclear" or pkt:find("buttonClicked|btn_stor_clear_all") then
+            CFG.storage_world_list = {}
+            STATE.active_storage_idx = 1
+            persistConfig()
+            updateStorageDisplayList()
+            addLog("[Gudang Seed] Seluruh daftar gudang dikosongkan.")
+            if sendNotification then pcall(sendNotification, "Daftar gudang dikosongkan!") end
+            showPlantStorageDialog()
             return true
         end
 
-        local editIdx = btn:match("^boren_stedit_(%d+)$")
-        if editIdx then
-            openEditStorageEntryDialog(tonumber(editIdx))
-            return true
-        end
-
-        local hapusIdx = btn:match("^boren_sthapus_(%d+)$")
-        if hapusIdx then
-            local idx = tonumber(hapusIdx)
+        local delStorIdx = btn:match("^stor_del_(%d+)$") or btn:match("^boren_sthapus_(%d+)$")
+        if delStorIdx then
+            local idx = tonumber(delStorIdx)
             if idx and CFG.storage_world_list[idx] then
                 local removed = table.remove(CFG.storage_world_list, idx)
-                if STATE.active_storage_idx > #CFG.storage_world_list then
-                    STATE.active_storage_idx = 1
-                end
+                if STATE.active_storage_idx > #CFG.storage_world_list then STATE.active_storage_idx = 1 end
                 persistConfig()
                 updateStorageDisplayList()
-                addLog(string.format("[Gudang Seed] Dihapus dari antrean: %s", removed.name))
-                if sendNotification then pcall(sendNotification, "Dihapus: " .. removed.name) end
-                openStorageListManagerDialog()
+                addLog(string.format("[Gudang Seed] Dihapus: %s", removed.name))
+                if sendNotification then pcall(sendNotification, "Gudang dihapus: " .. removed.name) end
             end
+            showPlantStorageDialog()
+            return true
+        end
+
+        return true
+
+    -- D. SEEDS & SPLICE SUB-DIALOG (FIX BUG 2: SAVE SEED 1 & 2 DIRECTLY)
+    elseif dName == "plant_seeds" or pkt:find("dialog_name|plant_seeds") then
+        if btn == "btn_apply_seeds" or pkt:find("buttonClicked|btn_apply_seeds") then
+            local s1 = fields.in_seed1 or pkt:match("in_seed1|([^|\r\n]+)")
+            local s2 = fields.in_seed2 or pkt:match("in_seed2|([^|\r\n]+)")
+            if s1 and s1 ~= "" then
+                local seedID, sName = BOREN_ITEM_DB:resolveSeedID(s1)
+                if seedID and seedID > 0 then
+                    CFG.seed_1_id = seedID
+                    CFG.seed_1_name = (sName ~= "") and sName or resolveSeedName(seedID)
+                    STATE.buf_seed_1_id = seedID
+                    addLog(string.format("[Benih] Seed 1 disetel: #%d (%s)", seedID, CFG.seed_1_name))
+                end
+            end
+            if s2 and s2 ~= "" then
+                local seedID, sName = BOREN_ITEM_DB:resolveSeedID(s2)
+                if seedID and seedID > 0 then
+                    CFG.seed_2_id = seedID
+                    CFG.seed_2_name = (sName ~= "") and sName or resolveSeedName(seedID)
+                    CFG.splice_mode = true
+                    STATE.buf_seed_2_id = seedID
+                    addLog(string.format("[Benih] Seed 2 (Splice) disetel: #%d (%s)", seedID, CFG.seed_2_name))
+                else
+                    CFG.seed_2_id = 0
+                    CFG.seed_2_name = "None"
+                    CFG.splice_mode = false
+                    STATE.buf_seed_2_id = 0
+                end
+            else
+                CFG.seed_2_id = 0
+                CFG.seed_2_name = "None"
+                CFG.splice_mode = false
+                STATE.buf_seed_2_id = 0
+            end
+            persistConfig()
+            if sendNotification then
+                pcall(sendNotification, string.format("Seed 1: #%d (%s) disimpan!", CFG.seed_1_id, CFG.seed_1_name))
+            end
+            showPlantSeedsDialog()
+            return true
+        elseif btn == "btn_open_search_item" or pkt:find("buttonClicked|btn_open_search_item") then
+            showPlantItemSearchDialog("", {})
+            return true
+        elseif btn == "btn_back_main" or pkt:find("buttonClicked|btn_back_main") then
+            showPlantMainDialog()
             return true
         end
         return true
 
-    elseif dName == "boren_edit_w_dlg" then
-        local saveIdx = btn:match("^boren_save_wedit_(%d+)$")
-        if saveIdx then
-            local idx = tonumber(saveIdx)
-            if idx and CFG.world_list[idx] then
-                local newName = tostring(fields.boren_ed_wname or ""):gsub("%s+", ""):upper()
-                local newDoor = tostring(fields.boren_ed_wdoor or ""):gsub("^%s+", ""):gsub("%s+$", "")
-                if newName ~= "" then
-                    CFG.world_list[idx].name = newName
-                    CFG.world_list[idx].door = newDoor
-                    persistConfig()
-                    updateWorldDisplayList()
-                    addLog(string.format("[World Farm #%d] Diperbarui: %s [Door: %s]", idx, newName, (newDoor ~= "" and newDoor or "-")))
-                    if sendNotification then pcall(sendNotification, "World Farm diperbarui: " .. newName) end
-                end
+    -- E. SETTINGS & CHEAT SHIELD SUB-DIALOG
+    elseif dName == "plant_settings" or pkt:find("dialog_name|plant_settings") then
+        if btn == "btn_save_settings" or pkt:find("buttonClicked|btn_save_settings") then
+            CFG.use_modfly = (pkt:match("chk_modfly|1") ~= nil)
+            CFG.anti_lava = (pkt:match("chk_antilava|1") ~= nil)
+            CFG.plant_mode = (pkt:match("chk_mode3|1") ~= nil) and "3zigzag" or "1tile"
+            CFG.splice_mode = (pkt:match("chk_splice|1") ~= nil)
+            CFG.auto_reconnect = (pkt:match("chk_reconnect|1") ~= nil)
+            CFG.ignore_gems = (pkt:match("chk_ignoregems|1") ~= nil)
+            UI_STATE.touch_shield = (pkt:match("chk_shield|1") ~= nil)
+
+            persistConfig()
+            applyCheatToggles()
+
+            addLog(string.format("[Settings] Disimpan: ModFly=%s, AntiLava=%s, Mode=%s",
+                CFG.use_modfly and "ON" or "OFF",
+                CFG.anti_lava and "ON" or "OFF",
+                CFG.plant_mode))
+            if sendNotification then
+                pcall(sendNotification, "Pengaturan & Cheat Shield berhasil diterapkan!")
             end
-            openWorldListManagerDialog()
+            showPlantMainDialog()
+            return true
+        elseif btn == "btn_back_main" or pkt:find("buttonClicked|btn_back_main") then
+            showPlantMainDialog()
             return true
         end
         return true
 
-    elseif dName == "boren_edit_s_dlg" then
-        local saveIdx = btn:match("^boren_save_stedit_(%d+)$")
-        if saveIdx then
-            local idx = tonumber(saveIdx)
-            if idx and CFG.storage_world_list[idx] then
-                local newName = tostring(fields.boren_ed_sname or ""):gsub("%s+", ""):upper()
-                local newDoor = tostring(fields.boren_ed_sdoor or ""):gsub("^%s+", ""):gsub("%s+$", "")
-                if newName ~= "" then
-                    CFG.storage_world_list[idx].name = newName
-                    CFG.storage_world_list[idx].door = newDoor
-                    persistConfig()
-                    updateStorageDisplayList()
-                    addLog(string.format("[Gudang #%d] Diperbarui: %s [Door: %s]", idx, newName, (newDoor ~= "" and newDoor or "-")))
-                    if sendNotification then pcall(sendNotification, "Gudang diperbarui: " .. newName) end
-                end
+    -- F. SEARCH ITEM DATABASE SUB-DIALOG
+    elseif dName == "plant_search_db" or pkt:find("dialog_name|plant_search_db") then
+        local q = fields.in_search_q or pkt:match("in_search_q|([^|\r\n]+)") or ""
+        q = q:gsub("^%s+", ""):gsub("%s+$", "")
+
+        local pickS1 = btn:match("^use_s1_(%d+)$") or pkt:match("buttonClicked|use_s1_(%d+)")
+        if pickS1 then
+            local id = tonumber(pickS1)
+            if id and id > 0 then
+                CFG.seed_1_id = id
+                CFG.seed_1_name = BOREN_ITEM_DB:resolveName(id)
+                STATE.buf_seed_1_id = id
+                persistConfig()
+                addLog(string.format("[Item DB] Seed 1 disetel: #%d (%s)", id, CFG.seed_1_name))
+                if sendNotification then pcall(sendNotification, "Seed 1: #" .. id .. " (" .. CFG.seed_1_name .. ")") end
             end
-            openStorageListManagerDialog()
+            showPlantSeedsDialog()
+            return true
+        end
+
+        local pickS2 = btn:match("^use_s2_(%d+)$") or pkt:match("buttonClicked|use_s2_(%d+)")
+        if pickS2 then
+            local id = tonumber(pickS2)
+            if id and id > 0 then
+                CFG.seed_2_id = id
+                CFG.seed_2_name = BOREN_ITEM_DB:resolveName(id)
+                CFG.splice_mode = true
+                STATE.buf_seed_2_id = id
+                persistConfig()
+                addLog(string.format("[Item DB] Seed 2 disetel: #%d (%s)", id, CFG.seed_2_name))
+                if sendNotification then pcall(sendNotification, "Seed 2: #" .. id .. " (" .. CFG.seed_2_name .. ")") end
+            end
+            showPlantSeedsDialog()
+            return true
+        end
+
+        if btn == "btn_do_search" or pkt:find("buttonClicked|btn_do_search") then
+            local found = {}
+            if q ~= "" then
+                found = BOREN_ITEM_DB:search(q, 5)
+            end
+            showPlantItemSearchDialog(q, found)
+            return true
+        elseif btn == "btn_back_seeds" or pkt:find("buttonClicked|btn_back_seeds") then
+            showPlantSeedsDialog()
+            return true
+        elseif btn == "btn_back_main" or pkt:find("buttonClicked|btn_back_main") then
+            showPlantMainDialog()
+            return true
+        end
+        return true
+
+    -- G. ADD CURRENT WORLD SUB-DIALOG
+    elseif dName == "plant_add_curr" or pkt:find("dialog_name|plant_add_curr") then
+        if btn == "btn_submit_cur_world" or pkt:find("buttonClicked|btn_submit_cur_world") then
+            local wName = fields.in_cur_world or pkt:match("in_cur_world|([^|\r\n]+)") or ""
+            local dId = fields.in_cur_door or pkt:match("in_cur_door|([^|\r\n]+)") or ""
+            local s1 = fields.in_cur_s1 or pkt:match("in_cur_s1|([^|\r\n]+)") or ""
+            local s2 = fields.in_cur_s2 or pkt:match("in_cur_s2|([^|\r\n]+)") or ""
+            local isSplice = (pkt:match("chk_cur_splice|1") ~= nil)
+
+            wName = wName:gsub("^%s+", ""):gsub("%s+$", ""):upper()
+            dId = dId:gsub("^%s+", ""):gsub("%s+$", "")
+            if wName ~= "" then
+                local token = (dId ~= "") and (wName .. ":" .. dId) or wName
+                local added, _, _, summary = parseAndValidateWorldBatch(token, false)
+                if s1 ~= "" then
+                    local id1 = BOREN_ITEM_DB:resolveSeedID(s1)
+                    if id1 and id1 > 0 then
+                        CFG.seed_1_id = id1
+                        CFG.seed_1_name = resolveSeedName(id1)
+                        STATE.buf_seed_1_id = id1
+                    end
+                end
+                if s2 ~= "" then
+                    local id2 = BOREN_ITEM_DB:resolveSeedID(s2)
+                    if id2 and id2 > 0 then
+                        CFG.seed_2_id = id2
+                        CFG.seed_2_name = resolveSeedName(id2)
+                        CFG.splice_mode = true
+                        STATE.buf_seed_2_id = id2
+                    end
+                elseif isSplice then
+                    CFG.splice_mode = true
+                end
+                persistConfig()
+                addLog(string.format("[+ World] %s ditambahkan ke antrean.", token))
+                if sendNotification then pcall(sendNotification, "World " .. token .. " ditambahkan!") end
+            end
+            showPlantMainDialog()
+            return true
+        elseif btn == "btn_back_main" or pkt:find("buttonClicked|btn_back_main") then
+            showPlantMainDialog()
+            return true
+        end
+        return true
+
+    -- H. PACING SUB-DIALOG
+    elseif dName == "plant_pacing" or pkt:find("dialog_name|plant_pacing") then
+        if btn == "preset_speed_fast" or pkt:find("buttonClicked|preset_speed_fast") then
+            CFG.plant_delay = 120
+            CFG.splice_delay = 100
+            CFG.step_delay = 85
+            persistConfig()
+            addLog("[Pacing] Profil Agresif aktif (120ms/85ms).")
+            if sendNotification then pcall(sendNotification, "Profil Agresif aktif!") end
+            showPlantPacingDialog()
+            return true
+        elseif btn == "preset_speed_norm" or pkt:find("buttonClicked|preset_speed_norm") then
+            CFG.plant_delay = 180
+            CFG.splice_delay = 160
+            CFG.step_delay = 110
+            persistConfig()
+            addLog("[Pacing] Profil Standar aktif (180ms/110ms).")
+            if sendNotification then pcall(sendNotification, "Profil Standar aktif!") end
+            showPlantPacingDialog()
+            return true
+        elseif btn == "preset_speed_safe" or pkt:find("buttonClicked|preset_speed_safe") then
+            CFG.plant_delay = 250
+            CFG.splice_delay = 220
+            CFG.step_delay = 140
+            persistConfig()
+            addLog("[Pacing] Profil Aman Anti-Lag aktif (250ms/140ms).")
+            if sendNotification then pcall(sendNotification, "Profil Aman aktif!") end
+            showPlantPacingDialog()
+            return true
+        elseif btn == "btn_save_pacing" or pkt:find("buttonClicked|btn_save_pacing") then
+            local pd = tonumber(fields.in_plant_delay or pkt:match("in_plant_delay|(%d+)"))
+            local spd = tonumber(fields.in_splice_delay or pkt:match("in_splice_delay|(%d+)"))
+            local sd = tonumber(fields.in_step_delay or pkt:match("in_step_delay|(%d+)"))
+            local wd = tonumber(fields.in_warp_delay or pkt:match("in_warp_delay|(%d+)"))
+            if pd then CFG.plant_delay = pd end
+            if spd then CFG.splice_delay = spd end
+            if sd then CFG.step_delay = sd end
+            if wd then CFG.warp_delay = wd end
+            persistConfig()
+            addLog("[Pacing] Jeda kustom berhasil disimpan.")
+            if sendNotification then pcall(sendNotification, "Jeda kustom disimpan!") end
+            showPlantPacingDialog()
+            return true
+        elseif btn == "btn_back_main" or pkt:find("buttonClicked|btn_back_main") then
+            showPlantMainDialog()
+            return true
+        end
+        return true
+
+    -- I. LOGS SUB-DIALOG
+    elseif dName == "plant_logs" or pkt:find("dialog_name|plant_logs") then
+        if btn == "btn_logs_clear" or pkt:find("buttonClicked|btn_logs_clear") then
+            STATE.logs = {}
+            addLog("[Logs] Seluruh riwayat log dibersihkan.")
+            showPlantLogsDialog()
+            return true
+        elseif btn == "btn_logs_refresh" or pkt:find("buttonClicked|btn_logs_refresh") then
+            showPlantLogsDialog()
+            return true
+        elseif btn == "btn_back_main" or pkt:find("buttonClicked|btn_back_main") then
+            showPlantMainDialog()
             return true
         end
         return true
@@ -3637,743 +4479,86 @@ local function onSendPacketDialogHook(ptype, pkt)
 
     return false
 end
+_G.handleDialogReturn = handleDialogReturn
 
-local function onVariantDialogHook(var)
-    if type(var) ~= "table" and type(var) ~= "userdata" then return false end
-    local v1, v2 = nil, nil
-    pcall(function() v1 = var.v1 or var[0] end)
-    pcall(function() v2 = var.v2 or var[1] end)
-    local fn = tostring(v1 or "")
-    local payload = tostring(v2 or "")
+local function plantDialogOnSendPacket(arg1, arg2)
+    -- Normalisasi argumen: Growlauncher dapat mengirimkan (pktStr) saja atau (pktType, pktStr)
+    local pStr = (type(arg2) == "string") and arg2 or ((type(arg1) == "string") and arg1 or nil)
+    local pType = (type(arg1) == "number") and arg1 or ((type(arg2) == "number") and arg2 or nil)
 
-    if fn == "OnDialogRequest" and payload ~= "" then
-        local endDlg = (payload:match("end_dialog|([^|\r\n]+)") or ""):lower()
-        local low = payload:lower()
-        if (STATE.pending_drop_id or 0) > 0 and (endDlg == "drop" or endDlg == "drop_item" or endDlg:find("drop", 1, true)
-            or low:find("how many to drop", 1, true) or low:find("drop_item", 1, true))
-        then
-            if not STATE.drop_confirmed then
-                STATE.drop_confirmed = true
-                if sendPacket then
-                    local pktStr = buildDropDialogReturn(payload, STATE.pending_drop_id, STATE.pending_drop_amt)
-                    pcall(sendPacket, 2, pktStr)
-                end
+    if not pStr or type(pStr) ~= "string" then return false end
+
+    -- 1. INTERSEPSI CHAT COMMAND (/plant, /p, /boren, /menu, /dialog)
+    -- Format paket chat standar Growtopia: action|input\n|text|... (bisa CRLF \r\n)
+    local chatText = pStr:match("text|([^\r\n]+)")
+    if chatText then
+        local trimmed = chatText:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+        if trimmed == "/plant" or trimmed == "/p" or trimmed == "/boren" or trimmed == "/menu" or trimmed == "/dialog" or trimmed:find("^/plant%s*") or trimmed:find("^/p%s*") then
+            showPlantMainDialog()
+            if LogToConsole then
+                pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via chat command: `e" .. trimmed)
+            end
+            return true -- Blokir paket agar server Growtopia tidak mencetak "Unknown command"
+        end
+    end
+
+    -- Fallback deteksi jika paket input chat terformat khusus
+    local lowerP = pStr:lower()
+    if (lowerP:find("action|input", 1, true) or lowerP:find("action|chat", 1, true)) then
+        if lowerP:find("/plant", 1, true) or lowerP:find("|text|/p\r") or lowerP:find("|text|/p\n") or lowerP:find("|text|/menu") or lowerP:find("|text|/boren") then
+            showPlantMainDialog()
+            if LogToConsole then
+                pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via fallback command!")
             end
             return true
         end
     end
+
+    -- 2. INTERSEPSI BALASAN DIALOG (action|dialog_return)
+    if pStr:find("action|dialog_return", 1, true) then
+        if handleDialogReturn and handleDialogReturn(pStr) then
+            return true
+        end
+        if onSendPacketDialogHook and onSendPacketDialogHook(pType, pStr) then
+            return true
+        end
+    end
+
     return false
 end
 
--- ============================================================================
--- 17. NATIVE GROWLAUNCHER MENU ("Boren Store - Auto Plant")
--- ============================================================================
-updatePowerStatusList = function()
-    if not editValue then return end
-    local statusTitle = STATE.running and (STATE.paused and "STATUS: DIJEDA (PAUSE)" or "STATUS: SEDANG BERJALAN") or "STATUS: BERHENTI (OFF)"
-    local s1Info = string.format("%s (ID: %d) | Di Tas: %d", CFG.seed_1_name, CFG.seed_1_id, getInvCount(CFG.seed_1_id))
-    local s2Info = CFG.splice_mode and string.format("%s (ID: %d) | Di Tas: %d", CFG.seed_2_name, CFG.seed_2_id, getInvCount(CFG.seed_2_id)) or "Nonaktif (Hanya tanam 1 seed)"
-    local modeTxt = (CFG.plant_mode == "3zigzag") and "Tanam 3 Petak Sekaligus" or "Tanam 1 per 1 Petak"
-    local curWTxt = (STATE.active_farm_world ~= "") and STATE.active_farm_world or "(Belum masuk world)"
+-- Ekspor hook ke seluruh varian variabel global Growlauncher
+onSendPacket = plantDialogOnSendPacket
+OnSendPacket = plantDialogOnSendPacket
+_G.onSendPacket = plantDialogOnSendPacket
+_G.OnSendPacket = plantDialogOnSendPacket
 
-    pcall(editValue, "ap_power_status_list", jsonEncode({
-        { statusTitle, STATE.status_text or "Siap digunakan" },
-        { "Pola Tanam", modeTxt },
-        { "World Farm Saat Ini", curWTxt },
-        { "Seed 1 (Utama)", s1Info },
-        { "Seed 2 (Splice)", s2Info },
-    }))
-end
-
-updateSeedStatusDisplay = function()
-    if not editValue then return end
-    local s1_id = STATE.buf_seed_1_id or CFG.seed_1_id
-    local s2_id = STATE.buf_seed_2_id or CFG.seed_2_id
-
-    local s1_dirty = (s1_id ~= CFG.seed_1_id)
-    local s2_dirty = (s2_id ~= CFG.seed_2_id)
-
-    local s1_name = resolveSeedName(s1_id)
-    local s2_name = resolveSeedName(s2_id)
-
-    local s1_title = s1_dirty and "⚠️ Seed 1 (Utama) [BELUM DISIMPAN]" or "✅ Seed 1 (Utama) [TERSIMPAN]"
-    local s1_desc = string.format("%s (ID: %d) | Di Tas: %d%s",
-        s1_name, s1_id, getInvCount(s1_id),
-        s1_dirty and " -> Klik 'Simpan Pilihan ID Seed' di bawah!" or " (Siap Ditanam)"
-    )
-
-    local s2_title = ""
-    local s2_desc = ""
-    if CFG.splice_mode then
-        if s1_id > 0 and s1_id == s2_id then
-            s2_title = "⚠️ Seed 2 (Splice) [ID SAMA DENGAN SEED 1]"
-            s2_desc = string.format("%s (ID: %d) -> Seed 1 & 2 tidak boleh sama! Masukkan ID berbeda.", s2_name, s2_id)
-        else
-            s2_title = s2_dirty and "⚠️ Seed 2 (Splice) [BELUM DISIMPAN]" or "✅ Seed 2 (Splice) [TERSIMPAN]"
-            s2_desc = string.format("%s (ID: %d) | Di Tas: %d%s",
-                s2_name, s2_id, getInvCount(s2_id),
-                s2_dirty and " -> Klik 'Simpan Pilihan ID Seed' di bawah!" or " (Siap Displice)"
-            )
-        end
-    else
-        s2_title = "ℹ️ Seed 2 (Splice) [NONAKTIF]"
-        s2_desc = "Mode Splice Nonaktif (Hanya tanam 1 jenis seed)"
-    end
-
-    pcall(editValue, "ap_seed_status_display", jsonEncode({
-        { s1_title, s1_desc },
-        { s2_title, s2_desc },
-    }))
-end
-
-updateBagDisplayList = function()
-    if not editValue then return end
-    local bList = {}
-    for _, it in ipairs(STATE.cached_inv) do
-        table.insert(bList, {
-            string.format("%s (ID: %d)", it.name, it.id),
-            string.format("Jumlah: %d", it.amount)
-        })
-    end
-    if #bList == 0 then table.insert(bList, { "Tas kosong", "-" }) end
-    pcall(editValue, "ap_bag_display_list", jsonEncode(bList))
-end
-
-updateLogDisplayList = function()
-    if not editValue then return end
-    local src = STATE.console_errors_only and STATE.error_logs or STATE.logs
-    local lList = {}
-    for _, l in ipairs(src) do
-        table.insert(lList, { l, "" })
-    end
-    if #lList == 0 then table.insert(lList, { "Belum ada log.", "" }) end
-    pcall(editValue, "ap_log_display_list", jsonEncode(lList))
-end
-
-local function createNativeUI(subName, iconName)
-    if UserInterface and UserInterface.new then
-        return UserInterface.new(subName, iconName)
-    end
-    local ui = { sub_name = subName, icon = iconName, menu = {} }
-    function ui:addLabelApp(text, icon) table.insert(self.menu, { type = "labelapp", text = text, icon = icon or "" }) return self end
-    function ui:addLabel(text) table.insert(self.menu, { type = "label", text = text }) return self end
-    function ui:addDivider() table.insert(self.menu, { type = "divider" }) return self end
-    function ui:addToggle(text, default, alias, autosave) table.insert(self.menu, { type = "toggle", text = text, default = default == true, alias = alias, autosave = autosave == true }) return self end
-    function ui:addToggleButton(text, default, alias) table.insert(self.menu, { type = "toggle_button", text = text, default = default == true, alias = alias }) return self end
-    function ui:addButton(text, alias) table.insert(self.menu, { type = "button", text = text, alias = alias }) return self end
-    function ui:addInputString(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_string", text = text, default = default or "", label = label or "Text", placeholder = placeholder or "", icon = icon or "", alias = alias }) return self end
-    function ui:addInputInt(text, default, label, placeholder, icon, alias) table.insert(self.menu, { type = "input_int", text = text, default = tostring(default or "0"), label = label or "Value", placeholder = placeholder or "0", icon = icon or "", alias = alias }) return self end
-    function ui:addSlider(text, minVal, maxVal, defaultVal, stepVal, useDot, alias) table.insert(self.menu, { type = "slider", text = text, min = minVal, max = maxVal, default = defaultVal, step = stepVal, use_dot = useDot == true, alias = alias }) return self end
-    function ui:addTooltip(text, supportText, icon, background) table.insert(self.menu, { type = "tooltip", text = text, support_text = supportText or "", icon = icon or "Info", background = background == true }) return self end
-    function ui:addItemPicker(text, item, default, alias) table.insert(self.menu, { type = "item_picker", text = text, item = item or "Blank", default = tostring(default or "0"), alias = alias }) return self end
-    function ui:addDisplayList(text, default, alias) table.insert(self.menu, { type = "display_list", text = text, default = default or "Default", alias = alias }) return self end
-    function ui:addExpandableToggle(text, default, alias, autoExpand, background) return { list_child = alias .. "_child" } end
-    function ui:addChildButton(childRef, text, alias) table.insert(self.menu, { type = "child_button", child = childRef, text = text, alias = alias }) return self end
-    function ui:addChildToggle(childRef, text, default, alias) table.insert(self.menu, { type = "child_toggle", child = childRef, text = text, default = default == true, alias = alias }) return self end
-    function ui:generateJSON() return jsonEncode({ sub_name = self.sub_name, icon = self.icon, menu = self.menu }) end
-    return ui
-end
-
-local function registerNativePlantUI()
-    if not addCategory or not addIntoModule then return end
-
-    -- Tab 1: Start & World Farm
-    local uiFarm = createNativeUI("1. Start & World Farm", "PlayArrow")
-    uiFarm:addLabelApp("Boren Store - Auto Plant & Splice", "Storefront")
-    uiFarm:addToggleButton("▶ START BOT (Mulai Tanam)", false, "ap_run_power")
-    uiFarm:addButton("■ STOP BOT (Matikan)", "ap_btn_stop")
-    uiFarm:addToggle("Jeda Bot Sementara (Pause)", false, "ap_pause_toggle", false)
-    uiFarm:addDisplayList("Status & Info Bot", "Default", "ap_power_status_list")
-    uiFarm:addDivider()
-
-    uiFarm:addLabel("Pengaturan Tanam & Splice:")
-    uiFarm:addToggle("Tanam 3 Petak Sekaligus (Gaya Lucifer)", CFG.plant_mode == "3zigzag", "ap_toggle_mode_3zigzag", true)
-    uiFarm:addToggle("Aktifkan Splice (Kawin 2 Seed)", CFG.splice_mode, "ap_toggle_splice", true)
-    uiFarm:addDivider()
-
-    uiFarm:addLabel("Pengaturan Bibit (Input ID Manual):")
-    uiFarm:addInputInt("ID Seed 1 (Utama)", tostring(CFG.seed_1_id), "Seed ID 1", "Contoh: 3 (Dirt) / 4585 (Pepper)", "Category", "ap_input_seed_1")
-    uiFarm:addInputInt("ID Seed 2 (Splice)", tostring(CFG.seed_2_id), "Seed ID 2", "Contoh: 15 (Cave)", "Category", "ap_input_seed_2")
-    uiFarm:addButton("💾 Simpan Pilihan ID Seed", "ap_btn_save_seeds")
-    uiFarm:addDisplayList("Keterangan & Status ID Seed", "Default", "ap_seed_status_display")
-    uiFarm:addDivider()
-
-    uiFarm:addLabel("Daftar World Farm:")
-    uiFarm:addInputString("Nama World Farm", CFG.manual_world_text, "World", "Ketik nama world", "Public", "ap_manual_world_input")
-    uiFarm:addInputString("Door ID (Opsional)", CFG.manual_door_text, "Door ID", "Kosongkan jika White Door", "DoorFront", "ap_manual_door_input")
-    uiFarm:addButton("+ Tambah World ke Antrean", "ap_btn_add_world")
-    uiFarm:addButton("+ Tambah World Saya Sekarang", "ap_btn_add_cur_world")
-    uiFarm:addButton("📋 Kelola, Salin & Tempel World", "ap_btn_view_worlds")
-    uiFarm:addButton("🔄 Reset Status Selesai (Tanam Ulang Semua)", "ap_btn_reset_status")
-    uiFarm:addButton("🗑️ Kosongkan Semua World Farm", "ap_btn_clear_worlds")
-    uiFarm:addDivider()
-
-    uiFarm:addLabel("Cadangan File (Folder Download HP):")
-    uiFarm:addDisplayList("Status File Download", "Default", "ap_file_info_list")
-    uiFarm:addButton("📥 Simpan Antrean ke Download", "ap_btn_save_worlds")
-    uiFarm:addButton("📤 Muat Antrean dari Download", "ap_btn_load_worlds")
-    uiFarm:addDisplayList("Daftar Antrean Farm", "Default", "ap_world_display_list")
-
-    -- Tab 2: Gudang Seed (Storage)
-    local uiStorage = createNativeUI("2. Gudang Seed (Storage)", "Inventory")
-    uiStorage:addLabelApp("Gudang Seed & Ambil Otomatis", "Inventory")
-    uiStorage:addTooltip("Fitur Gudang Cerdas", "Bot otomatis pergi mengambil seed saat di tas habis. Jika gudang kosong, bot otomatis lompat ke gudang berikutnya!", "Verified", false)
-    uiStorage:addSlider("Sisa Seed di Tas untuk Ambil (Min BP)", 0, 20, CFG.min_seed_bp, 1, false, "ap_slider_min_bp")
-    uiStorage:addSlider("Target Jumlah Ambil Seed ke Tas", 50, 200, CFG.target_seed_bp, 10, false, "ap_slider_target_bp")
-    uiStorage:addSlider("Jarak Magnet Ambil Seed (Tile)", 1, 6, CFG.collect_range, 1, false, "ap_slider_collect_range")
-    uiStorage:addDivider()
-
-    uiStorage:addLabel("Daftar World Gudang Seed:")
-    uiStorage:addInputString("Nama World Gudang", CFG.manual_storage_text, "Gudang", "Ketik nama world gudang", "Public", "ap_manual_stor_input")
-    uiStorage:addInputString("Door ID (Opsional)", CFG.manual_stor_door, "Door ID", "Kosongkan jika White Door", "DoorFront", "ap_manual_stor_door_input")
-    uiStorage:addButton("+ Tambah Gudang ke Antrean", "ap_btn_add_storage")
-    uiStorage:addButton("📋 Kelola, Salin & Tempel Gudang", "ap_btn_view_storages")
-    uiStorage:addButton("📥 Simpan Antrean Gudang ke File", "ap_btn_save_storages")
-    uiStorage:addButton("📤 Muat Antrean Gudang dari File", "ap_btn_load_storages")
-    uiStorage:addButton("🗑️ Kosongkan Semua Gudang", "ap_btn_clear_storages")
-    uiStorage:addDivider()
-    uiStorage:addDisplayList("Daftar World Gudang Seed", "Default", "ap_storage_display_list")
-
-    -- Tab 3: Pengaturan & Delay
-    local uiSetting = createNativeUI("3. Pengaturan & Delay", "Build")
-    uiSetting:addLabelApp("Kecepatan & Delay Bot", "Build")
-    uiSetting:addSlider("Kecepatan Tanam (ms)", 30, 500, CFG.plant_delay, 10, false, "ap_slider_plant_delay")
-    uiSetting:addInputInt("Input Presisi Kecepatan Tanam (ms)", tostring(CFG.plant_delay), "Plant Delay (ms)", "Contoh: 180", "Build", "ap_input_plant_delay")
-    uiSetting:addSlider("Jeda Timpa Splice Seed 2 (ms)", 30, 500, CFG.splice_delay, 10, false, "ap_slider_splice_delay")
-    uiSetting:addInputInt("Input Presisi Jeda Splice (ms)", tostring(CFG.splice_delay), "Splice Delay (ms)", "Contoh: 180", "Build", "ap_input_splice_delay")
-    uiSetting:addSlider("Kecepatan Melangkah (ms)", 50, 500, CFG.step_delay, 10, false, "ap_slider_step_delay")
-    uiSetting:addSlider("Jeda Pindah World / Warp (ms)", 2000, 6000, CFG.warp_delay, 500, false, "ap_slider_warp_delay")
-    uiSetting:addDivider()
-
-    uiSetting:addLabel("Fitur Pembantu & Proteksi:")
-    uiSetting:addToggle("Abaikan Gems (Jangan Ambil Gems di Lantai)", CFG.ignore_gems, "ap_toggle_ignore_gems", true)
-    uiSetting:addToggle("ModFly (Terbang Bebas)", CFG.use_modfly, "ap_toggle_modfly", true)
-    uiSetting:addToggle("Anti Lava / Rintangan Berbahaya", CFG.anti_lava, "ap_toggle_anti_lava", true)
-    uiSetting:addToggle("Login Ulang Otomatis (Auto Reconnect)", CFG.auto_reconnect, "ap_toggle_reconnect", true)
-    uiSetting:addToggle("Auto Fix Gagal Splice (Punch Semak Miss & Tanam Ulang)", CFG.auto_clear_failed_splice, "ap_toggle_fix_splice", true)
-
-    -- Tab 4: Console & Tas
-    local uiConsole = createNativeUI("4. Console & Tas", "Terminal")
-    uiConsole:addLabelApp("Catatan Log & Isi Tas", "Terminal")
-    uiConsole:addButton("🗑️ Bersihkan Semua Catatan Log", "ap_btn_clear_logs")
-    uiConsole:addToggle("Hanya Tampilkan Pesan Error", STATE.console_errors_only, "ap_toggle_err_only", false)
-    uiConsole:addDisplayList("Catatan Aktivitas Bot", "Default", "ap_log_display_list")
-    uiConsole:addDivider()
-    uiConsole:addLabel("Isi Tas / Backpack:")
-    uiConsole:addButton("🔄 Perbarui Tampilan Tas", "ap_btn_refresh_bag")
-    uiConsole:addDisplayList("Daftar Barang di Tas", "Default", "ap_bag_display_list")
-
-    -- Registrasi Kategori Tunggal & 4 Sub-Menu Resmi ke GrowLauncher
-    pcall(addCategory, "Boren Plant", "Storefront")
-
-    local ok1, jsonFarm = pcall(function() return uiFarm:generateJSON() end)
-    local ok2, jsonStorage = pcall(function() return uiStorage:generateJSON() end)
-    local ok3, jsonSetting = pcall(function() return uiSetting:generateJSON() end)
-    local ok4, jsonConsole = pcall(function() return uiConsole:generateJSON() end)
-
-    if ok1 and jsonFarm then pcall(addIntoModule, jsonFarm, "Boren Plant") end
-    if ok2 and jsonStorage then pcall(addIntoModule, jsonStorage, "Boren Plant") end
-    if ok3 and jsonSetting then pcall(addIntoModule, jsonSetting, "Boren Plant") end
-    if ok4 and jsonConsole then pcall(addIntoModule, jsonConsole, "Boren Plant") end
-end
-
--- ============================================================================
--- 17B. FILE BACKUP ENGINE (FARM WORLDS & STORAGE WORLDS)
--- ============================================================================
-savePlantWorldsToFile = function(silent)
-    local exportLines = {}
-    for _, e in ipairs(CFG.world_list) do
-        local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
-        table.insert(exportLines, line)
-    end
-    local exportTxt = table.concat(exportLines, "\n")
-    local fn = CFG.world_file_name or "boren_plant_worlds.txt"
-    local wrote = writeTextFileIfExists(fn, exportTxt)
-
-    if not silent then
-        local summary = string.format("Tersimpan %d world farm ke %s & Preferences.", #CFG.world_list, fn)
-        addLog("[Save World] " .. summary)
-        if sendNotification then pcall(sendNotification, summary) end
-        if updateFileInfoDisplayList then pcall(updateFileInfoDisplayList) end
-    end
-    return wrote
-end
-
-local function loadPlantWorldsFromFile()
-    local fn = CFG.world_file_name or "boren_plant_worlds.txt"
-    local raw = readTextFileIfExists(fn)
-    if raw and raw ~= "" then
-        local added, dups, ignored, summary = parseAndValidateWorldBatch(raw, true)
-        addLog(string.format("[Load World] Berhasil memuat %d world dari %s", added, fn))
-        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d world dari Download!", added)) end
-    else
-        addLog("[Load World] File world tidak ditemukan atau kosong!")
-        if sendNotification then pcall(sendNotification, "File world belum ada atau kosong!") end
-    end
-    if updateFileInfoDisplayList then pcall(updateFileInfoDisplayList) end
-    if updateWorldDisplayList then pcall(updateWorldDisplayList) end
-end
-
-savePlantStoragesToFile = function(silent)
-    local exportLines = {}
-    for _, e in ipairs(CFG.storage_world_list) do
-        local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
-        table.insert(exportLines, line)
-    end
-    local exportTxt = table.concat(exportLines, "\n")
-    local fn = CFG.storage_file_name or "boren_plant_storage.txt"
-    local wrote = writeTextFileIfExists(fn, exportTxt)
-    writeTextFileIfExists("boren_plant_storages.txt", exportTxt)
-
-    if not silent then
-        local summary = string.format("Tersimpan %d gudang ke %s & Preferences.", #CFG.storage_world_list, fn)
-        addLog("[Save Storage] " .. summary)
-        if sendNotification then pcall(sendNotification, summary) end
-    end
-    return wrote
-end
-
-local function loadPlantStoragesFromFile()
-    local fn = CFG.storage_file_name or "boren_plant_storage.txt"
-    local raw = readTextFileIfExists(fn)
-    if not raw or raw == "" then
-        raw = readTextFileIfExists("boren_plant_storages.txt")
-        if raw and raw ~= "" then fn = "boren_plant_storages.txt" end
-    end
-    if raw and raw ~= "" then
-        local added, dups, ignored, summary = parseAndValidateStorageBatch(raw, true)
-        addLog(string.format("[Load Storage] Berhasil memuat %d gudang dari %s", added, fn))
-        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d gudang dari file!", added)) end
-    else
-        addLog("[Load Storage] File gudang tidak ditemukan atau kosong!")
-        if sendNotification then pcall(sendNotification, "File gudang belum ada atau kosong!") end
-    end
-    if updateStorageDisplayList then pcall(updateStorageDisplayList) end
-end
-
--- ============================================================================
--- 18. NATIVE ON-VALUE EVENT DISPATCHER
--- ============================================================================
-local isSyncingSeed = false
-local isSyncingDelay = false
-local lastAliasEventTime = {}
-
-local function handlePlantUIValue(typeVal, name, val)
-    -- Shift argumen jika GrowLauncher memanggil onValue(alias, val) atau alias ada di typeVal
-    if type(typeVal) == "string" and (name == nil or type(name) ~= "string" or (type(name) == "string" and typeVal:sub(1, 3) == "ap_")) then
-        val = name
-        name = typeVal
-        typeVal = 0
-    end
-    name = tostring(name or "")
-    if name == "" then return end
-
-    -- Debounce anti spam event (terutama saat addHook & setOnValue aktif bersamaan)
-    local now = getClockSafe()
-    local isButton = (name:sub(1, 7) == "ap_btn_")
-    if isButton then
-        if lastAliasEventTime[name] and (now - lastAliasEventTime[name]) < 0.25 then
-            return
-        end
-        lastAliasEventTime[name] = now
-    else
-        local evKey = name .. "=" .. tostring(val)
-        if lastAliasEventTime[evKey] and (now - lastAliasEventTime[evKey]) < 0.08 then
-            return
-        end
-        lastAliasEventTime[evKey] = now
-    end
-
-    if name == "ap_run_power" then
-        if val == true or val == 1 then
-            startBot()
-        else
-            stopBot()
-        end
-    elseif name == "ap_btn_stop" then
-        stopBot()
-    elseif name == "ap_pause_toggle" then
-        STATE.paused = (val == true or val == 1)
-        setStatus(STATE.paused and "Bot Dijeda" or "Bot Dilanjutkan")
-    elseif name == "ap_toggle_mode_3zigzag" then
-        CFG.plant_mode = (val == true or val == 1) and "3zigzag" or "1by1"
-        persistConfig()
-        updatePowerStatusList()
-    elseif name == "ap_toggle_splice" then
-        CFG.splice_mode = (val == true or val == 1)
-        persistConfig()
-        updatePowerStatusList()
-        updateSeedStatusDisplay()
-    elseif name == "ap_input_seed_1" then
-        local num = tonumber(val)
-        if num and num > 0 then
-            STATE.buf_seed_1_id = math.floor(num)
-            updateSeedStatusDisplay()
-        end
-    elseif name == "ap_input_seed_2" then
-        local num = tonumber(val)
-        if num and num > 0 then
-            STATE.buf_seed_2_id = math.floor(num)
-            updateSeedStatusDisplay()
-        end
-    elseif name == "ap_btn_save_seeds" then
-        local s1 = STATE.buf_seed_1_id or CFG.seed_1_id
-        local s2 = STATE.buf_seed_2_id or CFG.seed_2_id
-        s1 = ensureSeedID(s1)
-        if CFG.splice_mode and s2 and s2 > 0 then
-            s2 = ensureSeedID(s2)
-        end
-        CFG.seed_1_id = s1
-        CFG.seed_1_name = resolveSeedName(s1)
-        STATE.buf_seed_1_id = s1
-        if CFG.splice_mode then
-            CFG.seed_2_id = s2
-            CFG.seed_2_name = resolveSeedName(s2)
-            STATE.buf_seed_2_id = s2
-        end
-        persistConfig()
-        if editValue then
-            pcall(editValue, "ap_input_seed_1", tostring(CFG.seed_1_id))
-            if CFG.splice_mode then
-                pcall(editValue, "ap_input_seed_2", tostring(CFG.seed_2_id))
-            end
-        end
-        updateSeedStatusDisplay()
-        updatePowerStatusList()
-        local msg = string.format("✅ Berhasil Disimpan: Seed 1 = %s (ID: %d)", CFG.seed_1_name, CFG.seed_1_id)
-        if CFG.splice_mode and CFG.seed_2_id and CFG.seed_2_id > 0 then
-            msg = msg .. string.format(" | Seed 2 = %s (ID: %d)", CFG.seed_2_name, CFG.seed_2_id)
-        end
-        addLog(msg)
-        if sendNotification then pcall(sendNotification, msg) end
-    elseif name == "ap_manual_world_input" then
-        CFG.manual_world_text = tostring(val or "")
-        savePrefs(CFG)
-    elseif name == "ap_manual_door_input" then
-        CFG.manual_door_text = tostring(val or "")
-        savePrefs(CFG)
-    elseif name == "ap_manual_stor_input" then
-        CFG.manual_storage_text = tostring(val or "")
-        savePrefs(CFG)
-    elseif name == "ap_manual_stor_door_input" then
-        CFG.manual_stor_door = tostring(val or "")
-        savePrefs(CFG)
-    elseif name == "ap_btn_add_world" then
-        local rawW = tostring(CFG.manual_world_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        local rawD = tostring(CFG.manual_door_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if rawW ~= "" then
-            local tokenToAdd = rawW
-            if rawD ~= "" and not rawW:find("[:|]") then
-                tokenToAdd = rawW .. ":" .. rawD
-            end
-            local added, dups, ignored, summary = parseAndValidateWorldBatch(tokenToAdd, false)
-            if added == 0 and not rawW:find("[:|,;%s]") then
-                local parsed = parseWorldEntryToken(rawW, rawD)
-                if parsed and parsed.name ~= "" then
-                    if not isWorldInList(CFG.world_list, parsed.name) then
-                        table.insert(CFG.world_list, parsed)
-                        added = 1
-                    end
-                end
-            end
-            if added > 0 then
-                CFG.manual_world_text = ""
-                CFG.manual_door_text = ""
-                if editValue then
-                    pcall(editValue, "ap_manual_world_input", "")
-                    pcall(editValue, "ap_manual_door_input", "")
-                end
-                persistConfig()
-                updateWorldDisplayList()
-                if sendNotification then pcall(sendNotification, "World Farm ditambahkan!") end
-            else
-                if sendNotification then pcall(sendNotification, "World sudah ada atau tidak valid!") end
-            end
-        end
-    elseif name == "ap_btn_add_cur_world" then
-        local curW = getCurrentWorldSafe()
-        if curW ~= "" and curW ~= "EXIT" then
-            local rawD = tostring(CFG.manual_door_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-            if not isWorldInList(CFG.world_list, curW) then
-                table.insert(CFG.world_list, { name = curW, door = rawD, done = false, status = "ANTRI" })
-                CFG.manual_door_text = ""
-                if editValue then pcall(editValue, "ap_manual_door_input", "") end
-                persistConfig()
-                updateWorldDisplayList()
-                local dTag = (rawD ~= "") and (":" .. rawD) or ""
-                if sendNotification then pcall(sendNotification, "World Farm ditambahkan: " .. curW .. dTag) end
-            else
-                if sendNotification then pcall(sendNotification, "World saat ini sudah ada di antrean!") end
-            end
-        end
-    elseif name == "ap_btn_clear_worlds" then
-        CFG.world_list = {}
-        persistConfig()
-        updateWorldDisplayList()
-        if sendNotification then pcall(sendNotification, "Daftar World Farm dikosongkan!") end
-    elseif name == "ap_btn_reset_status" then
-        local cnt = 0
-        for _, w in ipairs(CFG.world_list) do
-            w.done = false
-            w.status = "ANTRI"
-            cnt = cnt + 1
-        end
-        STATE.active_world_idx = 1
-        persistConfig()
-        updateWorldDisplayList()
-        local msg = string.format("Status %d World Farm di-reset ke ANTRE! Siap ditanam ulang.", cnt)
-        addLog(msg)
-        if sendNotification then pcall(sendNotification, msg) end
-    elseif name == "ap_btn_view_worlds" or name == "ap_btn_paste_worlds" or name == "ap_btn_copy_all_worlds" then
-        openWorldListManagerDialog()
-    elseif name == "ap_btn_save_worlds" then
-        savePlantWorldsToFile(false)
-    elseif name == "ap_btn_load_worlds" then
-        loadPlantWorldsFromFile()
-    elseif name == "ap_btn_add_storage" then
-        local rawW = tostring(CFG.manual_storage_text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        local rawD = tostring(CFG.manual_stor_door or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if rawW ~= "" then
-            local tokenToAdd = rawW
-            if rawD ~= "" and not rawW:find("[:|]") then
-                tokenToAdd = rawW .. ":" .. rawD
-            end
-            local added, dups, ignored, summary = parseAndValidateStorageBatch(tokenToAdd, false)
-            if added == 0 and not rawW:find("[:|,;%s]") then
-                local parsed = parseWorldEntryToken(rawW, rawD)
-                if parsed and parsed.name ~= "" then
-                    if not isWorldInList(CFG.storage_world_list, parsed.name) then
-                        table.insert(CFG.storage_world_list, { name = parsed.name, door = parsed.door })
-                        added = 1
-                    end
-                end
-            end
-            if added > 0 then
-                CFG.manual_storage_text = ""
-                CFG.manual_stor_door = ""
-                if editValue then
-                    pcall(editValue, "ap_manual_stor_input", "")
-                    pcall(editValue, "ap_manual_stor_door_input", "")
-                end
-                persistConfig()
-                updateStorageDisplayList()
-                if sendNotification then pcall(sendNotification, "World Storage ditambahkan!") end
-            else
-                if sendNotification then pcall(sendNotification, "Storage sudah ada atau tidak valid!") end
-            end
-        end
-    elseif name == "ap_btn_clear_storages" then
-        CFG.storage_world_list = {}
-        persistConfig()
-        updateStorageDisplayList()
-        if sendNotification then pcall(sendNotification, "Daftar Storage dikosongkan!") end
-    elseif name == "ap_btn_view_storages" or name == "ap_btn_paste_storages" or name == "ap_btn_copy_all_storages" then
-        openStorageListManagerDialog()
-    elseif name == "ap_btn_save_storages" then
-        savePlantStoragesToFile()
-    elseif name == "ap_btn_load_storages" then
-        loadPlantStoragesFromFile()
-    elseif name == "ap_slider_min_bp" then
-        CFG.min_seed_bp = tonumber(val) or CFG.min_seed_bp
-        savePrefs(CFG)
-    elseif name == "ap_slider_target_bp" then
-        CFG.target_seed_bp = tonumber(val) or CFG.target_seed_bp
-        savePrefs(CFG)
-    elseif name == "ap_slider_collect_range" then
-        CFG.collect_range = tonumber(val) or CFG.collect_range
-        savePrefs(CFG)
-    elseif name == "ap_slider_plant_delay" then
-        if not isSyncingDelay then
-            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
-            if d ~= CFG.plant_delay then
-                CFG.plant_delay = d
-                savePrefs(CFG)
-                if editValue then
-                    isSyncingDelay = true
-                    pcall(editValue, "ap_input_plant_delay", tostring(CFG.plant_delay))
-                    isSyncingDelay = false
-                end
-            end
-        end
-    elseif name == "ap_input_plant_delay" then
-        if not isSyncingDelay then
-            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
-            if d ~= CFG.plant_delay then
-                CFG.plant_delay = d
-                savePrefs(CFG)
-                if editValue then
-                    isSyncingDelay = true
-                    pcall(editValue, "ap_slider_plant_delay", CFG.plant_delay)
-                    isSyncingDelay = false
-                end
-                if sendNotification then pcall(sendNotification, "Delay tanam: " .. CFG.plant_delay .. " ms") end
-            end
-        end
-    elseif name == "ap_slider_splice_delay" then
-        if not isSyncingDelay then
-            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
-            if d ~= CFG.splice_delay then
-                CFG.splice_delay = d
-                savePrefs(CFG)
-                if editValue then
-                    isSyncingDelay = true
-                    pcall(editValue, "ap_input_splice_delay", tostring(CFG.splice_delay))
-                    isSyncingDelay = false
-                end
-            end
-        end
-    elseif name == "ap_input_splice_delay" then
-        if not isSyncingDelay then
-            local d = math.max(10, math.min(5000, math.floor(tonumber(val) or 180)))
-            if d ~= CFG.splice_delay then
-                CFG.splice_delay = d
-                savePrefs(CFG)
-                if editValue then
-                    isSyncingDelay = true
-                    pcall(editValue, "ap_slider_splice_delay", CFG.splice_delay)
-                    isSyncingDelay = false
-                end
-                if sendNotification then pcall(sendNotification, "Jeda splice: " .. CFG.splice_delay .. " ms") end
-            end
-        end
-    elseif name == "ap_slider_step_delay" then
-        CFG.step_delay = tonumber(val) or CFG.step_delay
-        savePrefs(CFG)
-    elseif name == "ap_slider_warp_delay" then
-        CFG.warp_delay = tonumber(val) or CFG.warp_delay
-        savePrefs(CFG)
-    elseif name == "ap_toggle_ignore_gems" then
-        CFG.ignore_gems = (val == true or val == 1)
-        persistConfig()
-    elseif name == "ap_toggle_modfly" then
-        CFG.use_modfly = (val == true or val == 1)
-        persistConfig()
-        applyCheatToggles()
-    elseif name == "ap_toggle_anti_lava" then
-        CFG.anti_lava = (val == true or val == 1)
-        persistConfig()
-        applyCheatToggles()
-    elseif name == "ap_toggle_reconnect" then
-        CFG.auto_reconnect = (val == true or val == 1)
-        persistConfig()
-        applyCheatToggles()
-    elseif name == "ap_toggle_fix_splice" then
-        CFG.auto_clear_failed_splice = (val == true or val == 1)
-        persistConfig()
-        if sendNotification then
-            pcall(sendNotification, "Auto Fix Gagal Splice: " .. (CFG.auto_clear_failed_splice and "AKTIF" or "NONAKTIF"))
-        end
-    elseif name == "ap_btn_clear_logs" then
-        STATE.logs = {}
-        STATE.error_logs = {}
-        STATE.error_count = 0
-        updateLogDisplayList()
-    elseif name == "ap_toggle_err_only" then
-        STATE.console_errors_only = (val == true or val == 1)
-        updateLogDisplayList()
-    elseif name == "ap_btn_refresh_bag" then
-        syncInventoryCache()
-    end
-end
-
--- Alias global OnValue & onValue agar dipanggil oleh engine Growlauncher di semua platform
-function OnValue(typeVal, name, val)
-    local ok, err = pcall(handlePlantUIValue, typeVal, name, val)
-    if not ok then
-        addLog("[Plant UI Err] " .. tostring(err))
-    end
-end
-onValue = OnValue
-
-local ALL_UI_ALIASES = {
-    "ap_run_power", "ap_btn_stop", "ap_pause_toggle", "ap_toggle_mode_3zigzag",
-    "ap_toggle_splice", "ap_input_seed_1", "ap_input_seed_2", "ap_btn_save_seeds",
-    "ap_manual_world_input", "ap_manual_door_input", "ap_btn_add_world",
-    "ap_btn_add_cur_world", "ap_btn_view_worlds", "ap_btn_reset_status", "ap_btn_clear_worlds", "ap_btn_save_worlds",
-    "ap_btn_load_worlds", "ap_slider_min_bp", "ap_slider_target_bp", "ap_slider_collect_range",
-    "ap_manual_stor_input", "ap_manual_stor_door_input", "ap_btn_add_storage", "ap_btn_view_storages",
-    "ap_btn_save_storages", "ap_btn_load_storages", "ap_btn_clear_storages", "ap_input_plant_delay",
-    "ap_slider_plant_delay", "ap_input_splice_delay", "ap_slider_splice_delay", "ap_slider_step_delay",
-    "ap_slider_warp_delay", "ap_toggle_ignore_gems", "ap_toggle_modfly", "ap_toggle_anti_lava",
-    "ap_toggle_reconnect", "ap_toggle_fix_splice", "ap_btn_clear_logs", "ap_toggle_err_only", "ap_btn_refresh_bag"
-}
-
--- ============================================================================
--- 19. INITIALIZATION & HOOK BINDINGS (SESUAI STANDAR AUTO SOIL BUILDER)
--- ============================================================================
-ensureHooksInstalled()
-onSendPacket = onSendPacketDialogHook
-OnSendPacket = onSendPacketDialogHook
-onVariant    = onVariantDialogHook
-OnVariant    = onVariantDialogHook
+-- Registrasi hook resmi Growlauncher via addHook dan AddHookCallback
 if addHook then
-    pcall(addHook, OnValue, "onvalue")
-    pcall(addHook, onSendPacketDialogHook, "onsendpacket")
-    pcall(addHook, onVariantDialogHook, "onvariant")
-    if applyHook then pcall(applyHook) end
+    pcall(addHook, plantDialogOnSendPacket, "onsendpacket")
+    pcall(addHook, plantDialogOnSendPacket, "onSendPacket")
+    pcall(addHook, onSendPacketRawCollectHook, "onsendpacketraw")
 end
-
--- 1. REGISTRASI UI TERLEBIH DAHULU KE GROWLAUNCHER
-local okReg, errReg = pcall(registerNativePlantUI)
-if not okReg then
-    if LogToConsole then LogToConsole("`4[Plant UI Err] `0Gagal registrasi UI: " .. tostring(errReg)) end
+if AddHookCallback then
+    pcall(AddHookCallback, plantDialogOnSendPacket, "onSendPacket")
+    pcall(AddHookCallback, plantDialogOnSendPacket, "onsendpacket")
 end
-
--- 2. REFRESH SEMUA DISPLAY LIST
-pcall(updatePowerStatusList)
-pcall(updateSeedStatusDisplay)
-pcall(updateWorldDisplayList)
-pcall(updateStorageDisplayList)
-pcall(updateFileInfoDisplayList)
-pcall(updateLogDisplayList)
-pcall(syncInventoryCache)
-
--- 3. DAFTARKAN SETONVALUE SETELAH MODUL TERBENTUK
-if setOnValue then
-    for _, aliasName in ipairs(ALL_UI_ALIASES) do
-        pcall(setOnValue, aliasName, function(a1, a2, a3)
-            if a2 == aliasName then
-                OnValue(a1, a2, a3)
-            elseif a1 == aliasName then
-                OnValue(0, a1, a2)
-            else
-                OnValue(0, aliasName, a1)
-            end
-        end)
-    end
-end
-
 if applyHook then
     pcall(applyHook)
 end
 
-addLog("Auto Plant & Splice by Boren Store berhasil dimuat!")
+-- Inisialisasi awal saat script di-Run
+addLog("[Boren Plant Dialog] Script Auto Plant (In-Game Dialog) Berhasil Dimuat!")
+if LogToConsole then
+    pcall(LogToConsole, "`5[BOREN PLANT] `2Script Aktif! `wKetik `c/plant `watau `c/p `wdi chat game untuk membuka Menu Form Dialog.")
+end
 if sendNotification then
-    pcall(sendNotification, "Auto Plant & Splice siap digunakan!")
+    pcall(sendNotification, "Boren Auto Plant Siap! Ketik /plant di chat game.")
 end
 
-_G.CFG = CFG
-_G.STATE = STATE
-_G.persistConfig = persistConfig
-_G.getPlayerTilePos = getPlayerTilePos
-_G.getTilePlantStatus = getTilePlantStatus
-_G.plantAndSpliceTile = plantAndSpliceTile
-_G.isTilePlantable = isTilePlantable
-_G.scanForeignLocksInWorld = scanForeignLocksInWorld
-_G.isTilePlanted = isTilePlanted
-_G.findRowPlantPlan = findRowPlantPlan
-_G.executePlantRow = executePlantRow
-_G.plantEntireWorld = plantEntireWorld
-_G.parseSavedWorldList = parseSavedWorldList
-_G.parseSavedStorageList = parseSavedStorageList
-_G.parseAndValidateWorldBatch = parseAndValidateWorldBatch
-_G.parseAndValidateStorageBatch = parseAndValidateStorageBatch
-_G.savePlantWorldsToFile = savePlantWorldsToFile
-_G.loadPlantWorldsFromFile = loadPlantWorldsFromFile
-_G.savePlantStoragesToFile = savePlantStoragesToFile
-_G.loadPlantStoragesFromFile = loadPlantStoragesFromFile
-_G.handlePlantUIValue = handlePlantUIValue
-_G.onSendPacketDialogHook = onSendPacketDialogHook
-_G.onVariantDialogHook = onVariantDialogHook
-_G.dropLeftoverSeedsToStorage = dropLeftoverSeedsToStorage
-
+-- Otomatis terapkan cheat dan buka dialog saat pertama kali di-run via coroutine
+runCoroutine(function()
+    safeSleep(200)
+    pcall(applyCheatToggles)
+    showPlantMainDialog()
+end)
