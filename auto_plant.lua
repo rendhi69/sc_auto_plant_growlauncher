@@ -10,17 +10,31 @@ local PREF_FILE      = "boren_auto_plant_prefs.json"
 -- ============================================================================
 -- 1. PREFERENCES & DEFAULT CONFIGURATION
 -- ============================================================================
-local pref = nil
-pcall(function()
-    if preferences and preferences.new then
-        pref = preferences:new(PREF_FILE)
+local ok_pref, PreferencesMod = pcall(require, "Preferences")
+if not (ok_pref and PreferencesMod) then
+    ok_pref, PreferencesMod = pcall(require, "preferences")
+end
+if not (ok_pref and PreferencesMod) and Preferences then
+    ok_pref = true
+    PreferencesMod = Preferences
+end
+if not (ok_pref and PreferencesMod) and preferences then
+    ok_pref = true
+    PreferencesMod = preferences
+end
+
+local saved = nil
+if ok_pref and PreferencesMod and PreferencesMod.new then
+    local ok_inst, inst = pcall(function()
+        local p = PreferencesMod:new("boren_plant_v2.json")
+        if p and p.load then pcall(p.load, p) end
+        return p
+    end)
+    if ok_inst and inst then
+        saved = inst
     end
-end)
-pcall(function()
-    if not pref and Preferences and Preferences.new then
-        pref = Preferences:new(PREF_FILE)
-    end
-end)
+end
+local pref = saved
 
 local function isSystemWindows()
     if package and package.config and package.config:sub(1, 1) == "\\" then
@@ -225,6 +239,125 @@ local function savePrefs(cfg_table)
     if pref then pcall(doSave, pref) end
 end
 
+-- Backup Konfigurasi Persisten ke File txt di Folder Download
+local function saveConfigFileBackup()
+    local lines = {
+        "seed_1_id=" .. tostring(CFG.seed_1_id or 17),
+        "seed_1_name=" .. tostring(CFG.seed_1_name or "Grass Seed"),
+        "seed_2_id=" .. tostring(CFG.seed_2_id or 0),
+        "seed_2_name=" .. tostring(CFG.seed_2_name or "None"),
+        "splice_mode=" .. (CFG.splice_mode and "1" or "0"),
+        "plant_mode=" .. tostring(CFG.plant_mode or "3zigzag"),
+        "use_modfly=" .. (CFG.use_modfly and "1" or "0"),
+        "anti_lava=" .. (CFG.anti_lava and "1" or "0"),
+        "auto_reconnect=" .. (CFG.auto_reconnect and "1" or "0"),
+        "ignore_gems=" .. (CFG.ignore_gems and "1" or "0"),
+        "plant_delay=" .. tostring(CFG.plant_delay or 180),
+        "splice_delay=" .. tostring(CFG.splice_delay or 180),
+        "step_delay=" .. tostring(CFG.step_delay or 110),
+        "warp_delay=" .. tostring(CFG.warp_delay or 3500),
+        "target_seed_bp=" .. tostring(CFG.target_seed_bp or 150),
+    }
+    writeTextFileIfExists("boren_plant_config.txt", table.concat(lines, "\n"))
+end
+
+local function loadConfigFileBackup()
+    local raw = readTextFileIfExists("boren_plant_config.txt")
+    if not raw or raw == "" then return end
+    for line in raw:gmatch("[^\r\n]+") do
+        local k, v = line:match("^([^=]+)=(.*)$")
+        if k and v then
+            k = k:gsub("^%s+", ""):gsub("%s+$", "")
+            v = v:gsub("^%s+", ""):gsub("%s+$", "")
+            if k == "seed_1_id" then CFG.seed_1_id = tonumber(v) or CFG.seed_1_id
+            elseif k == "seed_1_name" then CFG.seed_1_name = v
+            elseif k == "seed_2_id" then CFG.seed_2_id = tonumber(v) or CFG.seed_2_id
+            elseif k == "seed_2_name" then CFG.seed_2_name = v
+            elseif k == "splice_mode" then CFG.splice_mode = (v == "1")
+            elseif k == "plant_mode" then CFG.plant_mode = v
+            elseif k == "use_modfly" then CFG.use_modfly = (v == "1")
+            elseif k == "anti_lava" then CFG.anti_lava = (v == "1")
+            elseif k == "auto_reconnect" then CFG.auto_reconnect = (v == "1")
+            elseif k == "ignore_gems" then CFG.ignore_gems = (v == "1")
+            elseif k == "plant_delay" then CFG.plant_delay = tonumber(v) or CFG.plant_delay
+            elseif k == "splice_delay" then CFG.splice_delay = tonumber(v) or CFG.splice_delay
+            elseif k == "step_delay" then CFG.step_delay = tonumber(v) or CFG.step_delay
+            elseif k == "warp_delay" then CFG.warp_delay = tonumber(v) or CFG.warp_delay
+            elseif k == "target_seed_bp" then CFG.target_seed_bp = tonumber(v) or CFG.target_seed_bp
+            end
+        end
+    end
+end
+
+local function savePlantWorldsToFile(silent)
+    if not CFG or not CFG.world_list or type(CFG.world_list) ~= "table" then return false end
+    local exportLines = {}
+    for _, e in ipairs(CFG.world_list) do
+        local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
+        table.insert(exportLines, line)
+    end
+    local exportTxt = table.concat(exportLines, "\n")
+    local fn = (CFG and CFG.world_file_name) or "boren_plant_worlds.txt"
+    local wrote = writeTextFileIfExists(fn, exportTxt)
+
+    if not silent then
+        local summary = string.format("Tersimpan %d world farm ke %s & file Download.", #CFG.world_list, fn)
+        addLog("[Save World] " .. summary)
+        if sendNotification then pcall(sendNotification, summary) end
+    end
+    return wrote
+end
+
+local function loadPlantWorldsFromFile()
+    local fn = (CFG and CFG.world_file_name) or "boren_plant_worlds.txt"
+    local raw = readTextFileIfExists(fn)
+    if raw and raw ~= "" then
+        local added, dups, ignored, summary = parseAndValidateWorldBatch(raw, true)
+        addLog(string.format("[Load World] Berhasil memuat %d world dari %s", added, fn))
+        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d world dari file!", added)) end
+    else
+        addLog("[Load World] File world tidak ditemukan atau kosong!")
+        if sendNotification then pcall(sendNotification, "File world belum ada atau kosong!") end
+    end
+end
+
+local function savePlantStoragesToFile(silent)
+    if not CFG or not CFG.storage_world_list or type(CFG.storage_world_list) ~= "table" then return false end
+    local exportLines = {}
+    for _, e in ipairs(CFG.storage_world_list) do
+        local line = (e.door and e.door ~= "") and (e.name .. ":" .. e.door) or e.name
+        table.insert(exportLines, line)
+    end
+    local exportTxt = table.concat(exportLines, "\n")
+    local fn = (CFG and CFG.storage_file_name) or "boren_plant_storage.txt"
+    local wrote = writeTextFileIfExists(fn, exportTxt)
+    writeTextFileIfExists("boren_plant_storages.txt", exportTxt)
+
+    if not silent then
+        local summary = string.format("Tersimpan %d gudang ke %s & file Download.", #CFG.storage_world_list, fn)
+        addLog("[Save Storage] " .. summary)
+        if sendNotification then pcall(sendNotification, summary) end
+    end
+    return wrote
+end
+
+local function loadPlantStoragesFromFile()
+    local fn = (CFG and CFG.storage_file_name) or "boren_plant_storage.txt"
+    local raw = readTextFileIfExists(fn)
+    if not raw or raw == "" then
+        raw = readTextFileIfExists("boren_plant_storages.txt")
+        if raw and raw ~= "" then fn = "boren_plant_storages.txt" end
+    end
+    if raw and raw ~= "" then
+        local added, dups, ignored, summary = parseAndValidateStorageBatch(raw, true)
+        addLog(string.format("[Load Storage] Berhasil memuat %d gudang dari %s", added, fn))
+        if sendNotification then pcall(sendNotification, string.format("Berhasil memuat %d gudang dari file!", added)) end
+    else
+        addLog("[Load Storage] File gudang tidak ditemukan atau kosong!")
+        if sendNotification then pcall(sendNotification, "File gudang belum ada atau kosong!") end
+    end
+end
+
 local function isWorldInList(wList, worldName)
     local wTarget = tostring(worldName or ""):upper():gsub("%s+", "")
     if wTarget == "" or type(wList) ~= "table" then return false end
@@ -341,10 +474,10 @@ local CFG = {
     -- Mode & Fitur Tanam
     plant_mode          = loadPref("plant_mode", "3zigzag"),    -- "3zigzag"| "1by1"
     splice_mode         = loadPref("splice_mode", false),       -- true = splice 2 seed | false = 1 seed
-    seed_1_id           = tonumber(loadPref("seed_1_id", 3)) or 3,       -- Default Dirt Seed
-    seed_1_name         = tostring(loadPref("seed_1_name", "Dirt Seed")),
-    seed_2_id           = tonumber(loadPref("seed_2_id", 15)) or 15,     -- Default Rock Seed
-    seed_2_name         = tostring(loadPref("seed_2_name", "Rock Seed")),
+    seed_1_id           = tonumber(loadPref("seed_1_id", 17)) or 17,     -- Default Grass Seed (#17)
+    seed_1_name         = tostring(loadPref("seed_1_name", "Grass Seed")),
+    seed_2_id           = tonumber(loadPref("seed_2_id", 0)) or 0,
+    seed_2_name         = tostring(loadPref("seed_2_name", "None")),
 
     -- Delay & Kecepatan (ms)
     plant_delay         = tonumber(loadPref("plant_delay", 180)) or 180,
@@ -383,6 +516,9 @@ local CFG = {
 -- Pastikan list berupa table
 if type(CFG.world_list) ~= "table" then CFG.world_list = {} end
 if type(CFG.storage_world_list) ~= "table" then CFG.storage_world_list = {} end
+
+-- Muat pengaturan tersimpan dari file config
+pcall(loadConfigFileBackup)
 
 -- ============================================================================
 -- 2. RUNTIME STATE & LOGGER
@@ -430,38 +566,36 @@ _G.UI_STATE = UI_STATE
 _G.__BOREN_APEX_UI_STATE = UI_STATE
 
 
--- Forward Declarations
-local updatePowerStatusList
-local updateSeedStatusDisplay
-local updateWorldDisplayList
-local updateStorageDisplayList
-local updateFileInfoDisplayList
-local updateBagDisplayList
-local syncInventoryCache
-local updateLogDisplayList
-local showClientDialog
-local safeSendRawDialog
-local showPlantMainDialog
-local showPlantSettingsDialog
-local showPlantSeedsDialog
-local showPlantAddCurrentWorldDialog
-local showPlantQueueDialog
-local showPlantStorageDialog
-local showPlantPacingDialog
-local showPlantLogsDialog
-local showPlantItemSearchDialog
-local openWorldListManagerDialog
-local openEditWorldEntryDialog
-local openStorageListManagerDialog
-local openEditStorageEntryDialog
-local openPasteWorldListDialog
-local openCopyAllWorldsDialog
-local parseAndValidateWorldBatch
-local parseAndValidateStorageBatch
-local resolvePickedItemID
-local savePlantWorldsToFile
-local savePlantStoragesToFile
-local getCurrentWorldSafe
+-- Forward Declarations (Safe Initialized Functions - Anti-Nil)
+local updatePowerStatusList = function() end
+local updateSeedStatusDisplay = function() end
+local updateWorldDisplayList = function() end
+local updateStorageDisplayList = function() end
+local updateFileInfoDisplayList = function() end
+local updateBagDisplayList = function() end
+local syncInventoryCache = function() end
+local updateLogDisplayList = function() end
+local showClientDialog = function(d) return false end
+local safeSendRawDialog = function(d) return false end
+local showPlantMainDialog = function() end
+local showPlantSettingsDialog = function() end
+local showPlantSeedsDialog = function() end
+local showPlantAddCurrentWorldDialog = function(cw) end
+local showPlantQueueDialog = function() end
+local showPlantStorageDialog = function() end
+local showPlantPacingDialog = function() end
+local showPlantLogsDialog = function() end
+local showPlantItemSearchDialog = function(q, r) end
+local openWorldListManagerDialog = function() end
+local openEditWorldEntryDialog = function(idx) end
+local openStorageListManagerDialog = function() end
+local openEditStorageEntryDialog = function(idx) end
+local openPasteWorldListDialog = function() end
+local openCopyAllWorldsDialog = function() end
+local parseAndValidateWorldBatch = function(t, r) return 0, 0, 0, "" end
+local parseAndValidateStorageBatch = function(t, r) return 0, 0, 0, "" end
+local resolvePickedItemID = function(id) return id end
+local getCurrentWorldSafe = function() return "" end
 
 getCurrentWorldSafe = function()
     local fn = getCurrentWorldName or getWorld or getCurrentWorld
@@ -547,9 +681,10 @@ end
 
 local function persistConfig(silentFileSave)
     savePrefs(CFG)
+    pcall(saveConfigFileBackup)
     if silentFileSave ~= false then
-        if savePlantWorldsToFile then pcall(savePlantWorldsToFile, true) end
-        if savePlantStoragesToFile then pcall(savePlantStoragesToFile, true) end
+        pcall(savePlantWorldsToFile, true)
+        pcall(savePlantStoragesToFile, true)
     end
 end
 
@@ -3405,8 +3540,8 @@ local function autoPlantMainLoop()
         if sendNotification then pcall(sendNotification, "Peringatan: Seed 1 & 2 tidak boleh sama saat Splice!") end
     end
     persistConfig()
-    updateSeedStatusDisplay()
-    updatePowerStatusList()
+    if updateSeedStatusDisplay then pcall(updateSeedStatusDisplay) end
+    if updatePowerStatusList then pcall(updatePowerStatusList) end
 
     if #CFG.world_list == 0 then
         local curW = getCurrentWorldSafe()
