@@ -431,6 +431,8 @@ local updateFileInfoDisplayList
 local updateBagDisplayList
 local syncInventoryCache
 local updateLogDisplayList
+local showClientDialog
+local safeSendRawDialog
 local showPlantMainDialog
 local showPlantSettingsDialog
 local showPlantSeedsDialog
@@ -3649,15 +3651,22 @@ end
 -- ============================================================================
 -- 16. DIALOG MANAGEMENT (UNIFIED MANAGER: COPY, QUICK PASTE, EDIT & HAPUS)
 -- ============================================================================
-local function safeSendRawDialog(dText)
+local function showClientDialog(dText)
     if not dText or dText == "" then return false end
     if growtopia and type(growtopia.sendDialog) == "function" then
         local ok = pcall(growtopia.sendDialog, dText)
         if ok then return true end
     end
     if sendVariant then
-        local ok = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
-        if ok then return true end
+        -- Standar resmi Growlauncher: v1 = "OnDialogRequest", v2 = dText
+        local ok1 = pcall(sendVariant, { v1 = "OnDialogRequest", v2 = dText })
+        if ok1 then return true end
+        local okNum = pcall(sendVariant, { [1] = "OnDialogRequest", [2] = dText })
+        if okNum then return true end
+    end
+    if sendVariantList then
+        local okList = pcall(sendVariantList, { [1] = "OnDialogRequest", [2] = dText })
+        if okList then return true end
     end
     if sendDialog then
         pcall(sendDialog, dText)
@@ -3665,6 +3674,9 @@ local function safeSendRawDialog(dText)
     end
     return false
 end
+_G.showClientDialog = showClientDialog
+local safeSendRawDialog = showClientDialog
+_G.safeSendRawDialog = showClientDialog
 
 -- ============================================================================
 -- 19. DIALOG BUILDERS & UNIFIED DIALOG MANAGEMENT
