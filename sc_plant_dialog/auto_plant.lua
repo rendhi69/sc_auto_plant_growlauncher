@@ -3638,51 +3638,24 @@ openWorldListManagerDialog = function(fmt)
     return safeSendRawDialog(table.concat(dLines, "\n"))
 end
 
-openStorageListManagerDialog = function(fmt)
-    fmt = fmt or "colon"
-
-    local copyLines = {}
-    for _, e in ipairs(CFG.storage_world_list) do
-        local door = e.door or ""
-        if fmt == "colon" then
-            table.insert(copyLines, (door ~= "") and (e.name .. ":" .. door) or e.name)
-        elseif fmt == "pipe" then
-            table.insert(copyLines, (door ~= "") and (e.name .. "|" .. door) or e.name)
-        else
-            table.insert(copyLines, e.name)
-        end
-    end
-    local rawCopy = table.concat(copyLines, "\n")
-    local rawBoxText = table.concat(copyLines, ", ")
-    if ImGui and ImGui.SetClipboardText and rawCopy ~= "" then
-        pcall(ImGui.SetClipboardText, rawCopy)
-    end
-
+openStorageListManagerDialog = function()
     local dLines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`wKelola, Salin & Tempel Gudang (%d)``|left|242|", #CFG.storage_world_list),
-        "add_textbox|`oDi sini Anda bisa salin daftar gudang, tempel banyak gudang baru, dan edit/hapus gudang.|left|",
+        string.format("add_label_with_icon|big|`wKelola & Tempel Gudang (%d)``|left|242|", #CFG.storage_world_list),
+        "add_textbox|`oKelola daftar antrean gudang seed, tempel gudang baru, dan atur door/seed.|left|",
         "add_spacer|small|",
 
-        -- Bagian 1: Salin Semua Gudang
-        "add_textbox|`2[1. Salin Semua Gudang Seed ke Clipboard]|left|",
-        string.format("add_text_input|boren_stcopy_box|Salin Gudang|%s|9999|", rawBoxText),
-        "add_button|boren_btn_stfmt_colon|Format Titik Dua (:)|noflags|0|0|",
-        "add_button|boren_btn_stfmt_pipe|Format Garis (|)|noflags|0|0|",
-        "add_button|boren_btn_stfmt_name|Hanya Nama Gudang|noflags|0|0|",
-        "add_spacer|small|",
-
-        -- Bagian 2: Tempel Banyak / Tambah Gudang
-        "add_textbox|`2[2. Tempel / Tambah Gudang Seed ke Antrean]|left|",
+        -- Bagian 1: Tempel Banyak / Tambah Gudang
+        "add_textbox|`2[1. Tempel / Tambah Gudang Seed ke Antrean]|left|",
         "add_textbox|`eTempel 1 atau banyak gudang (Format: WORLD:ID / WORLD|ID / WORLD). Bebas koma, spasi, enter.|left|",
         "add_text_input|boren_stpaste_raw|Tempel Gudang di sini:||9999|",
         "add_checkbox|boren_stpaste_replace|Ganti semua gudang (Replace)|0|",
         "add_button|boren_submit_stpaste|`2+ Tempel / Tambah ke Antrean|noflags|0|0|",
         "add_spacer|small|",
 
-        -- Bagian 3: Daftar Gudang & Aksi Edit/Hapus
-        string.format("add_textbox|`2[3. Daftar Antrean Gudang (%d Gudang)]|left|", #CFG.storage_world_list)
+        -- Bagian 2: Daftar Gudang & Aksi Edit/Hapus
+        string.format("add_textbox|`2[2. Daftar Antrean Gudang (%d Gudang)]|left|", #CFG.storage_world_list)
     }
 
     if #CFG.storage_world_list == 0 then
@@ -3880,16 +3853,7 @@ local function onSendPacketDialogHook(ptype, pkt)
             return true
         end
 
-        if btn == "boren_btn_stfmt_colon" or btn == "boren_btn_fmt_colon" then
-            openStorageListManagerDialog("colon")
-            return true
-        elseif btn == "boren_btn_stfmt_pipe" or btn == "boren_btn_fmt_pipe" then
-            openStorageListManagerDialog("pipe")
-            return true
-        elseif btn == "boren_btn_stfmt_name" or btn == "boren_btn_fmt_name" then
-            openStorageListManagerDialog("name_only")
-            return true
-        elseif btn == "boren_submit_stpaste" or btn == "boren_submit_paste" then
+        if btn == "boren_submit_stpaste" or btn == "boren_submit_paste" then
             local raw = pkt:match("boren_stpaste_raw|(.-)\nboren_stpaste_replace|")
                 or pkt:match("boren_paste_raw|(.-)\nboren_paste_replace|")
                 or pkt:match("boren_stpaste_raw|(.-)\nbuttonClicked|")
@@ -4692,8 +4656,8 @@ showPlantMainDialog = function()
 
     -- Menu Lanjutan (World Manager & Storage Manager Resmi)
     lines[#lines + 1] = "add_smalltext|`c=== MENU LANJUTAN ===|"
-    lines[#lines + 1] = string.format("add_button|btn_menu_queue|`9[ 📋 Kelola, Salin & Tempel Antrean World (%d World) ]|", #CFG.world_list)
-    lines[#lines + 1] = string.format("add_button|btn_menu_storage|`e[ 📦 Kelola, Salin & Tempel Gudang Seed (%d Gudang) ]|", #CFG.storage_world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_queue|`9[ 📋 Kelola & Tempel Antrean World (%d World) ]|", #CFG.world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_storage|`e[ 📦 Kelola & Tempel Gudang Seed (%d Gudang) ]|", #CFG.storage_world_list)
     lines[#lines + 1] = "add_button|btn_menu_pacing|`a[ Tuning Kecepatan & Delay Pacing ]|"
     lines[#lines + 1] = "add_button|btn_menu_logs|`7[ Lihat Catatan Aktivitas / Logs ]|"
     lines[#lines + 1] = "add_spacer|small|"
