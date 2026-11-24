@@ -3914,14 +3914,15 @@ showPlantQueueDialog = function()
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
 
-        -- SEMUA FORM INPUT DITARUH DI ATAS (AGAR TIDAK TERPOTONG ENGINE GROWTOPIA)
-        "add_textbox|`wTambah 1 World ke Antrean:|left|",
-        "add_text_input|in_new_world|Nama World (WORLD atau WORLD:DOOR):||32|",
+        -- FORM INPUT TAMBAH WORLD KE ANTREAN
+        "add_textbox|`wTambah World ke Antrean (Format: WORLD atau WORLD:DOOR):|left|",
+        "add_text_input|in_new_world|Nama World| |32|",
         "add_button|btn_add_world_entry|Tambah World ke Antrean|noflags|0|0|",
         "add_spacer|small|",
 
-        "add_textbox|`wTambah Banyak World Sekaligus (Batch Import):|left|",
-        "add_text_input|in_batch_worlds|Daftar Banyak World (pisahkan spasi):||36|",
+        -- FORM INPUT BATCH
+        "add_textbox|`wTambah Banyak World Sekaligus (Pisahkan Spasi):|left|",
+        "add_text_input|in_batch_worlds|Daftar Banyak World| |40|",
         "add_button|btn_add_batch_worlds|Tambahkan Semua World|noflags|0|0|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
@@ -3981,15 +3982,15 @@ showPlantStorageDialog = function()
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
 
-        -- FORM INPUT GUDANG & THRESHOLD DI ATAS
-        "add_textbox|`wTambah Gudang Seed Baru:|left|",
-        "add_text_input|in_new_stor_world|Nama World Gudang (WORLD:DOOR):||32|",
+        -- FORM INPUT GUDANG SEED BARU
+        "add_textbox|`wTambah Gudang Seed Baru (Format: WORLD atau WORLD:DOOR):|left|",
+        "add_text_input|in_new_stor_world|Nama Gudang| |32|",
         "add_button|btn_add_stor_entry|Tambah Gudang Seed|noflags|0|0|",
         "add_spacer|small|",
 
         "add_textbox|`wPengaturan Batas Pengambilan Bibit di Tas:|left|",
-        string.format("add_text_input|in_min_bp|Ambil saat seed di tas sisa:|%d|5|", minBp),
-        string.format("add_text_input|in_tar_bp|Target isi seed ke dalam tas:|%d|5|", tarBp),
+        string.format("add_text_input|in_min_bp|Ambil saat seed di tas sisa|%d|5|", minBp),
+        string.format("add_text_input|in_tar_bp|Target isi seed ke dalam tas|%d|5|", tarBp),
         "add_button|btn_save_stor_thresh|Simpan Batas Pengambilan Tas|noflags|0|0|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
@@ -4036,7 +4037,7 @@ showPlantItemSearchDialog = function(query, results)
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wKetik nama atau ID item untuk mencari benih:|left|",
-        string.format("add_text_input|in_search_q|Nama atau ID Item:|%s|32|", query),
+        string.format("add_text_input|in_search_q|Nama atau ID Item|%s|32|", (query ~= "") and query or " "),
         "add_button|btn_do_search|Cari di Database Item|noflags|0|0|",
         "add_spacer|small|"
     }
@@ -4079,9 +4080,9 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
         string.format("add_textbox|`wWorld Terdeteksi: `b%s `p- `wSiap Ditambahkan|left|", currentWorld),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_text_input|in_cur_world|Nama World:|%s|32|", currentWorld),
-        "add_text_input|in_cur_door|Door ID (Opsional):||20|",
-        string.format("add_text_input|in_cur_s1|ID Seed 1:|%s|20|", s1Display),
+        string.format("add_text_input|in_cur_world|Nama World|%s|32|", currentWorld),
+        "add_text_input|in_cur_door|Door ID| |20|",
+        string.format("add_text_input|in_cur_s1|ID Seed 1|%s|20|", s1Display),
         string.format("add_checkbox|chk_cur_splice|Mode Splice (Kawin Benih)|%d|", isSplice),
         "add_spacer|small|",
         "add_button|btn_submit_cur_world|Tambahkan World ke Antrean|noflags|0|0|",
@@ -4197,8 +4198,8 @@ showPlantSeedsDialog = function()
         string.format("add_textbox|`wSeed 2 Splice: `b#%d (%s) `p- `wDi Tas: `b%d seed|left|", s2ID, s2Name, s2Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_text_input|in_seed1|ID atau Nama Seed 1:|%s|32|", tostring(s1ID)),
-        string.format("add_text_input|in_seed2|ID atau Nama Seed 2 (Splice):|%s|32|", (s2ID > 0) and tostring(s2ID) or ""),
+        string.format("add_text_input|in_seed1|ID atau Nama Seed 1|%s|32|", tostring(s1ID)),
+        string.format("add_text_input|in_seed2|ID Seed 2 Splice|%s|32|", (s2ID > 0) and tostring(s2ID) or "0"),
         "add_spacer|small|",
         "add_button|btn_apply_seeds|Simpan dan Terapkan Benih|noflags|0|0|",
         "add_button|btn_open_search_item|Cari di Database Item (16K)|noflags|0|0|",
@@ -4222,8 +4223,8 @@ showPlantPacingDialog = function()
         "add_button|preset_speed_fast|Profil Agresif (120ms Plant / 85ms Step)|noflags|0|0|",
         "add_button|preset_speed_norm|Profil Standar (180ms Plant / 110ms Step)|noflags|0|0|",
         "add_spacer|small|",
-        string.format("add_text_input|in_plant_delay|Plant Delay (ms):|%d|8|", CFG.plant_delay or 180),
-        string.format("add_text_input|in_step_delay|Step Delay (ms):|%d|8|", CFG.step_delay or 110),
+        string.format("add_text_input|in_plant_delay|Plant Delay (ms)|%d|8|", CFG.plant_delay or 180),
+        string.format("add_text_input|in_step_delay|Step Delay (ms)|%d|8|", CFG.step_delay or 110),
         "add_spacer|small|",
         "add_button|btn_save_pacing|Simpan Jeda Kustom|noflags|0|0|",
         "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
