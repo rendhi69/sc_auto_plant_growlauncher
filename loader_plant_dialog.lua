@@ -4,13 +4,11 @@
 -- Repo: https://github.com/rendhi69/sc_auto_plant_growlauncher
 -- ============================================================================
 -- 100% In-Game Growtopia Dialog murni (OnDialogRequest / action|dialog_return).
--- ONLINE-FIRST: Selalu mengambil pembaruan skrip langsung dari GitHub raw resmi.
+-- ONLINE-FIRST: Selalu mengambil pembaruan skrip langsung dari GitHub / CDN resmi.
+-- Dilengkapi multi-fallback (jsDelivr CDN + GitHub raw) bebas blokir ISP.
 -- Jika offline atau fetch gagal, otomatis fallback memuat file lokal perangkat.
 -- Dilengkapi Fast Interceptor agar /plant & /p tidak pernah 'Unknown command'.
 -- ============================================================================
-
-local GITHUB_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/sc_plant_dialog/auto_plant.lua"
-local GITHUB_ROOT_URL = "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/auto_plant.lua"
 
 local function logMsg(msg)
     if LogToConsole then pcall(LogToConsole, "`5[BOREN LOADER] `w" .. tostring(msg)) end
@@ -124,7 +122,7 @@ local current_dir = ""
 if debug and debug.getinfo then
     local src = debug.getinfo(1, "S").source
     if src and src:sub(1, 1) == "@" then
-        current_dir = src:sub(2):match("^(.*[/\\])") or ""
+        current_dir = src:sub(2):match([=[^(.*[/\])]=]) or ""
     end
 end
 
@@ -148,48 +146,67 @@ local LOCAL_PATHS = {
 }
 
 -- ============================================================================
--- 1. PRIORITAS UTAMA: ONLINE-FIRST (SELALU UNDUH TERBARU DARI GITHUB RAW)
+-- 1. PRIORITAS UTAMA: ONLINE-FIRST (CDN & GITHUB RAW RESMI)
 -- ============================================================================
-logMsg("`9Menghubungkan ke GitHub untuk mengunduh Auto Plant Dialog terbaru...")
+local ONLINE_URLS = {
+    -- 1. jsDelivr CDN (Sangat cepat di Asia Tenggara & bebas blokir ISP Indonesia)
+    "https://cdn.jsdelivr.net/gh/rendhi69/sc_auto_plant_growlauncher@main/auto_plant.lua",
+    "https://cdn.jsdelivr.net/gh/rendhi69/sc_auto_plant_growlauncher@main/sc_plant_dialog/auto_plant.lua",
+    -- 2. GitHub Raw Canonical (Format resmi dokumentasi Growlauncher)
+    "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/refs/heads/main/auto_plant.lua",
+    "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/refs/heads/main/sc_plant_dialog/auto_plant.lua",
+    -- 3. GitHub Raw Standard
+    "https://raw.githubusercontent.com/rendhi69/sc_auto_plant_growlauncher/main/auto_plant.lua"
+}
+
+logMsg("`9Menghubungkan ke server untuk mengunduh Auto Plant Dialog terbaru (v2.3)...")
 local fetcher = fetch or (http and http.get) or (client and client.fetch) or (growtopia and growtopia.fetch)
 local content = nil
+local fetchedSource = ""
 
 if fetcher then
-    local fetchUrl = GITHUB_URL .. "?t=" .. makeAntiCacheTag()
-    local okFetch, res = pcall(fetcher, fetchUrl)
-    if okFetch and res then
-        if type(res) == "string" and #res > 500 then
-            content = res
-        elseif type(res) == "table" and res.body and #res.body > 500 then
-            content = res.body
+    for _, u in ipairs(ONLINE_URLS) do
+        -- Coba URL bersih terlebih dahulu (tanpa query string agar libcurl/fetch tidak error)
+        local okFetch, res = pcall(fetcher, u)
+        if okFetch and res then
+            if type(res) == "string" and #res > 500 then
+                content = res
+                fetchedSource = u
+                break
+            elseif type(res) == "table" and res.body and #res.body > 500 then
+                content = res.body
+                fetchedSource = u
+                break
+            end
         end
-    end
 
-    -- Jika URL subfolder gagal, coba URL root repo
-    if not content or #content < 500 then
-        local fetchUrlRoot = GITHUB_ROOT_URL .. "?t=" .. makeAntiCacheTag()
-        local okF2, res2 = pcall(fetcher, fetchUrlRoot)
+        -- Coba varian anti-cache jika URL bersih gagal
+        local tag = makeAntiCacheTag()
+        local okF2, res2 = pcall(fetcher, u .. "?t=" .. tag)
         if okF2 and res2 then
             if type(res2) == "string" and #res2 > 500 then
                 content = res2
+                fetchedSource = u
+                break
             elseif type(res2) == "table" and res2.body and #res2.body > 500 then
                 content = res2.body
+                fetchedSource = u
+                break
             end
         end
     end
 end
 
 if content and #content > 500 then
-    logMsg("`2Berhasil mengunduh versi terbaru langsung dari GitHub!")
+    logMsg("`2Berhasil mengunduh Auto Plant terbaru (" .. tostring(#content) .. " bytes)!")
 
-    -- Simpan otomatis ke file lokal perangkat agar file lokal selalu terbarui
+    -- Simpan otomatis ke file lokal perangkat agar cache selalu sinkron dengan server
     for _, p in ipairs(LOCAL_PATHS) do
         if p and p ~= "" then
             local okW, fW = pcall(io.open, p, "w")
             if okW and fW then
                 pcall(function() fW:write(content) end)
                 pcall(function() fW:close() end)
-                break
             end
         end
     end
@@ -199,8 +216,8 @@ if content and #content > 500 then
     if chunk then
         local okRun, rErr = pcall(chunk)
         if okRun then
-            logMsg("`2Auto Plant In-Game Dialog Berhasil Aktif!")
-            notifyUser("Boren Auto Plant Siap! Ketik /plant di chat game.")
+            logMsg("`2[ONLINE] Auto Plant v2.3 In-Game Dialog Berhasil Aktif!")
+            notifyUser("`2[ONLINE] Auto Plant v2.3 Siap! Ketik /plant.")
             return
         else
             logMsg("`4Error runtime GitHub script: " .. tostring(rErr))
@@ -211,9 +228,9 @@ if content and #content > 500 then
 end
 
 -- ============================================================================
--- 2. CADANGAN: JIKA GITHUB GAGAL / OFFLINE, FALLBACK KE FILE LOKAL
+-- 2. CADANGAN: JIKA SERVER ONLINE GAGAL / OFFLINE, FALLBACK KE FILE LOKAL
 -- ============================================================================
-logMsg("`6Koneksi GitHub tidak tersedia, memuat cadangan file lokal...")
+logMsg("`4[PERINGATAN] Server online tidak merespon! Memuat cadangan file lokal...")
 for _, p in ipairs(LOCAL_PATHS) do
     if p and p ~= "" then
         local okOpen, f = pcall(io.open, p, "r")
@@ -221,14 +238,14 @@ for _, p in ipairs(LOCAL_PATHS) do
             local txt = f:read("*a")
             f:close()
             if txt and #txt > 100 then
-                logMsg("Memuat skrip cadangan lokal: " .. tostring(p))
+                logMsg("`6Memuat skrip cadangan lokal: " .. tostring(p))
                 local loaderFn = loadstring or load
                 local chunk, err = loaderFn(txt)
                 if chunk then
                     local okRun, rErr = pcall(chunk)
                     if okRun then
-                        logMsg("`2Auto Plant Cadangan Lokal Berhasil Aktif!")
-                        notifyUser("Boren Auto Plant Siap! Ketik /plant di chat game.")
+                        logMsg("`3[LOKAL] Auto Plant Cadangan Lokal Berhasil Aktif!")
+                        notifyUser("`4[LOKAL] File lokal dimuat (Bukan online terbaru)!")
                         return
                     else
                         logMsg("`4Error runtime lokal: " .. tostring(rErr))
@@ -241,5 +258,5 @@ for _, p in ipairs(LOCAL_PATHS) do
     end
 end
 
-logMsg("`4Gagal memuat skrip dari GitHub maupun penyimpanan lokal!")
-notifyUser("Gagal memuat Auto Plant Dialog!")
+logMsg("`4Gagal memuat skrip dari server online maupun penyimpanan lokal!")
+notifyUser("`4Gagal memuat Auto Plant Dialog!")

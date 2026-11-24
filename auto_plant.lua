@@ -3915,21 +3915,21 @@ showPlantQueueDialog = function()
     local stBadge = isRun and "`2(Running)" or "`4(Stopped)"
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pSetting World Farm``|left|2|",
+        "add_label_with_icon|big|`wSetting World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wCurrent World: `b%s `p- `wBot Status: %s|left|", curW, stBadge),
         string.format("add_textbox|`wTotal Queue: `2(%d World) `p- `wSeed in Bag: `2(%d seed)|left|", totalWorlds, s1Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|btn_menu_add_world|`pAdd World|noflags|0|0|",
-        string.format("add_button|btn_menu_list_world|`pList World Farm `2(%d World)|noflags|0|0|", totalWorlds),
-        "add_button|btn_queue_reset_all|`pReset Status World `4(Reset)|noflags|0|0|",
-        "add_button|btn_queue_save_file|`pSave Farm to TXT|noflags|0|0|",
+        "add_button|btn_menu_add_world|`wAdd World|noflags|0|0|",
+        string.format("add_button|btn_menu_list_world|`wList World Farm `2(%d World)|noflags|0|0|", totalWorlds),
+        "add_button|btn_queue_reset_all|`wReset Status World `4(Reset)|noflags|0|0|",
+        "add_button|btn_queue_save_file|`wSave Farm to TXT|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_main|`pBack|noflags|0|0|",
+        "add_button|btn_back_main|`wBack|noflags|0|0|",
         "end_dialog|plant_queue|Close||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -3938,9 +3938,9 @@ openWorldListManagerDialog = showPlantQueueDialog
 
 showPlantAddWorldDialog = function()
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pAdd World Farm``|left|2|",
+        "add_label_with_icon|big|`wAdd World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wEnter farm world name to plant: `2(Queue)|left|",
@@ -3949,8 +3949,8 @@ showPlantAddWorldDialog = function()
         "add_spacer|small|",
         "add_text_input|in_new_world|World Name| |32|",
         "add_spacer|small|",
-        "add_button|btn_add_world_entry|`pSave World `2(Add)|noflags|0|0|",
-        "add_button|btn_back_queue|`pBack|noflags|0|0|",
+        "add_button|btn_add_world_entry|`wSave World `2(Add)|noflags|0|0|",
+        "add_button|btn_back_queue|`wBack|noflags|0|0|",
         "end_dialog|plant_add_w|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -3958,9 +3958,9 @@ end
 
 showPlantQueueBatchDialog = function()
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pBatch Add Worlds``|left|2|",
+        "add_label_with_icon|big|`wBatch Add Worlds``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wEnter farm worlds separated by space or comma: `2(Batch)|left|",
@@ -3969,8 +3969,8 @@ showPlantQueueBatchDialog = function()
         "add_spacer|small|",
         "add_text_input|in_batch_worlds|World List| |80|",
         "add_spacer|small|",
-        "add_button|btn_add_batch_worlds|`pAdd All Worlds `2(Batch)|noflags|0|0|",
-        "add_button|btn_back_queue|`pBack|noflags|0|0|",
+        "add_button|btn_add_batch_worlds|`wAdd All Worlds `2(Batch)|noflags|0|0|",
+        "add_button|btn_back_queue|`wBack|noflags|0|0|",
         "end_dialog|plant_batch_w|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -3979,9 +3979,9 @@ end
 showPlantQueueListDialog = function()
     local totalWorlds = #CFG.world_list
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pList World Farm``|left|2|",
+        "add_label_with_icon|big|`wList World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wTotal Registered: `2(%d World)|left|", totalWorlds),
@@ -4002,9 +4002,9 @@ showPlantQueueListDialog = function()
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
     if totalWorlds > 0 then
-        lines[#lines + 1] = "add_button|btn_queue_clear_all|`pClear All Worlds `4(Clear)|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_queue_clear_all|`wClear All Worlds `4(Clear)|noflags|0|0|"
     end
-    lines[#lines + 1] = "add_button|btn_back_queue|`pBack|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_queue|`wBack|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_queue_list|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4012,19 +4012,19 @@ end
 showPlantQueueFileDialog = function()
     local totalWorlds = #CFG.world_list
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pFarm World File (.txt)``|left|2|",
+        "add_label_with_icon|big|`wFarm World File (.txt)``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wTotal Queue: `2(%d World)|left|", totalWorlds),
         "add_textbox|`wSelect farm world queue file action:|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|btn_queue_save_file|`pSave Farm to TXT `2(Save)|noflags|0|0|",
-        "add_button|btn_queue_load_file|`pLoad Farm from TXT `2(Load)|noflags|0|0|",
+        "add_button|btn_queue_save_file|`wSave Farm to TXT `2(Save)|noflags|0|0|",
+        "add_button|btn_queue_load_file|`wLoad Farm from TXT `2(Load)|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_queue|`pBack|noflags|0|0|",
+        "add_button|btn_back_queue|`wBack|noflags|0|0|",
         "end_dialog|plant_queue_file|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4042,21 +4042,21 @@ showPlantStorageDialog = function()
     local tarBp = tonumber(CFG.target_seed_bp) or 190
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pSetting Save World``|left|3802|",
+        "add_label_with_icon|big|`wSetting Save World``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wRegistered Vault: `2(%d Storage) `p- `wRestock when bag < `4(%d seed)|left|", totalStorages, minBp),
         string.format("add_textbox|`wBag Target: `2(%d seed) `p- `wCurrent Bag: `2(%d seed)|left|", tarBp, s1Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|btn_menu_add_storage|`pAdd Storage|noflags|0|0|",
-        string.format("add_button|btn_menu_thresh_storage|`pSet Seed Threshold `2(%d / %d)|noflags|0|0|", minBp, tarBp),
-        string.format("add_button|btn_menu_list_storage|`pList Save World `2(%d Storage)|noflags|0|0|", totalStorages),
-        "add_button|btn_menu_file_storage|`pSave Storage to TXT|noflags|0|0|",
+        "add_button|btn_menu_add_storage|`wAdd Storage|noflags|0|0|",
+        string.format("add_button|btn_menu_thresh_storage|`wSet Seed Threshold `2(%d / %d)|noflags|0|0|", minBp, tarBp),
+        string.format("add_button|btn_menu_list_storage|`wList Save World `2(%d Storage)|noflags|0|0|", totalStorages),
+        "add_button|btn_menu_file_storage|`wSave Storage to TXT|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_main|`pBack|noflags|0|0|",
+        "add_button|btn_back_main|`wBack|noflags|0|0|",
         "end_dialog|plant_storage|Close||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4065,9 +4065,9 @@ openStorageListManagerDialog = showPlantStorageDialog
 
 showPlantAddStorageDialog = function()
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pAdd Seed Vault``|left|3802|",
+        "add_label_with_icon|big|`wAdd Seed Vault``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wEnter storage world name to withdraw seeds: `2(Vault)|left|",
@@ -4076,8 +4076,8 @@ showPlantAddStorageDialog = function()
         "add_spacer|small|",
         "add_text_input|in_new_stor_world|Storage World Name| |32|",
         "add_spacer|small|",
-        "add_button|btn_add_stor_entry|`pSave Seed Vault `2(Add)|noflags|0|0|",
-        "add_button|btn_back_storage|`pBack|noflags|0|0|",
+        "add_button|btn_add_stor_entry|`wSave Seed Vault `2(Add)|noflags|0|0|",
+        "add_button|btn_back_storage|`wBack|noflags|0|0|",
         "end_dialog|plant_add_stor|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4087,9 +4087,9 @@ showPlantStorageThreshDialog = function()
     local minBp = tonumber(CFG.min_seed_bp) or 20
     local tarBp = tonumber(CFG.target_seed_bp) or 190
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pSeed Restock Threshold``|left|3802|",
+        "add_label_with_icon|big|`wSeed Restock Threshold``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wConfigure automatic seed restock thresholds:|left|",
@@ -4098,8 +4098,8 @@ showPlantStorageThreshDialog = function()
         string.format("add_text_input|in_min_bp|Restock when bag <|%d|5|", minBp),
         string.format("add_text_input|in_tar_bp|Refill bag target|%d|5|", tarBp),
         "add_spacer|small|",
-        "add_button|btn_save_stor_thresh|`pSave Threshold `2(Save)|noflags|0|0|",
-        "add_button|btn_back_storage|`pBack|noflags|0|0|",
+        "add_button|btn_save_stor_thresh|`wSave Threshold `2(Save)|noflags|0|0|",
+        "add_button|btn_back_storage|`wBack|noflags|0|0|",
         "end_dialog|plant_thresh_stor|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4108,9 +4108,9 @@ end
 showPlantStorageListDialog = function()
     local totalStorages = #CFG.storage_world_list
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pList Save World``|left|3802|",
+        "add_label_with_icon|big|`wList Save World``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wTotal Registered: `2(%d Storage)|left|", totalStorages),
@@ -4131,9 +4131,9 @@ showPlantStorageListDialog = function()
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
     if totalStorages > 0 then
-        lines[#lines + 1] = "add_button|btn_stor_clear_all|`pClear All Storages `4(Clear)|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_stor_clear_all|`wClear All Storages `4(Clear)|noflags|0|0|"
     end
-    lines[#lines + 1] = "add_button|btn_back_storage|`pBack|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_storage|`wBack|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_stor_list|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4141,19 +4141,19 @@ end
 showPlantStorageFileDialog = function()
     local totalStorages = #CFG.storage_world_list
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pStorage World File (.txt)``|left|3802|",
+        "add_label_with_icon|big|`wStorage World File (.txt)``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wTotal Registered Storage: `2(%d Storage)|left|", totalStorages),
         "add_textbox|`wSelect storage file action:|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|btn_stor_save_file|`pSave Storage to TXT `2(Save)|noflags|0|0|",
-        "add_button|btn_stor_load_file|`pLoad Storage from TXT `2(Load)|noflags|0|0|",
+        "add_button|btn_stor_save_file|`wSave Storage to TXT `2(Save)|noflags|0|0|",
+        "add_button|btn_stor_load_file|`wLoad Storage from TXT `2(Load)|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_storage|`pBack|noflags|0|0|",
+        "add_button|btn_back_storage|`wBack|noflags|0|0|",
         "end_dialog|plant_storage_file|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4171,9 +4171,9 @@ showPlantItemSearchDialog = function(query, results)
     end
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pSearch Item Database``|left|4585|",
+        "add_label_with_icon|big|`wSearch Item Database``|left|4585|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|"
     }
@@ -4190,21 +4190,21 @@ showPlantItemSearchDialog = function(query, results)
             if seedID <= 0 then seedID = (it.id % 2 == 0) and (it.id + 1) or it.id end
             local sName = (seedName ~= "") and seedName or BOREN_ITEM_DB:resolveName(seedID)
             lines[#lines + 1] = string.format("add_textbox|`p- `w#%d `b%s `p(#%d) `w-> Seed `2(#%d %s)|left|", i, it.name, it.id, seedID, sName)
-            lines[#lines + 1] = string.format("add_button|use_s1_%d|`pSet as Seed 1 `2(#%d)|noflags|0|0|", seedID, seedID)
-            lines[#lines + 1] = string.format("add_button|use_s2_%d|`pSet as Seed 2 Splice `2(#%d)|noflags|0|0|", seedID, seedID)
+            lines[#lines + 1] = string.format("add_button|use_s1_%d|`wSet as Seed 1 `2(#%d)|noflags|0|0|", seedID, seedID)
+            lines[#lines + 1] = string.format("add_button|use_s2_%d|`wSet as Seed 2 Splice `2(#%d)|noflags|0|0|", seedID, seedID)
         end
         lines[#lines + 1] = "add_spacer|small|"
         lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
         lines[#lines + 1] = string.format("add_text_input|in_search_q|New Search Query|%s|32|", (query ~= "") and query or " ")
         lines[#lines + 1] = "add_spacer|small|"
-        lines[#lines + 1] = "add_button|btn_do_search|`pSearch Again `2(Find)|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_do_search|`wSearch Again `2(Find)|noflags|0|0|"
     elseif query ~= "" then
         lines[#lines + 1] = string.format("add_textbox|`4(No Item Found) `wNo results found for '%s'.|left|", query)
         lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
         lines[#lines + 1] = "add_spacer|small|"
         lines[#lines + 1] = string.format("add_text_input|in_search_q|Search Query|%s|32|", query)
         lines[#lines + 1] = "add_spacer|small|"
-        lines[#lines + 1] = "add_button|btn_do_search|`pSearch Item Database `2(Find)|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_do_search|`wSearch Item Database `2(Find)|noflags|0|0|"
     else
         lines[#lines + 1] = "add_textbox|`wTotal Database: `2(16,000+ Items) `p- `wEngine: `2(Online)|left|"
         lines[#lines + 1] = "add_textbox|`wSearch seed or block by item name or ID:|left|"
@@ -4213,10 +4213,10 @@ showPlantItemSearchDialog = function(query, results)
         lines[#lines + 1] = "add_spacer|small|"
         lines[#lines + 1] = "add_text_input|in_search_q|Item Name or ID| |32|"
         lines[#lines + 1] = "add_spacer|small|"
-        lines[#lines + 1] = "add_button|btn_do_search|`pSearch Item Database `2(Find)|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_do_search|`wSearch Item Database `2(Find)|noflags|0|0|"
     end
 
-    lines[#lines + 1] = "add_button|btn_back_seeds|`pBack|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_seeds|`wBack|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_search_db|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4229,9 +4229,9 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
     end
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pAdd Current World``|left|2|",
+        "add_label_with_icon|big|`wAdd Current World``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wDetected World: `b%s `p- `wStatus: `2(Ready)|left|", currentWorld),
@@ -4240,8 +4240,8 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
         string.format("add_text_input|in_cur_world|World Name|%s|32|", currentWorld),
         "add_text_input|in_cur_door|Door ID (Optional)| |20|",
         "add_spacer|small|",
-        "add_button|btn_submit_cur_world|`pAdd World to Queue `2(Add)|noflags|0|0|",
-        "add_button|btn_back_main|`pBack|noflags|0|0|",
+        "add_button|btn_submit_cur_world|`wAdd World to Queue `2(Add)|noflags|0|0|",
+        "add_button|btn_back_main|`wBack|noflags|0|0|",
         "end_dialog|plant_add_curr|Cancel||"
     }
     return showClientDialog(table.concat(lines, "\n"))
@@ -4274,9 +4274,9 @@ showPlantMainDialog = function()
     local stBadge = isRun and "`2(Running)" or "`4(Stopped)"
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`pBoren Auto Plant Pro``|left|%d|", headerIcon),
+        string.format("add_label_with_icon|big|`wBoren Auto Plant Pro `2(v2.3)``|left|%d|", headerIcon),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wStatus: %s `p- `wWorld: `b%s `p- `wBag: `2(%d seed)|left|", stBadge, curW, s1Count),
@@ -4287,21 +4287,21 @@ showPlantMainDialog = function()
 
     -- Tombol Utama Kontrol Bot
     if not isRun then
-        lines[#lines + 1] = "add_button|btn_start_bot|`pStart Bot Auto Plant `2(Ready)|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_start_bot|`wStart Bot Auto Plant `2(Ready)|noflags|0|0|"
     else
-        lines[#lines + 1] = "add_button|btn_stop_bot|`pStop Bot Auto Plant `4(Active)|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_stop_bot|`wStop Bot Auto Plant `4(Active)|noflags|0|0|"
     end
-    lines[#lines + 1] = string.format("add_button|btn_sync_curr|`pAdd Current World `2(%s)|noflags|0|0|", curW)
+    lines[#lines + 1] = string.format("add_button|btn_sync_curr|`wAdd Current World `2(%s)|noflags|0|0|", curW)
     lines[#lines + 1] = "add_spacer|small|"
 
     -- Tombol Menu Fitur
-    lines[#lines + 1] = string.format("add_button|btn_menu_queue|`pSetting World Farm `2(%d World)|noflags|0|0|", #CFG.world_list)
-    lines[#lines + 1] = string.format("add_button|btn_menu_storage|`pSetting Save World `2(%d Storage)|noflags|0|0|", #CFG.storage_world_list)
-    lines[#lines + 1] = string.format("add_button|btn_menu_seeds|`pSet Plant Seed `2(#%d)|noflags|0|0|", s1ID)
-    lines[#lines + 1] = "add_button|btn_menu_settings|`pApply Mod (Fly & Shield)|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_menu_logs|`pLog Activity Bot|noflags|0|0|"
+    lines[#lines + 1] = string.format("add_button|btn_menu_queue|`wSetting World Farm `2(%d World)|noflags|0|0|", #CFG.world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_storage|`wSetting Save World `2(%d Storage)|noflags|0|0|", #CFG.storage_world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_seeds|`wSet Plant Seed `2(#%d)|noflags|0|0|", s1ID)
+    lines[#lines + 1] = "add_button|btn_menu_settings|`wApply Mod (Fly & Shield)|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_menu_logs|`wLog Activity Bot|noflags|0|0|"
     lines[#lines + 1] = "add_spacer|small|"
-    lines[#lines + 1] = "add_button|btn_close_menu|`pClose|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_close_menu|`wClose|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_main|Close||"
 
     showClientDialog(table.concat(lines, "\n"))
@@ -4310,9 +4310,9 @@ end
 -- 6. SETTINGS & CHEAT SHIELD SUB-DIALOG (apply mod)
 showPlantSettingsDialog = function()
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pApply Mod & Protection``|left|32|",
+        "add_label_with_icon|big|`wApply Mod & Protection``|left|32|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wConfigure movement and protection toggles:|left|",
@@ -4326,8 +4326,8 @@ showPlantSettingsDialog = function()
         string.format("add_checkbox|chk_shield|Touch Shield (Anti-Punch Dialog)|%d|", (UI_STATE.touch_shield ~= false) and 1 or 0),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_button|btn_save_settings|`pSave Settings `2(Save)|noflags|0|0|",
-        "add_button|btn_back_main|`pBack|noflags|0|0|",
+        "add_button|btn_save_settings|`wSave Settings `2(Save)|noflags|0|0|",
+        "add_button|btn_back_main|`wBack|noflags|0|0|",
         "end_dialog|plant_settings|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4348,9 +4348,9 @@ showPlantSeedsDialog = function()
     if iconID <= 0 then iconID = 4585 end
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`pSet Plant Seed``|left|%d|", iconID),
+        string.format("add_label_with_icon|big|`wSet Plant Seed``|left|%d|", iconID),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wSeed 1 (Primary): `b#%d `2(%s) `p- `wIn Bag: `2(%d seed)|left|", s1ID, s1Name, s1Count),
@@ -4359,12 +4359,12 @@ showPlantSeedsDialog = function()
             or "add_textbox|`wSeed 2 (Splice): `4(None) `p- `wStatus: `4(Disabled)|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_button|btn_menu_set_seed1|`pSet Seed 1 (Primary) `2(#%d)|noflags|0|0|", s1ID),
-        string.format("add_button|btn_menu_set_seed2|`pSet Seed 2 (Splice) %s|noflags|0|0|", (s2ID > 0) and string.format("`2(#%d)", s2ID) or "`4(Disabled)"),
-        "add_button|btn_clear_splice|`pClear Seed 2 `4(Disable)|noflags|0|0|",
-        "add_button|btn_open_search_item|`pSearch Item Database `2(16K)|noflags|0|0|",
+        string.format("add_button|btn_menu_set_seed1|`wSet Primary Seed `2(#%d)|noflags|0|0|", s1ID),
+        string.format("add_button|btn_menu_set_seed2|`wSet Splice Seed %s|noflags|0|0|", (s2ID > 0) and string.format("`2(#%d)", s2ID) or "`4(Disabled)"),
+        "add_button|btn_clear_splice|`wClear Splice Seed `4(Disable)|noflags|0|0|",
+        "add_button|btn_open_search_item|`wSearch Item Database `2(16K)|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_main|`pBack|noflags|0|0|",
+        "add_button|btn_back_main|`wBack|noflags|0|0|",
         "end_dialog|plant_seeds|Close||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4380,9 +4380,9 @@ showPlantSetSeed1Dialog = function()
     if iconID <= 0 then iconID = 4585 end
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`pSet Seed 1 (Primary)``|left|%d|", iconID),
+        string.format("add_label_with_icon|big|`wSet Primary Seed``|left|%d|", iconID),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wCurrent Seed: `b#%d `2(%s) `p- `wBag: `2(%d seed)|left|", s1ID, s1Name, s1Count),
@@ -4391,8 +4391,8 @@ showPlantSetSeed1Dialog = function()
         "add_spacer|small|",
         string.format("add_text_input|in_new_seed1|Seed Name or ID|%s|32|", tostring(s1ID)),
         "add_spacer|small|",
-        "add_button|btn_save_seed1_entry|`pSave Seed 1 `2(Save)|noflags|0|0|",
-        "add_button|btn_back_seeds|`pBack|noflags|0|0|",
+        "add_button|btn_save_seed1_entry|`wSave Seed `2(Save)|noflags|0|0|",
+        "add_button|btn_back_seeds|`wBack|noflags|0|0|",
         "end_dialog|plant_set_seed1|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4412,9 +4412,9 @@ showPlantSetSeed2Dialog = function()
         or "`wCurrent Splice: `4(None) `p- `wStatus: `4(Disabled)"
 
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        string.format("add_label_with_icon|big|`pSet Seed 2 (Splice)``|left|%d|", iconID),
+        string.format("add_label_with_icon|big|`wSet Splice Seed``|left|%d|", iconID),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|%s|left|", curText),
@@ -4423,8 +4423,8 @@ showPlantSetSeed2Dialog = function()
         "add_spacer|small|",
         string.format("add_text_input|in_new_seed2|Splice Seed ID / Name|%s|32|", (s2ID > 0) and tostring(s2ID) or "0"),
         "add_spacer|small|",
-        "add_button|btn_save_seed2_entry|`pSave Seed 2 `2(Save)|noflags|0|0|",
-        "add_button|btn_back_seeds|`pBack|noflags|0|0|",
+        "add_button|btn_save_seed2_entry|`wSave Splice `2(Save)|noflags|0|0|",
+        "add_button|btn_back_seeds|`wBack|noflags|0|0|",
         "end_dialog|plant_set_seed2|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4433,22 +4433,22 @@ end
 -- 8. PACING SUB-DIALOG
 showPlantPacingDialog = function()
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pBot Speed & Delays``|left|1422|",
+        "add_label_with_icon|big|`wBot Speed & Delays``|left|1422|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wSelect speed preset or configure custom delay:|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|preset_speed_fast|`pAggressive Profile `2(120ms / 85ms)|noflags|0|0|",
-        "add_button|preset_speed_norm|`pStandard Profile `2(180ms / 110ms)|noflags|0|0|",
+        "add_button|preset_speed_fast|`wAggressive Profile `2(120ms / 85ms)|noflags|0|0|",
+        "add_button|preset_speed_norm|`wStandard Profile `2(180ms / 110ms)|noflags|0|0|",
         "add_spacer|small|",
         string.format("add_text_input|in_plant_delay|Plant Delay (ms)|%d|8|", CFG.plant_delay or 180),
         string.format("add_text_input|in_step_delay|Step Delay (ms)|%d|8|", CFG.step_delay or 110),
         "add_spacer|small|",
-        "add_button|btn_save_pacing|`pSave Custom Delays `2(Save)|noflags|0|0|",
-        "add_button|btn_back_main|`pBack|noflags|0|0|",
+        "add_button|btn_save_pacing|`wSave Custom Delays `2(Save)|noflags|0|0|",
+        "add_button|btn_back_main|`wBack|noflags|0|0|",
         "end_dialog|plant_pacing|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
@@ -4458,9 +4458,9 @@ end
 showPlantLogsDialog = function()
     local curLogs = STATE.logs or {}
     local lines = {
-        "set_default_color|`p",
+        "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`pBot Activity Logs``|left|1422|",
+        "add_label_with_icon|big|`wBot Activity Logs``|left|1422|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wRecent Activity History: `2(%d Records)|left|", #curLogs),
@@ -4483,9 +4483,9 @@ showPlantLogsDialog = function()
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
-    lines[#lines + 1] = "add_button|btn_logs_refresh|`pRefresh Logs `2(Refresh)|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_logs_clear|`pClear Logs `4(Clear)|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_back_main|`pBack|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_logs_refresh|`wRefresh Logs `2(Refresh)|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_logs_clear|`wClear Logs `4(Clear)|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_main|`wBack|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_logs|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
