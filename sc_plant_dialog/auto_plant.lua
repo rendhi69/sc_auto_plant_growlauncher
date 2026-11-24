@@ -580,6 +580,8 @@ local safeSendRawDialog = function(d) return false end
 local showPlantMainDialog = function() end
 local showPlantSettingsDialog = function() end
 local showPlantSeedsDialog = function() end
+local showPlantSetSeed1Dialog = function() end
+local showPlantSetSeed2Dialog = function() end
 local showPlantAddCurrentWorldDialog = function(cw) end
 local showPlantQueueDialog = function() end
 local showPlantAddWorldDialog = function() end
@@ -3898,6 +3900,8 @@ _G.showPlantSeedsDialog = function() if showPlantSeedsDialog then showPlantSeeds
 _G.showPlantSettingsDialog = function() if showPlantSettingsDialog then showPlantSettingsDialog() end end
 _G.showPlantPacingDialog = function() if showPlantPacingDialog then showPlantPacingDialog() end end
 _G.showPlantLogsDialog = function() if showPlantLogsDialog then showPlantLogsDialog() end end
+_G.showPlantSetSeed1Dialog = function() if showPlantSetSeed1Dialog then showPlantSetSeed1Dialog() end end
+_G.showPlantSetSeed2Dialog = function() if showPlantSetSeed2Dialog then showPlantSetSeed2Dialog() end end
 _G.showPlantAddCurrentWorldDialog = function(cw) if showPlantAddCurrentWorldDialog then showPlantAddCurrentWorldDialog(cw) end end
 
 -- 1. QUEUE MANAGER DIALOG (MODULAR, COMPACT, EXACT MATCH TO IMAGE 2)
@@ -4311,10 +4315,11 @@ showPlantSeedsDialog = function()
     local s2ID = tonumber(CFG.seed_2_id) or 0
     local s1Name = getItemNameSafe(s1ID)
     if s1Name == "" or s1Name:find("Unknown") then s1Name = resolveSeedName(s1ID) end
-    local s2Name = (s2ID > 0) and getItemNameSafe(s2ID) or "NONAKTIF"
+    local s2Name = (s2ID > 0) and getItemNameSafe(s2ID) or "None (No Splice)"
     if s2ID > 0 and (s2Name == "" or s2Name:find("Unknown")) then s2Name = resolveSeedName(s2ID) end
     local s1Count = getInvCount(s1ID)
     local s2Count = getInvCount(s2ID)
+    local spliceBadge = (s2ID > 0) and "`2(Active)" or "`4(Disabled)"
 
     local lines = {
         "set_default_color|`o",
@@ -4322,17 +4327,67 @@ showPlantSeedsDialog = function()
         "add_label_with_icon|big|`wSet Plant Seed``|left|4585|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wSeed 1 Utama: `b#%d (%s) `p- `wDi Tas: `b%d seed|left|", s1ID, s1Name, s1Count),
-        string.format("add_textbox|`wSeed 2 Splice: `b#%d (%s) `p- `wDi Tas: `b%d seed|left|", s2ID, s2Name, s2Count),
+        string.format("add_textbox|`wSeed 1 (Primary): `b#%d (%s) `p- `wIn Bag: `2(%d seed)|left|", s1ID, s1Name, s1Count),
+        string.format("add_textbox|`wSeed 2 (Splice): `b#%d (%s) `p- `wStatus: %s|left|", s2ID, s2Name, spliceBadge),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_text_input|in_seed1|ID atau Nama Seed 1|%s|32|", tostring(s1ID)),
-        string.format("add_text_input|in_seed2|ID Seed 2 Splice|%s|32|", (s2ID > 0) and tostring(s2ID) or "0"),
+        string.format("add_button|btn_menu_set_seed1|Set Seed 1 (Primary) `2(#%d)|noflags|0|0|", s1ID),
+        string.format("add_button|btn_menu_set_seed2|Set Seed 2 (Splice) %s|noflags|0|0|", (s2ID > 0) and string.format("`2(#%d)", s2ID) or "`4(None)"),
+        "add_button|btn_clear_splice|Clear Seed 2 (No Splice)|noflags|0|0|",
+        "add_button|btn_open_search_item|Search Item Database|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_apply_seeds|Simpan dan Terapkan Benih|noflags|0|0|",
-        "add_button|btn_open_search_item|Cari di Database Item (16K)|noflags|0|0|",
-        "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
-        "end_dialog|plant_seeds|Batal||"
+        "add_button|btn_back_main|Back|noflags|0|0|",
+        "end_dialog|plant_seeds|Close||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+showPlantSetSeed1Dialog = function()
+    local s1ID = tonumber(CFG.seed_1_id) or 17
+    local s1Name = getItemNameSafe(s1ID)
+    if s1Name == "" or s1Name:find("Unknown") then s1Name = resolveSeedName(s1ID) end
+    local s1Count = getInvCount(s1ID)
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSet Seed 1 (Primary)``|left|4585|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wCurrent Seed 1: `b#%d (%s) `p- `wIn Bag: `2(%d seed)|left|", s1ID, s1Name, s1Count),
+        "add_textbox|`wEnter Item ID or Seed Name:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_text_input|in_new_seed1|Seed 1 ID / Name|%s|32|", tostring(s1ID)),
+        "add_spacer|small|",
+        "add_button|btn_save_seed1_entry|Save Seed 1|noflags|0|0|",
+        "add_button|btn_back_seeds|Back|noflags|0|0|",
+        "end_dialog|plant_set_seed1|Cancel||"
+    }
+    showClientDialog(table.concat(lines, "\n"))
+end
+
+showPlantSetSeed2Dialog = function()
+    local s2ID = tonumber(CFG.seed_2_id) or 0
+    local s2Name = (s2ID > 0) and getItemNameSafe(s2ID) or "None"
+    if s2ID > 0 and (s2Name == "" or s2Name:find("Unknown")) then s2Name = resolveSeedName(s2ID) end
+    local s2Count = getInvCount(s2ID)
+
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wSet Seed 2 (Splice)``|left|4585|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wCurrent Seed 2: `b#%d (%s) `p- `wIn Bag: `2(%d seed)|left|", s2ID, s2Name, s2Count),
+        "add_textbox|`wEnter Splice Seed ID or Name (0 to disable):|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_text_input|in_new_seed2|Seed 2 ID / Name|%s|32|", (s2ID > 0) and tostring(s2ID) or "0"),
+        "add_spacer|small|",
+        "add_button|btn_save_seed2_entry|Save Seed 2|noflags|0|0|",
+        "add_button|btn_back_seeds|Back|noflags|0|0|",
+        "end_dialog|plant_set_seed2|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4621,44 +4676,73 @@ local function handleDialogReturn(pkt)
 
         return true
 
-    -- D. SEEDS & SPLICE SUB-DIALOG (FIX BUG 2: SAVE SEED 1 & 2 DIRECTLY)
-    elseif dName == "plant_seeds" or pkt:find("dialog_name|plant_seeds") then
-        if btn == "btn_apply_seeds" or pkt:find("buttonClicked|btn_apply_seeds") then
-            local s1 = fields.in_seed1 or pkt:match("in_seed1|([^|\r\n]+)")
-            local s2 = fields.in_seed2 or pkt:match("in_seed2|([^|\r\n]+)")
+    -- D. SEEDS & SPLICE SUB-DIALOG (MODULAR, COMPACT SUB-DIALOGS)
+    elseif dName == "plant_seeds" or dName == "plant_set_seed1" or dName == "plant_set_seed2" or pkt:find("dialog_name|plant_seeds") or pkt:find("dialog_name|plant_set_seed1") or pkt:find("dialog_name|plant_set_seed2") then
+        if btn == "btn_menu_set_seed1" or pkt:find("buttonClicked|btn_menu_set_seed1") then
+            showPlantSetSeed1Dialog()
+            return true
+        elseif btn == "btn_menu_set_seed2" or pkt:find("buttonClicked|btn_menu_set_seed2") then
+            showPlantSetSeed2Dialog()
+            return true
+        elseif btn == "btn_back_seeds" or pkt:find("buttonClicked|btn_back_seeds") then
+            showPlantSeedsDialog()
+            return true
+        elseif btn == "btn_save_seed1_entry" or pkt:find("buttonClicked|btn_save_seed1_entry") then
+            local s1 = fields.in_new_seed1 or pkt:match("in_new_seed1|([^|\r\n]+)")
             if s1 and s1 ~= "" then
                 local seedID, sName = BOREN_ITEM_DB:resolveSeedID(s1)
                 if seedID and seedID > 0 then
                     CFG.seed_1_id = seedID
                     CFG.seed_1_name = (sName ~= "") and sName or resolveSeedName(seedID)
                     STATE.buf_seed_1_id = seedID
-                    addLog(string.format("[Benih] Seed 1 disetel: #%d (%s)", seedID, CFG.seed_1_name))
+                    persistConfig()
+                    addLog(string.format("[Seed 1] Saved: #%d (%s)", seedID, CFG.seed_1_name))
+                    if sendNotification then pcall(sendNotification, string.format("Seed 1: #%d (%s) saved!", seedID, CFG.seed_1_name)) end
                 end
             end
-            if s2 and s2 ~= "" then
+            showPlantSeedsDialog()
+            return true
+        elseif btn == "btn_save_seed2_entry" or pkt:find("buttonClicked|btn_save_seed2_entry") then
+            local s2 = fields.in_new_seed2 or pkt:match("in_new_seed2|([^|\r\n]+)")
+            if s2 and s2 ~= "" and s2 ~= "0" and s2:lower() ~= "none" then
                 local seedID, sName = BOREN_ITEM_DB:resolveSeedID(s2)
                 if seedID and seedID > 0 then
                     CFG.seed_2_id = seedID
                     CFG.seed_2_name = (sName ~= "") and sName or resolveSeedName(seedID)
                     CFG.splice_mode = true
                     STATE.buf_seed_2_id = seedID
-                    addLog(string.format("[Benih] Seed 2 (Splice) disetel: #%d (%s)", seedID, CFG.seed_2_name))
+                    persistConfig()
+                    addLog(string.format("[Seed 2] Saved Splice: #%d (%s)", seedID, CFG.seed_2_name))
+                    if sendNotification then pcall(sendNotification, string.format("Splice Seed 2: #%d (%s) saved!", seedID, CFG.seed_2_name)) end
                 else
                     CFG.seed_2_id = 0
                     CFG.seed_2_name = "None"
                     CFG.splice_mode = false
                     STATE.buf_seed_2_id = 0
+                    persistConfig()
                 end
             else
                 CFG.seed_2_id = 0
                 CFG.seed_2_name = "None"
                 CFG.splice_mode = false
                 STATE.buf_seed_2_id = 0
+                persistConfig()
+                addLog("[Seed 2] Splice mode disabled.")
+                if sendNotification then pcall(sendNotification, "Splice disabled.") end
             end
+            showPlantSeedsDialog()
+            return true
+        elseif btn == "btn_clear_splice" or pkt:find("buttonClicked|btn_clear_splice") then
+            CFG.seed_2_id = 0
+            CFG.seed_2_name = "None"
+            CFG.splice_mode = false
+            STATE.buf_seed_2_id = 0
             persistConfig()
-            if sendNotification then
-                pcall(sendNotification, string.format("Seed 1: #%d (%s) disimpan!", CFG.seed_1_id, CFG.seed_1_name))
-            end
+            addLog("[Seed 2] Splice mode disabled.")
+            if sendNotification then pcall(sendNotification, "Splice disabled (Seed 1 only).") end
+            showPlantSeedsDialog()
+            return true
+        elseif btn == "btn_apply_seeds" or pkt:find("buttonClicked|btn_apply_seeds") then
             showPlantSeedsDialog()
             return true
         elseif btn == "btn_open_search_item" or pkt:find("buttonClicked|btn_open_search_item") then
