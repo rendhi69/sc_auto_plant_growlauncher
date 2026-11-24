@@ -269,9 +269,13 @@ local function loadConfigFileBackup()
         if k and v then
             k = k:gsub("^%s+", ""):gsub("%s+$", "")
             v = v:gsub("^%s+", ""):gsub("%s+$", "")
-            if k == "seed_1_id" then CFG.seed_1_id = tonumber(v) or CFG.seed_1_id
+            if k == "seed_1_id" then
+                local numVal = tonumber(v)
+                if numVal and numVal > 0 then CFG.seed_1_id = ensureSeedID(numVal) end
             elseif k == "seed_1_name" then CFG.seed_1_name = v
-            elseif k == "seed_2_id" then CFG.seed_2_id = tonumber(v) or CFG.seed_2_id
+            elseif k == "seed_2_id" then
+                local numVal = tonumber(v)
+                if numVal and numVal > 0 then CFG.seed_2_id = ensureSeedID(numVal) else CFG.seed_2_id = 0 end
             elseif k == "seed_2_name" then CFG.seed_2_name = v
             elseif k == "splice_mode" then CFG.splice_mode = (v == "1")
             elseif k == "plant_mode" then CFG.plant_mode = v
@@ -925,8 +929,21 @@ end
 _G.getItemNameSafe = getItemNameSafe
 
 local function ensureSeedID(itemID)
-    local sID, _ = BOREN_ITEM_DB:resolveSeedID(itemID)
-    return (sID and sID > 0) and sID or (tonumber(itemID) or 0)
+    itemID = tonumber(itemID) or 0
+    if itemID <= 0 then return 0 end
+    itemID = math.floor(itemID)
+    -- Jika ganjil, sudah dipastikan ID SEED di Growtopia
+    if itemID % 2 == 1 then
+        return itemID
+    end
+    -- Jika genap (Block/Tree), coba resolusi via database atau block + 1
+    if BOREN_ITEM_DB and BOREN_ITEM_DB.loaded then
+        local sID, _ = BOREN_ITEM_DB:resolveSeedID(itemID)
+        if sID and sID > 0 and sID % 2 == 1 then
+            return sID
+        end
+    end
+    return itemID + 1
 end
 _G.ensureSeedID = ensureSeedID
 
@@ -1466,19 +1483,24 @@ local function onSendPacketRawCollectHook(pkt)
             return true -- Blokir! Bot tidak mengambil item
         end
 
-        -- KASUS 2: Ignore Gems (Item ID 112 di Growtopia)
-        if CFG.ignore_gems then
-            local getObjsFn = getObjects or getObjectList
-            if getObjsFn then
-                local ok, objs = pcall(getObjsFn)
-                if ok and type(objs) == "table" then
-                    for _, obj in pairs(objs) do
-                        if obj and tonumber(obj.id) == objUID then
-                            if tonumber(obj.itemid) == 112 then
-                                return true -- Blokir gems! Gems tetap di lantai
-                            end
-                            break
+        -- KASUS 2: Ignore Gems & Blokir Item Block (Auto Plant HANYA untuk Seed)
+        local getObjsFn = getObjects or getObjectList
+        if getObjsFn then
+            local ok, objs = pcall(getObjsFn)
+            if ok and type(objs) == "table" then
+                for _, obj in pairs(objs) do
+                    if obj and tonumber(obj.id) == objUID then
+                        local oItem = tonumber(obj.itemid) or 0
+                        -- 1. Blokir Gems (Item ID 112)
+                        if CFG.ignore_gems and oItem == 112 then
+                            return true -- Blokir gems!
                         end
+                        -- 2. BLOKIR BLOCK (Semua item genap di Growtopia adalah Block/Tree)!
+                        -- Auto Plant HANYA mengambil Seed (ID ganjil). Jangan ambil block ke tas!
+                        if oItem > 0 and oItem % 2 == 0 then
+                            return true -- Blokir block!
+                        end
+                        break
                     end
                 end
             end
@@ -2161,8 +2183,8 @@ _G.__detectPlantableRows = detectPlantableRows
 -- ============================================================================
 local function sendPlantPacket(tx, ty, itemID)
     if not sendPacketRaw then return false end
-    itemID = tonumber(itemID) or 0
-    if itemID <= 0 then return false end
+    itemID = ensureSeedID(itemID)
+    if itemID <= 0 or itemID % 2 == 0 then return false end
 
     local okP, p = pcall(getLocal)
     local px = (okP and p and (p.posX or (p.pos and p.pos.x))) or (tx * 32)
@@ -2330,11 +2352,11 @@ end
 
 
 local function hasEnoughSeedInBackpack()
-    local s1 = CFG.seed_1_id
-    local s2 = CFG.seed_2_id
+    local s1 = ensureSeedID(CFG.seed_1_id)
+    local s2 = (CFG.splice_mode and CFG.seed_2_id and CFG.seed_2_id > 0) and ensureSeedID(CFG.seed_2_id) or 0
 
-    local bp1 = getInvCount(s1)
-    local bp2 = CFG.splice_mode and getInvCount(s2) or 999
+    local bp1 = (s1 > 0) and getInvCount(s1) or 0
+    local bp2 = (CFG.splice_mode and s2 > 0) and getInvCount(s2) or 999
 
     -- VALIDASI 1: Jika di tas masih ada seed (bp1 > 0 dan jika splice bp2 > 0),
     -- bot WAJIB menanam sampai habis (0 di tas). Jangan pernah ambil seed ke storage saat tas belum habis!
@@ -2609,26 +2631,28 @@ local function isMatchingSeedID(floatingItemID, targetSeedID)
     targetSeedID = tonumber(targetSeedID) or 0
     if floatingItemID <= 0 or targetSeedID <= 0 then return false end
 
-    -- 1. Cocok persis
-    if floatingItemID == targetSeedID then return true end
+    -- ATURAN UTAMA: Skrip Auto Plant HANYA mengambil SEED (ID Ganjil)!
+    -- Jika objek di lantai bernilai genap (Block/Tree/Item lain), TOLAK MUTLAK!
+    if floatingItemID % 2 == 0 then
+        return false
+    end
 
-    -- 2. Normalisasi via ensureSeedID
-    local normFloat = ensureSeedID(floatingItemID)
-    local normTarget = ensureSeedID(targetSeedID)
-    if normFloat > 0 and normTarget > 0 and normFloat == normTarget then
+    -- Pastikan target juga dinormalisasi ke ID SEED (Ganjil)
+    local targetSeed = ensureSeedID(targetSeedID)
+    if targetSeed <= 0 or targetSeed % 2 == 0 then
+        return false
+    end
+
+    -- 1. Cocok persis ID Seed (Ganjil == Ganjil)
+    if floatingItemID == targetSeed then
         return true
     end
 
-    -- 3. Selisih 1 (Block <-> Seed di Growtopia)
-    if math.abs(floatingItemID - targetSeedID) == 1 then
-        return true
-    end
-
-    -- 4. BOREN_ITEM_DB resolusi ganda
+    -- 2. Validasi via kamus database jika ada alias seed yang sama
     if BOREN_ITEM_DB and BOREN_ITEM_DB.loaded then
         local sFloat, _ = BOREN_ITEM_DB:resolveSeedID(floatingItemID)
-        local sTarget, _ = BOREN_ITEM_DB:resolveSeedID(targetSeedID)
-        if sFloat > 0 and sTarget > 0 and sFloat == sTarget then
+        local sTarget, _ = BOREN_ITEM_DB:resolveSeedID(targetSeed)
+        if sFloat > 0 and sTarget > 0 and sFloat % 2 == 1 and sFloat == sTarget then
             return true
         end
     end
@@ -2638,11 +2662,11 @@ end
 _G.isMatchingSeedID = isMatchingSeedID
 
 local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
-    targetSeedID = math.floor(tonumber(targetSeedID) or 0)
-    if targetSeedID <= 0 then return 0 end
+    targetSeedID = ensureSeedID(targetSeedID)
+    if targetSeedID <= 0 or targetSeedID % 2 == 0 then return 0 end
 
-    local normTarget = ensureSeedID(targetSeedID)
-    local curBP = math.max(getInvCount(targetSeedID), getInvCount(normTarget))
+    -- Hanya hitung BENIH (seed) murni di tas, jangan pernah hitung block!
+    local curBP = getInvCount(targetSeedID)
     local needed = math.max(0, targetAmount - curBP)
     if needed <= 0 then return 0 end
 
@@ -2657,13 +2681,15 @@ local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
 
     for _, obj in ipairs(allObjs) do
         if not STATE.running then break end
-        if isMatchingSeedID(obj.itemid, targetSeedID) then
+        local fID = tonumber(obj.itemid) or 0
+        -- Filter ganda: fID wajib ganjil (seed) dan cocok dengan targetSeedID
+        if fID % 2 == 1 and isMatchingSeedID(fID, targetSeedID) then
             matchedCount = matchedCount + 1
             local ox = obj.tileX
             local oy = obj.tileY
 
-            addLog(string.format("[Storage] Menemukan floating seed (ID: %d, UID: %d, Jml: %d) di tile (%d, %d). Menghampiri...",
-                obj.itemid, obj.id, obj.amount, ox, oy))
+            addLog(string.format("[Storage] Menemukan floating seed #%d (%s, UID: %d, Jml: %d) di tile (%d, %d). Menghampiri...",
+                fID, resolveSeedName(fID), obj.id, obj.amount, ox, oy))
             moveSafeTo(ox, oy)
             safeSleep(100)
 
@@ -2685,7 +2711,7 @@ local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
             collected = collected + obj.amount
             syncInventoryCache()
 
-            local nowBP = math.max(getInvCount(targetSeedID), getInvCount(normTarget))
+            local nowBP = getInvCount(targetSeedID)
             if nowBP >= targetAmount then
                 addLog(string.format("[Storage] Target seed tercapai di tas: %d/%d", nowBP, targetAmount))
                 break
@@ -2694,25 +2720,25 @@ local function collectFloatingSeedsInStorage(targetSeedID, targetAmount)
     end
 
     if matchedCount == 0 then
-        addLog(string.format("[Storage] Tidak menemukan seed ID %d (atau norm ID %d) di antara %d objek floating.",
-            targetSeedID, normTarget, #allObjs))
+        addLog(string.format("[Storage] Tidak menemukan seed ID #%d (%s) di antara %d objek floating.",
+            targetSeedID, resolveSeedName(targetSeedID), #allObjs))
     end
 
     return collected
 end
 
 local function restockFromStorage()
+    local s1_seed = ensureSeedID(CFG.seed_1_id)
+    local s2_seed = CFG.splice_mode and ensureSeedID(CFG.seed_2_id) or 0
     -- Coba ambil floating seed target di world saat ini terlebih dahulu sebelum jeda
-    local c1_curr = collectFloatingSeedsInStorage(CFG.seed_1_id, CFG.target_seed_bp or 150)
+    local c1_curr = collectFloatingSeedsInStorage(s1_seed, CFG.target_seed_bp or 150)
     local c2_curr = 0
-    if CFG.splice_mode then
-        c2_curr = collectFloatingSeedsInStorage(CFG.seed_2_id, CFG.target_seed_bp or 150)
+    if CFG.splice_mode and s2_seed > 0 then
+        c2_curr = collectFloatingSeedsInStorage(s2_seed, CFG.target_seed_bp or 150)
     end
     syncInventoryCache()
-    local s1_id = CFG.seed_1_id
-    local s2_id = CFG.seed_2_id
-    local bp1_now = math.max(getInvCount(s1_id), getInvCount(ensureSeedID(s1_id)))
-    local bp2_now = CFG.splice_mode and math.max(getInvCount(s2_id), getInvCount(ensureSeedID(s2_id))) or 999
+    local bp1_now = getInvCount(s1_seed)
+    local bp2_now = CFG.splice_mode and getInvCount(s2_seed) or 999
     if bp1_now > 0 and (not CFG.splice_mode or bp2_now > 0) then
         addLog(string.format("[Ambil Seed] Berhasil mengambil floating seed di world saat ini (S1:%d, BP:%d). Lanjut tanam!", c1_curr, bp1_now))
         return true
@@ -2765,18 +2791,16 @@ local function restockFromStorage()
             end
 
             -- Ambil Seed 1
-            local c1 = collectFloatingSeedsInStorage(CFG.seed_1_id, CFG.target_seed_bp)
+            local c1 = collectFloatingSeedsInStorage(s1_seed, CFG.target_seed_bp)
             -- Jika Splice, ambil juga Seed 2
             local c2 = 0
-            if CFG.splice_mode then
-                c2 = collectFloatingSeedsInStorage(CFG.seed_2_id, CFG.target_seed_bp)
+            if CFG.splice_mode and s2_seed > 0 then
+                c2 = collectFloatingSeedsInStorage(s2_seed, CFG.target_seed_bp)
             end
 
             -- Tunggu toleransi sinkronisasi paket inventori dari server
-            local normS1 = ensureSeedID(CFG.seed_1_id)
-            local normS2 = ensureSeedID(CFG.seed_2_id)
-            local bp1 = math.max(getInvCount(CFG.seed_1_id), getInvCount(normS1))
-            local bp2 = CFG.splice_mode and math.max(getInvCount(CFG.seed_2_id), getInvCount(normS2)) or 999
+            local bp1 = getInvCount(s1_seed)
+            local bp2 = CFG.splice_mode and getInvCount(s2_seed) or 999
             local hasSeedNow = (not CFG.splice_mode and (bp1 > 0 or c1 > 0))
                             or (CFG.splice_mode and (bp1 > 0 or c1 > 0) and (bp2 > 0 or c2 > 0))
 
@@ -2784,8 +2808,8 @@ local function restockFromStorage()
                 for _ = 1, 5 do
                     safeSleep(200)
                     syncInventoryCache()
-                    bp1 = math.max(getInvCount(CFG.seed_1_id), getInvCount(normS1))
-                    bp2 = CFG.splice_mode and math.max(getInvCount(CFG.seed_2_id), getInvCount(normS2)) or 999
+                    bp1 = getInvCount(s1_seed)
+                    bp2 = CFG.splice_mode and getInvCount(s2_seed) or 999
                     if (not CFG.splice_mode and bp1 > 0) or (CFG.splice_mode and bp1 > 0 and bp2 > 0) then
                         hasSeedNow = true
                         break
@@ -2794,8 +2818,8 @@ local function restockFromStorage()
             else
                 safeSleep(300)
                 syncInventoryCache()
-                bp1 = math.max(getInvCount(CFG.seed_1_id), getInvCount(normS1))
-                if CFG.splice_mode then bp2 = math.max(getInvCount(CFG.seed_2_id), getInvCount(normS2)) end
+                bp1 = getInvCount(s1_seed)
+                if CFG.splice_mode then bp2 = getInvCount(s2_seed) end
             end
 
             local canPlantNow = (not CFG.splice_mode and bp1 > 0)
@@ -4259,6 +4283,10 @@ showPlantMainDialog = function()
         pcall(function() BOREN_ITEM_DB:load() end)
     end
 
+    CFG.seed_1_id = ensureSeedID(CFG.seed_1_id)
+    if CFG.seed_2_id and tonumber(CFG.seed_2_id) and tonumber(CFG.seed_2_id) > 0 then
+        CFG.seed_2_id = ensureSeedID(CFG.seed_2_id)
+    end
     local s1ID = tonumber(CFG.seed_1_id) or 17
     local s2ID = tonumber(CFG.seed_2_id) or 0
     local s1Name = getItemNameSafe(s1ID)
@@ -4335,6 +4363,10 @@ end
 
 -- 7. SEEDS & SPLICE SUB-DIALOG (set plant seed)
 showPlantSeedsDialog = function()
+    CFG.seed_1_id = ensureSeedID(CFG.seed_1_id)
+    if CFG.seed_2_id and tonumber(CFG.seed_2_id) and tonumber(CFG.seed_2_id) > 0 then
+        CFG.seed_2_id = ensureSeedID(CFG.seed_2_id)
+    end
     local s1ID = tonumber(CFG.seed_1_id) or 17
     local s2ID = tonumber(CFG.seed_2_id) or 0
     local s1Name = getItemNameSafe(s1ID)
@@ -4371,6 +4403,7 @@ showPlantSeedsDialog = function()
 end
 
 showPlantSetSeed1Dialog = function()
+    CFG.seed_1_id = ensureSeedID(CFG.seed_1_id)
     local s1ID = tonumber(CFG.seed_1_id) or 17
     local s1Name = getItemNameSafe(s1ID)
     if s1Name == "" or s1Name:find("Unknown") then s1Name = resolveSeedName(s1ID) end
@@ -4399,6 +4432,9 @@ showPlantSetSeed1Dialog = function()
 end
 
 showPlantSetSeed2Dialog = function()
+    if CFG.seed_2_id and tonumber(CFG.seed_2_id) and tonumber(CFG.seed_2_id) > 0 then
+        CFG.seed_2_id = ensureSeedID(CFG.seed_2_id)
+    end
     local s2ID = tonumber(CFG.seed_2_id) or 0
     local s2Name = (s2ID > 0) and getItemNameSafe(s2ID) or "None"
     if s2ID > 0 and (s2Name == "" or s2Name:find("Unknown")) then s2Name = resolveSeedName(s2ID) end
