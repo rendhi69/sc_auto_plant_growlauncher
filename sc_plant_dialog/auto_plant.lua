@@ -4877,37 +4877,38 @@ end
 _G.handleDialogReturn = handleDialogReturn
 
 local function plantDialogOnSendPacket(arg1, arg2)
-    -- Normalisasi argumen: Growlauncher dapat mengirimkan (pktStr) saja atau (pktType, pktStr)
-    local pStr = (type(arg2) == "string") and arg2 or ((type(arg1) == "string") and arg1 or nil)
-    local pType = (type(arg1) == "number") and arg1 or ((type(arg2) == "number") and arg2 or nil)
+    -- Normalisasi argumen: Growlauncher dapat mengirimkan string murni atau tabel objek
+    local pStr = nil
+    local pType = nil
+
+    if type(arg1) == "string" then
+        pStr = arg1
+        pType = (type(arg2) == "number") and arg2 or nil
+    elseif type(arg2) == "string" then
+        pStr = arg2
+        pType = (type(arg1) == "number") and arg1 or nil
+    elseif type(arg1) == "table" then
+        pStr = arg1.str or arg1.packet or arg1.text or arg1.data or arg1[2] or arg1[1]
+        pType = tonumber(arg1.type)
+    elseif type(arg2) == "table" then
+        pStr = arg2.str or arg2.packet or arg2.text or arg2.data or arg2[2] or arg2[1]
+        pType = tonumber(arg2.type)
+    end
 
     if not pStr or type(pStr) ~= "string" then return false end
 
     -- 1. INTERSEPSI CHAT COMMAND (/plant, /p, /boren, /menu, /dialog)
-    -- Format paket chat standar Growtopia: action|input\n|text|... (bisa CRLF \r\n)
-    local chatText = pStr:match("text|([^\r\n]+)")
-    if chatText then
-        local trimmed = chatText:gsub("^%s+", ""):gsub("%s+$", ""):lower()
-        if trimmed == "/plant" or trimmed == "/p" or trimmed == "/boren" or trimmed == "/menu" or trimmed == "/dialog"
-           or trimmed:match("^/plant%s") or trimmed:match("^/p%s") then
-            pcall(showPlantMainDialog)
-            if LogToConsole then
-                pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via chat command: `e" .. trimmed)
-            end
-            return true -- Blokir paket agar server Growtopia tidak mencetak "Unknown command"
-        end
-    end
-
-    -- Fallback deteksi jika paket input chat terformat khusus
     local lowerP = pStr:lower()
-    if (lowerP:find("action|input", 1, true) or lowerP:find("action|chat", 1, true)) then
-        local cmd = lowerP:match("|text|(/[%%w_]+)")
-        if cmd == "/plant" or cmd == "/p" or cmd == "/menu" or cmd == "/boren" or cmd == "/dialog" then
-            pcall(showPlantMainDialog)
-            if LogToConsole then
-                pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via fallback command: `e" .. cmd)
+    if lowerP:find("/plant", 1, true) or lowerP:find("/p", 1, true) or lowerP:find("/boren", 1, true) or lowerP:find("/menu", 1, true) then
+        if lowerP:find("action|input", 1, true) or lowerP:find("text|/", 1, true) or lowerP:find("action|chat", 1, true) or lowerP:sub(1, 1) == "/" then
+            local cmd = lowerP:match("|text|(/[a-z0-9_]+)") or lowerP:match("text|(/[a-z0-9_]+)") or lowerP:match("(/[a-z0-9_]+)")
+            if cmd == "/plant" or cmd == "/p" or cmd == "/boren" or cmd == "/menu" or cmd == "/dialog" then
+                pcall(showPlantMainDialog)
+                if LogToConsole then
+                    pcall(LogToConsole, "`2[BOREN PLANT] `wMenu Dialog dibuka via chat: `e" .. tostring(cmd))
+                end
+                return true -- Blokir paket agar tidak mencetak "Unknown command" di game
             end
-            return true
         end
     end
 
@@ -4930,15 +4931,31 @@ OnSendPacket = plantDialogOnSendPacket
 _G.onSendPacket = plantDialogOnSendPacket
 _G.OnSendPacket = plantDialogOnSendPacket
 
--- Registrasi hook resmi Growlauncher via addHook & applyHook
-if addHook then
-    pcall(addHook, plantDialogOnSendPacket, "onsendpacket")
-    pcall(addHook, plantDialogOnSendPacket, "onSendPacket")
-    pcall(addHook, onSendPacketRawCollectHook, "onsendpacketraw")
+-- Registrasi hook resmi Growlauncher via SEMUA format (addHook, AddHook, 2-arg, 3-arg)
+local hookFuncs = { addHook, AddHook, hook, Hook }
+for _, h in ipairs(hookFuncs) do
+    if type(h) == "function" then
+        -- Format 2-Arg: h(func, event)
+        pcall(h, plantDialogOnSendPacket, "onsendpacket")
+        pcall(h, plantDialogOnSendPacket, "onSendPacket")
+        pcall(h, plantDialogOnSendPacket, "OnSendPacket")
+        -- Format 3-Arg: h(event, name, func)
+        pcall(h, "onsendpacket", "boren_plant_hook", plantDialogOnSendPacket)
+        pcall(h, "onSendPacket", "boren_plant_hook", plantDialogOnSendPacket)
+        pcall(h, "OnSendPacket", "boren_plant_hook", plantDialogOnSendPacket)
+
+        -- Raw hook untuk proteksi Anti-Take & Ignore Gems
+        pcall(h, onSendPacketRawCollectHook, "onsendpacketraw")
+        pcall(h, onSendPacketRawCollectHook, "onSendPacketRaw")
+        pcall(h, onSendPacketRawCollectHook, "OnSendPacketRaw")
+        pcall(h, "onsendpacketraw", "boren_plant_raw", onSendPacketRawCollectHook)
+        pcall(h, "onSendPacketRaw", "boren_plant_raw", onSendPacketRawCollectHook)
+        pcall(h, "OnSendPacketRaw", "boren_plant_raw", onSendPacketRawCollectHook)
+    end
 end
-if applyHook then
-    pcall(applyHook)
-end
+
+if applyHook then pcall(applyHook) end
+if ApplyHook then pcall(ApplyHook) end
 
 -- Inisialisasi awal saat script di-Run
 addLog("[Boren Plant Dialog] Script Auto Plant (In-Game Dialog) Berhasil Dimuat!")
