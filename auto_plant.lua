@@ -3929,8 +3929,7 @@ showPlantQueueDialog = function()
         "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
         "end_dialog|plant_queue|Tutup||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 openWorldListManagerDialog = showPlantQueueDialog
 
@@ -3950,8 +3949,7 @@ showPlantAddWorldDialog = function()
         "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|",
         "end_dialog|plant_add_w|Batal||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 showPlantQueueBatchDialog = function()
@@ -3970,8 +3968,7 @@ showPlantQueueBatchDialog = function()
         "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|",
         "end_dialog|plant_batch_w|Batal||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 showPlantQueueListDialog = function()
@@ -4004,8 +4001,7 @@ showPlantQueueListDialog = function()
     end
     lines[#lines + 1] = "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_queue_list|Tutup||"
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 showPlantQueueFileDialog = function()
@@ -4026,8 +4022,7 @@ showPlantQueueFileDialog = function()
         "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|",
         "end_dialog|plant_queue_file|Batal||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 -- 2. STORAGE MANAGER DIALOG (MODULAR, COMPACT, EXACT MATCH TO IMAGE 2)
@@ -4059,8 +4054,7 @@ showPlantStorageDialog = function()
         "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
         "end_dialog|plant_storage|Tutup||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 openStorageListManagerDialog = showPlantStorageDialog
 
@@ -4080,8 +4074,7 @@ showPlantAddStorageDialog = function()
         "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
         "end_dialog|plant_add_stor|Batal||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 showPlantStorageThreshDialog = function()
@@ -4103,8 +4096,7 @@ showPlantStorageThreshDialog = function()
         "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
         "end_dialog|plant_thresh_stor|Batal||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 showPlantStorageListDialog = function()
@@ -4137,8 +4129,7 @@ showPlantStorageListDialog = function()
     end
     lines[#lines + 1] = "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_stor_list|Tutup||"
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 
 showPlantStorageFileDialog = function()
@@ -4159,8 +4150,7 @@ showPlantStorageFileDialog = function()
         "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
         "end_dialog|plant_stor_file|Batal||"
     }
-    showClientDialog(table.concat(lines, "
-"))
+    showClientDialog(table.concat(lines, "\n"))
 end
 openStorageListManagerDialog = showPlantStorageDialog
 
@@ -4232,6 +4222,7 @@ end
 
 -- 5. MAIN DASHBOARD DIALOG (/plant)
 showPlantMainDialog = function()
+    _G.showPlantMainDialog = showPlantMainDialog
     local isRun = (STATE.running == true)
     local curW = getCurrentWorldSafe()
     if curW == "" then curW = "EXIT" end
@@ -4939,6 +4930,10 @@ for _, h in ipairs(hookFuncs) do
         pcall(h, plantDialogOnSendPacket, "onsendpacket")
         pcall(h, plantDialogOnSendPacket, "onSendPacket")
         pcall(h, plantDialogOnSendPacket, "OnSendPacket")
+        -- Format 2-Arg reverse: h(event, func)
+        pcall(h, "onsendpacket", plantDialogOnSendPacket)
+        pcall(h, "onSendPacket", plantDialogOnSendPacket)
+        pcall(h, "OnSendPacket", plantDialogOnSendPacket)
         -- Format 3-Arg: h(event, name, func)
         pcall(h, "onsendpacket", "boren_plant_hook", plantDialogOnSendPacket)
         pcall(h, "onSendPacket", "boren_plant_hook", plantDialogOnSendPacket)
@@ -4952,6 +4947,15 @@ for _, h in ipairs(hookFuncs) do
         pcall(h, "onSendPacketRaw", "boren_plant_raw", onSendPacketRawCollectHook)
         pcall(h, "OnSendPacketRaw", "boren_plant_raw", onSendPacketRawCollectHook)
     end
+end
+
+if AddHookCallback then
+    pcall(AddHookCallback, plantDialogOnSendPacket, "onsendpacket")
+    pcall(AddHookCallback, plantDialogOnSendPacket, "onSendPacket")
+    pcall(AddHookCallback, "onsendpacket", plantDialogOnSendPacket)
+    pcall(AddHookCallback, "onSendPacket", plantDialogOnSendPacket)
+    pcall(AddHookCallback, onSendPacketRawCollectHook, "onsendpacketraw")
+    pcall(AddHookCallback, onSendPacketRawCollectHook, "onSendPacketRaw")
 end
 
 if applyHook then pcall(applyHook) end
