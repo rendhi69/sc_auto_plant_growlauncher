@@ -582,8 +582,15 @@ local showPlantSettingsDialog = function() end
 local showPlantSeedsDialog = function() end
 local showPlantAddCurrentWorldDialog = function(cw) end
 local showPlantQueueDialog = function() end
+local showPlantAddWorldDialog = function() end
 local showPlantQueueBatchDialog = function() end
+local showPlantQueueListDialog = function() end
+local showPlantQueueFileDialog = function() end
 local showPlantStorageDialog = function() end
+local showPlantAddStorageDialog = function() end
+local showPlantStorageThreshDialog = function() end
+local showPlantStorageListDialog = function() end
+local showPlantStorageFileDialog = function() end
 local showPlantPacingDialog = function() end
 local showPlantLogsDialog = function() end
 local showPlantItemSearchDialog = function(q, r) end
@@ -3893,7 +3900,7 @@ _G.showPlantPacingDialog = function() if showPlantPacingDialog then showPlantPac
 _G.showPlantLogsDialog = function() if showPlantLogsDialog then showPlantLogsDialog() end end
 _G.showPlantAddCurrentWorldDialog = function(cw) if showPlantAddCurrentWorldDialog then showPlantAddCurrentWorldDialog(cw) end end
 
--- 1. QUEUE MANAGER DIALOG (setting world farm - WIDE, COMPLETE, ALL INPUTS BEFORE LIST BUTTONS)
+-- 1. QUEUE MANAGER DIALOG (MODULAR, COMPACT, EXACT MATCH TO IMAGE 2)
 showPlantQueueDialog = function()
     local totalWorlds = #CFG.world_list
     local isRun = (STATE.running == true)
@@ -3913,26 +3920,74 @@ showPlantQueueDialog = function()
         string.format("add_textbox|`wTotal Antrean: `b%d World `p- `wBibit di Tas: `b%d seed|left|", totalWorlds, s1Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-
-        -- FORM INPUT TAMBAH WORLD KE ANTREAN
-        "add_textbox|`wTambah World ke Antrean (Format: WORLD atau WORLD:DOOR):|left|",
-        "add_text_input|in_new_world|Nama World| |32|",
-        "add_button|btn_add_world_entry|Tambah World ke Antrean|noflags|0|0|",
+        "add_button|btn_menu_add_world|Tambah 1 World ke Antrean|noflags|0|0|",
+        "add_button|btn_menu_batch_world|Tambah Banyak World (Batch Import)|noflags|0|0|",
+        string.format("add_button|btn_menu_list_world|Lihat / Hapus Antrean World (%d World)|noflags|0|0|", totalWorlds),
+        "add_button|btn_queue_reset_all|Reset Semua Status Antrean World|noflags|0|0|",
+        "add_button|btn_menu_file_world|Simpan / Muat Antrean File txt|noflags|0|0|",
         "add_spacer|small|",
+        "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
+        "end_dialog|plant_queue|Tutup||"
+    }
+    showClientDialog(table.concat(lines, "
+"))
+end
+openWorldListManagerDialog = showPlantQueueDialog
 
-        -- FORM INPUT BATCH
-        "add_textbox|`wTambah Banyak World Sekaligus (Pisahkan Spasi):|left|",
-        "add_text_input|in_batch_worlds|Daftar Banyak World| |40|",
-        "add_button|btn_add_batch_worlds|Tambahkan Semua World|noflags|0|0|",
+showPlantAddWorldDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wTambah 1 World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-
-        -- DAFTAR ANTREAN SAAT INI
-        string.format("add_textbox|`wDaftar Antrean World Farm (%d World):|left|", totalWorlds)
+        "add_textbox|`wMasukkan nama world farm yang ingin ditanam:|left|",
+        "add_textbox|`p(Format: NAMA_WORLD atau NAMA_WORLD:DOOR_ID)|left|",
+        "add_spacer|small|",
+        "add_text_input|in_new_world|Nama World| |32|",
+        "add_spacer|small|",
+        "add_button|btn_add_world_entry|Simpan ke Antrean World|noflags|0|0|",
+        "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|",
+        "end_dialog|plant_add_w|Batal||"
     }
+    showClientDialog(table.concat(lines, "
+"))
+end
 
+showPlantQueueBatchDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wTambah Banyak World (Batch)``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wTempel atau ketik daftar world farm (pisahkan spasi/koma):|left|",
+        "add_textbox|`p(Contoh: FARM1 FARM2:DOOR1 FARM3 FARM4)|left|",
+        "add_spacer|small|",
+        "add_text_input|in_batch_worlds|Daftar World| |80|",
+        "add_spacer|small|",
+        "add_button|btn_add_batch_worlds|Tambahkan Semua ke Antrean|noflags|0|0|",
+        "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|",
+        "end_dialog|plant_batch_w|Batal||"
+    }
+    showClientDialog(table.concat(lines, "
+"))
+end
+
+showPlantQueueListDialog = function()
+    local totalWorlds = #CFG.world_list
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wDaftar Antrean World Farm``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal World Terdaftar: `b%d World|left|", totalWorlds),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|"
+    }
     if totalWorlds == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wAntrean masih kosong. Masukkan nama world pada kolom di atas.|left|"
+        lines[#lines + 1] = "add_textbox|`p- `wAntrean masih kosong. Tambahkan world baru.|left|"
     else
         for idx, w in ipairs(CFG.world_list) do
             local dStr = (w.door and w.door ~= "") and (":" .. w.door) or ""
@@ -3944,23 +3999,38 @@ showPlantQueueDialog = function()
     end
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
-
-    -- KONTROL & MANAJEMEN FILE
-    lines[#lines + 1] = "add_button|btn_queue_reset_all|Reset Semua Status World|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_queue_save_file|Simpan Antrean ke File txt|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_queue_load_file|Muat Antrean dari File txt|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_queue_clear_all|Kosongkan Seluruh Antrean|noflags|0|0|"
-    lines[#lines + 1] = "add_spacer|small|"
-
-    -- TOMBOL KEMBALI
-    lines[#lines + 1] = "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|"
-    lines[#lines + 1] = "end_dialog|plant_queue|Tutup||"
-
-    showClientDialog(table.concat(lines, "\n"))
+    if totalWorlds > 0 then
+        lines[#lines + 1] = "add_button|btn_queue_clear_all|Kosongkan Seluruh Antrean|noflags|0|0|"
+    end
+    lines[#lines + 1] = "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_queue_list|Tutup||"
+    showClientDialog(table.concat(lines, "
+"))
 end
-openWorldListManagerDialog = showPlantQueueDialog
 
--- 2. STORAGE MANAGER DIALOG (setting save world - WIDE, COMPLETE, ALL INPUTS BEFORE LIST BUTTONS)
+showPlantQueueFileDialog = function()
+    local totalWorlds = #CFG.world_list
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wFile Antrean World (.txt)``|left|2|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal World Saat Ini: `b%d World|left|", totalWorlds),
+        "add_textbox|`wPilih aksi penyimpanan file antrean world:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_button|btn_queue_save_file|Simpan Antrean ke File txt|noflags|0|0|",
+        "add_button|btn_queue_load_file|Muat Antrean dari File txt|noflags|0|0|",
+        "add_spacer|small|",
+        "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|",
+        "end_dialog|plant_queue_file|Batal||"
+    }
+    showClientDialog(table.concat(lines, "
+"))
+end
+
+-- 2. STORAGE MANAGER DIALOG (MODULAR, COMPACT, EXACT MATCH TO IMAGE 2)
 showPlantStorageDialog = function()
     local totalStorages = #CFG.storage_world_list
     local isRun = (STATE.running == true)
@@ -3981,48 +4051,116 @@ showPlantStorageDialog = function()
         string.format("add_textbox|`wTarget Isi Tas: `b%d seed `p- `wSisa di Tas: `b%d seed|left|", tarBp, s1Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-
-        -- FORM INPUT GUDANG SEED BARU
-        "add_textbox|`wTambah Gudang Seed Baru (Format: WORLD atau WORLD:DOOR):|left|",
-        "add_text_input|in_new_stor_world|Nama Gudang| |32|",
-        "add_button|btn_add_stor_entry|Tambah Gudang Seed|noflags|0|0|",
+        "add_button|btn_menu_add_storage|Tambah Gudang Seed Baru|noflags|0|0|",
+        "add_button|btn_menu_thresh_storage|Atur Batas Ambil Bibit di Tas|noflags|0|0|",
+        string.format("add_button|btn_menu_list_storage|Lihat / Hapus Gudang Seed (%d Gudang)|noflags|0|0|", totalStorages),
+        "add_button|btn_menu_file_storage|Simpan / Muat Gudang File txt|noflags|0|0|",
         "add_spacer|small|",
+        "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
+        "end_dialog|plant_storage|Tutup||"
+    }
+    showClientDialog(table.concat(lines, "
+"))
+end
+openStorageListManagerDialog = showPlantStorageDialog
 
-        "add_textbox|`wPengaturan Batas Pengambilan Bibit di Tas:|left|",
-        string.format("add_text_input|in_min_bp|Ambil saat seed di tas sisa|%d|5|", minBp),
-        string.format("add_text_input|in_tar_bp|Target isi seed ke dalam tas|%d|5|", tarBp),
-        "add_button|btn_save_stor_thresh|Simpan Batas Pengambilan Tas|noflags|0|0|",
+showPlantAddStorageDialog = function()
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wTambah Gudang Seed Baru``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-
-        -- DAFTAR GUDANG SAAT INI
-        string.format("add_textbox|`wDaftar Gudang Seed Vault (%d Gudang):|left|", totalStorages)
+        "add_textbox|`wMasukkan nama world gudang penyimpanan seed:|left|",
+        "add_textbox|`p(Format: NAMA_GUDANG atau NAMA_GUDANG:DOOR_ID)|left|",
+        "add_spacer|small|",
+        "add_text_input|in_new_stor_world|Nama Gudang| |32|",
+        "add_spacer|small|",
+        "add_button|btn_add_stor_entry|Simpan Gudang Seed|noflags|0|0|",
+        "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
+        "end_dialog|plant_add_stor|Batal||"
     }
+    showClientDialog(table.concat(lines, "
+"))
+end
 
+showPlantStorageThreshDialog = function()
+    local minBp = tonumber(CFG.min_seed_bp) or 20
+    local tarBp = tonumber(CFG.target_seed_bp) or 190
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wBatas Pengambilan Seed di Tas``|left|3802|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_textbox|`wAtur ambang batas isi bibit di tas bot:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        string.format("add_text_input|in_min_bp|Ambil saat seed sisa|%d|5|", minBp),
+        string.format("add_text_input|in_tar_bp|Target isi seed ke tas|%d|5|", tarBp),
+        "add_spacer|small|",
+        "add_button|btn_save_stor_thresh|Simpan Batas Pengambilan|noflags|0|0|",
+        "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
+        "end_dialog|plant_thresh_stor|Batal||"
+    }
+    showClientDialog(table.concat(lines, "
+"))
+end
+
+showPlantStorageListDialog = function()
+    local totalStorages = #CFG.storage_world_list
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wDaftar Gudang Seed Vault``|left|3802|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal Gudang Terdaftar: `b%d Gudang|left|", totalStorages),
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|"
+    }
     if totalStorages == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wBelum ada gudang seed. Tambahkan gudang baru pada kolom di atas.|left|"
+        lines[#lines + 1] = "add_textbox|`p- `wBelum ada gudang seed terdaftar.|left|"
     else
         for idx, s in ipairs(CFG.storage_world_list) do
             local dStr = (s.door and s.door ~= "") and (":" .. s.door) or ""
             local isAct = (idx == STATE.active_storage_idx)
-            local tag = isAct and "`b(Gudang Aktif Restock)" or "`2(Gudang Seed Vault)"
+            local tag = isAct and "`b(Gudang Aktif)" or "`2(Seed Vault)"
             lines[#lines + 1] = string.format("add_textbox|`p- `w#%d. `b%s%s %s|left|", idx, s.name, dStr, tag)
             lines[#lines + 1] = string.format("add_button|stor_del_%d|Hapus Gudang Ini (#%d)|noflags|0|0|", idx, idx)
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
+    if totalStorages > 0 then
+        lines[#lines + 1] = "add_button|btn_stor_clear_all|Kosongkan Seluruh Gudang|noflags|0|0|"
+    end
+    lines[#lines + 1] = "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_stor_list|Tutup||"
+    showClientDialog(table.concat(lines, "
+"))
+end
 
-    -- FILE & KONTROL
-    lines[#lines + 1] = "add_button|btn_stor_save_file|Simpan Daftar Gudang ke File txt|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_stor_load_file|Muat Daftar Gudang dari File txt|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_stor_clear_all|Kosongkan Seluruh Gudang|noflags|0|0|"
-    lines[#lines + 1] = "add_spacer|small|"
-
-    lines[#lines + 1] = "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|"
-    lines[#lines + 1] = "end_dialog|plant_storage|Tutup||"
-
-    showClientDialog(table.concat(lines, "\n"))
+showPlantStorageFileDialog = function()
+    local totalStorages = #CFG.storage_world_list
+    local lines = {
+        "set_default_color|`o",
+        "add_quick_exit|",
+        "add_label_with_icon|big|`wFile Gudang Seed (.txt)``|left|3802|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        string.format("add_textbox|`wTotal Gudang Saat Ini: `b%d Gudang|left|", totalStorages),
+        "add_textbox|`wPilih aksi penyimpanan file gudang seed:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+        "add_spacer|small|",
+        "add_button|btn_stor_save_file|Simpan Daftar Gudang ke File txt|noflags|0|0|",
+        "add_button|btn_stor_load_file|Muat Daftar Gudang dari File txt|noflags|0|0|",
+        "add_spacer|small|",
+        "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
+        "end_dialog|plant_stor_file|Batal||"
+    }
+    showClientDialog(table.concat(lines, "
+"))
 end
 openStorageListManagerDialog = showPlantStorageDialog
 
@@ -4322,10 +4460,22 @@ local function handleDialogReturn(pkt)
         end
         return true
 
-    -- B. QUEUE MANAGER DIALOG (FIX BUG 1: SAFE RETURN TO /plant)
-    elseif dName == "plant_queue" or dName == "boren_plant_world_mgr" or pkt:find("dialog_name|plant_queue") or pkt:find("dialog_name|boren_plant_world_mgr") then
-        if btn == "btn_open_batch_dialog" or pkt:find("buttonClicked|btn_open_batch_dialog") then
+    -- B. QUEUE MANAGER DIALOG (MODULAR, SAFE RETURN TO /plant)
+    elseif dName == "plant_queue" or dName == "plant_add_w" or dName == "plant_batch_w" or dName == "plant_queue_list" or dName == "plant_queue_file" or dName == "boren_plant_world_mgr" or pkt:find("dialog_name|plant_queue") or pkt:find("dialog_name|plant_add_w") or pkt:find("dialog_name|plant_batch_w") or pkt:find("dialog_name|plant_queue_list") or pkt:find("dialog_name|plant_queue_file") or pkt:find("dialog_name|boren_plant_world_mgr") then
+        if btn == "btn_menu_add_world" or pkt:find("buttonClicked|btn_menu_add_world") then
+            showPlantAddWorldDialog()
+            return true
+        elseif btn == "btn_menu_batch_world" or btn == "btn_open_batch_dialog" or pkt:find("buttonClicked|btn_menu_batch_world") or pkt:find("buttonClicked|btn_open_batch_dialog") then
             showPlantQueueBatchDialog()
+            return true
+        elseif btn == "btn_menu_list_world" or pkt:find("buttonClicked|btn_menu_list_world") then
+            showPlantQueueListDialog()
+            return true
+        elseif btn == "btn_menu_file_world" or pkt:find("buttonClicked|btn_menu_file_world") then
+            showPlantQueueFileDialog()
+            return true
+        elseif btn == "btn_back_queue" or pkt:find("buttonClicked|btn_back_queue") then
+            showPlantQueueDialog()
             return true
         elseif btn == "btn_back_main" or btn == "boren_btn_back_main" or pkt:find("buttonClicked|btn_back_main") or pkt:find("buttonClicked|boren_btn_back_main") then
             showPlantMainDialog()
@@ -4402,9 +4552,24 @@ local function handleDialogReturn(pkt)
         -- Jika user menutup dialog tanpa klik tombol
         return true
 
-    -- C. STORAGE MANAGER DIALOG (FIX BUG 1: SAFE RETURN TO /plant)
-    elseif dName == "plant_storage" or dName == "boren_plant_stor_mgr" or pkt:find("dialog_name|plant_storage") or pkt:find("dialog_name|boren_plant_stor_mgr") then
-        if btn == "btn_back_main" or btn == "boren_btn_back_main" or pkt:find("buttonClicked|btn_back_main") or pkt:find("buttonClicked|boren_btn_back_main") then
+    -- C. STORAGE MANAGER DIALOG (MODULAR, SAFE RETURN TO /plant)
+    elseif dName == "plant_storage" or dName == "plant_add_stor" or dName == "plant_thresh_stor" or dName == "plant_stor_list" or dName == "plant_stor_file" or dName == "boren_plant_stor_mgr" or pkt:find("dialog_name|plant_storage") or pkt:find("dialog_name|plant_add_stor") or pkt:find("dialog_name|plant_thresh_stor") or pkt:find("dialog_name|plant_stor_list") or pkt:find("dialog_name|plant_stor_file") or pkt:find("dialog_name|boren_plant_stor_mgr") then
+        if btn == "btn_menu_add_storage" or pkt:find("buttonClicked|btn_menu_add_storage") then
+            showPlantAddStorageDialog()
+            return true
+        elseif btn == "btn_menu_thresh_storage" or pkt:find("buttonClicked|btn_menu_thresh_storage") then
+            showPlantStorageThreshDialog()
+            return true
+        elseif btn == "btn_menu_list_storage" or pkt:find("buttonClicked|btn_menu_list_storage") then
+            showPlantStorageListDialog()
+            return true
+        elseif btn == "btn_menu_file_storage" or pkt:find("buttonClicked|btn_menu_file_storage") then
+            showPlantStorageFileDialog()
+            return true
+        elseif btn == "btn_back_storage" or pkt:find("buttonClicked|btn_back_storage") then
+            showPlantStorageDialog()
+            return true
+        elseif btn == "btn_back_main" or btn == "boren_btn_back_main" or pkt:find("buttonClicked|btn_back_main") or pkt:find("buttonClicked|boren_btn_back_main") then
             showPlantMainDialog()
             return true
         elseif btn == "btn_add_stor_entry" or pkt:find("buttonClicked|btn_add_stor_entry") then
