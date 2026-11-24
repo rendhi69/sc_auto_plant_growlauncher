@@ -4065,17 +4065,17 @@ showPlantAddStorageDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wTambah Gudang Seed Baru``|left|3802|",
+        "add_label_with_icon|big|`wAdd Seed Vault``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_textbox|`wMasukkan nama world gudang penyimpanan seed:|left|",
-        "add_textbox|`p(Format: NAMA_GUDANG atau NAMA_GUDANG:DOOR_ID)|left|",
+        "add_textbox|`wEnter storage world name to withdraw seeds:|left|",
+        "add_textbox|`p(Format: WORLD_NAME or WORLD_NAME:DOOR_ID)|left|",
         "add_spacer|small|",
-        "add_text_input|in_new_stor_world|Nama Gudang| |32|",
+        "add_text_input|in_new_stor_world|Storage World Name| |32|",
         "add_spacer|small|",
-        "add_button|btn_add_stor_entry|Simpan Gudang Seed|noflags|0|0|",
-        "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
-        "end_dialog|plant_add_stor|Batal||"
+        "add_button|btn_add_stor_entry|Save Seed Vault|noflags|0|0|",
+        "add_button|btn_back_storage|Back|noflags|0|0|",
+        "end_dialog|plant_add_stor|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4086,18 +4086,18 @@ showPlantStorageThreshDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wBatas Pengambilan Seed di Tas``|left|3802|",
+        "add_label_with_icon|big|`wSeed Restock Threshold``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_textbox|`wAtur ambang batas isi bibit di tas bot:|left|",
+        "add_textbox|`wConfigure automatic seed restock thresholds:|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_text_input|in_min_bp|Ambil saat seed sisa|%d|5|", minBp),
-        string.format("add_text_input|in_tar_bp|Target isi seed ke tas|%d|5|", tarBp),
+        string.format("add_text_input|in_min_bp|Restock when bag <|%d|5|", minBp),
+        string.format("add_text_input|in_tar_bp|Refill bag target|%d|5|", tarBp),
         "add_spacer|small|",
-        "add_button|btn_save_stor_thresh|Simpan Batas Pengambilan|noflags|0|0|",
-        "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
-        "end_dialog|plant_thresh_stor|Batal||"
+        "add_button|btn_save_stor_thresh|Save Threshold|noflags|0|0|",
+        "add_button|btn_back_storage|Back|noflags|0|0|",
+        "end_dialog|plant_thresh_stor|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4140,18 +4140,18 @@ showPlantStorageFileDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wFile Gudang Seed (.txt)``|left|3802|",
+        "add_label_with_icon|big|`wStorage World File (.txt)``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wTotal Gudang Saat Ini: `b%d Gudang|left|", totalStorages),
-        "add_textbox|`wPilih aksi penyimpanan file gudang seed:|left|",
+        string.format("add_textbox|`wTotal Registered Storage: `2(%d Storage)|left|", totalStorages),
+        "add_textbox|`wSelect storage file action:|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|btn_stor_save_file|Simpan Daftar Gudang ke File txt|noflags|0|0|",
-        "add_button|btn_stor_load_file|Muat Daftar Gudang dari File txt|noflags|0|0|",
+        "add_button|btn_stor_save_file|Save Storage to TXT|noflags|0|0|",
+        "add_button|btn_stor_load_file|Load Storage from TXT|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|",
-        "end_dialog|plant_stor_file|Batal||"
+        "add_button|btn_back_storage|Back|noflags|0|0|",
+        "end_dialog|plant_storage_file|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4164,12 +4164,12 @@ showPlantItemSearchDialog = function(query, results)
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wDatabase Item Growtopia (16K)``|left|4585|",
+        "add_label_with_icon|big|`wSearch Item Database (16K)``|left|4585|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_textbox|`wKetik nama atau ID item untuk mencari benih:|left|",
-        string.format("add_text_input|in_search_q|Nama atau ID Item|%s|32|", (query ~= "") and query or " "),
-        "add_button|btn_do_search|Cari di Database Item|noflags|0|0|",
+        "add_textbox|`wEnter item name or ID to search for seeds:|left|",
+        string.format("add_text_input|in_search_q|Item Name or ID|%s|32|", (query ~= "") and query or " "),
+        "add_button|btn_do_search|Search Item Database|noflags|0|0|",
         "add_spacer|small|"
     }
 
@@ -4179,16 +4179,17 @@ showPlantItemSearchDialog = function(query, results)
             if seedID <= 0 then seedID = (it.id % 2 == 0) and (it.id + 1) or it.id end
             local sName = (seedName ~= "") and seedName or BOREN_ITEM_DB:resolveName(seedID)
             lines[#lines + 1] = string.format("add_textbox|`p- `w%d. %s `p(#%d) `w-> Seed `b#%d (%s)|left|", i, it.name, it.id, seedID, sName)
-            lines[#lines + 1] = string.format("add_button|use_s1_%d|Pilih sebagai Seed 1 (#%d)|noflags|0|0|", seedID, seedID)
+            lines[#lines + 1] = string.format("add_button|use_s1_%d|Set as Seed 1 `2(#%d)|noflags|0|0|", seedID, seedID)
+            lines[#lines + 1] = string.format("add_button|use_s2_%d|Set as Seed 2 Splice `2(#%d)|noflags|0|0|", seedID, seedID)
         end
     elseif query ~= "" then
-        lines[#lines + 1] = string.format("add_textbox|`4Tidak ditemukan item dengan kata kunci '%s'.|left|", query)
+        lines[#lines + 1] = string.format("add_textbox|`4(No item found) `wNo results for '%s'.|left|", query)
     end
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
-    lines[#lines + 1] = "add_button|btn_back_seeds|Kembali ke Pilihan Benih|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|"
-    lines[#lines + 1] = "end_dialog|plant_search_db|Tutup||"
+    lines[#lines + 1] = "add_button|btn_back_seeds|Back to Seeds|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_main|Back to Main Menu|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_search_db|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
 
@@ -4198,9 +4199,6 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
     if currentWorld == "" or currentWorld == "EXIT" then
         currentWorld = "MYWORLD"
     end
-    local s1Display = (CFG.seed_1_id and CFG.seed_1_id > 0) and tostring(CFG.seed_1_id) or "17"
-    local s2Display = (CFG.seed_2_id and CFG.seed_2_id > 0) and tostring(CFG.seed_2_id) or ""
-    local isSplice = CFG.splice_mode and 1 or 0
 
     local lines = {
         "set_default_color|`o",
@@ -4208,17 +4206,15 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
         "add_label_with_icon|big|`wAdd Current World``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wWorld Terdeteksi: `b%s `p- `wSiap Ditambahkan|left|", currentWorld),
+        string.format("add_textbox|`wDetected World: `b%s `p- `wStatus: `2(Ready)|left|", currentWorld),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_text_input|in_cur_world|Nama World|%s|32|", currentWorld),
-        "add_text_input|in_cur_door|Door ID| |20|",
-        string.format("add_text_input|in_cur_s1|ID Seed 1|%s|20|", s1Display),
-        string.format("add_checkbox|chk_cur_splice|Mode Splice (Kawin Benih)|%d|", isSplice),
+        string.format("add_text_input|in_cur_world|World Name|%s|32|", currentWorld),
+        "add_text_input|in_cur_door|Door ID (Optional)| |20|",
         "add_spacer|small|",
-        "add_button|btn_submit_cur_world|Tambahkan World ke Antrean|noflags|0|0|",
-        "add_button|btn_back_main|Batal dan Kembali|noflags|0|0|",
-        "end_dialog|plant_add_curr|Batal||"
+        "add_button|btn_submit_cur_world|Add World to Queue|noflags|0|0|",
+        "add_button|btn_back_main|Back|noflags|0|0|",
+        "end_dialog|plant_add_curr|Cancel||"
     }
     return showClientDialog(table.concat(lines, "\n"))
 end
@@ -4288,23 +4284,23 @@ showPlantSettingsDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wApply Mod & Proteksi``|left|32|",
+        "add_label_with_icon|big|`wApply Mod & Protection``|left|32|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_textbox|`wAktifkan fitur pergerakan dan proteksi bot:|left|",
+        "add_textbox|`wConfigure movement and protection toggles:|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_checkbox|chk_modfly|ModFly (Terbang Bebas Rintangan)|%d|", CFG.use_modfly and 1 or 0),
-        string.format("add_checkbox|chk_antilava|Anti-Lava dan Anti-Bounce Shield|%d|", CFG.anti_lava and 1 or 0),
-        string.format("add_checkbox|chk_mode3|Mode 3-Petak (3zigzag Cepat)|%d|", (CFG.plant_mode == "3zigzag") and 1 or 0),
-        string.format("add_checkbox|chk_splice|Kawin Benih (Mode Splice 2 Seed)|%d|", CFG.splice_mode and 1 or 0),
-        string.format("add_checkbox|chk_reconnect|Auto Reconnect Saat Terputus|%d|", CFG.auto_reconnect and 1 or 0),
+        string.format("add_checkbox|chk_modfly|ModFly (Noclip & Air Movement)|%d|", CFG.use_modfly and 1 or 0),
+        string.format("add_checkbox|chk_antilava|Anti-Lava & Hazard Shield|%d|", CFG.anti_lava and 1 or 0),
+        string.format("add_checkbox|chk_mode3|3-Tile Planting (3zigzag Fast)|%d|", (CFG.plant_mode == "3zigzag") and 1 or 0),
+        string.format("add_checkbox|chk_splice|Splice Mode (Plant 2 Seeds)|%d|", CFG.splice_mode and 1 or 0),
+        string.format("add_checkbox|chk_reconnect|Auto Reconnect on Disconnect|%d|", CFG.auto_reconnect and 1 or 0),
         string.format("add_checkbox|chk_shield|Touch Shield (Anti-Punch Dialog)|%d|", (UI_STATE.touch_shield ~= false) and 1 or 0),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_button|btn_save_settings|Simpan dan Terapkan Mod|noflags|0|0|",
-        "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
-        "end_dialog|plant_settings|Batal||"
+        "add_button|btn_save_settings|Save Settings|noflags|0|0|",
+        "add_button|btn_back_main|Back|noflags|0|0|",
+        "end_dialog|plant_settings|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4397,21 +4393,21 @@ showPlantPacingDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wKecepatan & Delay Bot``|left|1422|",
+        "add_label_with_icon|big|`wBot Speed & Delays``|left|1422|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_textbox|`wPilih preset kecepatan atau atur jeda kustom:|left|",
+        "add_textbox|`wSelect speed preset or configure custom delay:|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|preset_speed_fast|Profil Agresif (120ms Plant / 85ms Step)|noflags|0|0|",
-        "add_button|preset_speed_norm|Profil Standar (180ms Plant / 110ms Step)|noflags|0|0|",
+        "add_button|preset_speed_fast|Aggressive Profile (120ms Plant / 85ms Step)|noflags|0|0|",
+        "add_button|preset_speed_norm|Standard Profile (180ms Plant / 110ms Step)|noflags|0|0|",
         "add_spacer|small|",
         string.format("add_text_input|in_plant_delay|Plant Delay (ms)|%d|8|", CFG.plant_delay or 180),
         string.format("add_text_input|in_step_delay|Step Delay (ms)|%d|8|", CFG.step_delay or 110),
         "add_spacer|small|",
-        "add_button|btn_save_pacing|Simpan Jeda Kustom|noflags|0|0|",
-        "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
-        "end_dialog|plant_pacing|Batal||"
+        "add_button|btn_save_pacing|Save Custom Delays|noflags|0|0|",
+        "add_button|btn_back_main|Back|noflags|0|0|",
+        "end_dialog|plant_pacing|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4422,33 +4418,33 @@ showPlantLogsDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wLog Activity Bot``|left|1422|",
+        "add_label_with_icon|big|`wBot Activity Logs``|left|1422|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wRiwayat Aktivitas Terakhir (Total %d Catatan):|left|", #curLogs),
+        string.format("add_textbox|`wRecent Activity History: `2(%d Records)|left|", #curLogs),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|"
     }
 
     local startIdx = math.max(1, #curLogs - 7)
     if #curLogs == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wBelum ada log aktivitas tercatat.|left|"
+        lines[#lines + 1] = "add_textbox|`p- `wNo activity recorded yet.|left|"
     else
         for i = #curLogs, startIdx, -1 do
             local l = tostring(curLogs[i])
             local col = "`w"
-            if l:find("Err") or l:find("Gagal") then col = "`4"
-            elseif l:find("Berhasil") or l:find("Siap") or l:find("Dispatch") or l:find("Sukses") then col = "`2"
+            if l:find("Err") or l:find("Gagal") or l:find("Fail") then col = "`4"
+            elseif l:find("Berhasil") or l:find("Siap") or l:find("Dispatch") or l:find("Sukses") or l:find("Success") or l:find("Ready") then col = "`2"
             elseif l:find("Warp") or l:find("Tanam") or l:find("Plant") then col = "`b"
             end
             lines[#lines + 1] = string.format("add_textbox|`p- %s%s|left|", col, l:gsub("|", "/"))
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
-    lines[#lines + 1] = "add_button|btn_logs_refresh|Refresh Log|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_logs_clear|Bersihkan Log|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|"
-    lines[#lines + 1] = "end_dialog|plant_logs|Tutup||"
+    lines[#lines + 1] = "add_button|btn_logs_refresh|Refresh Logs|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_logs_clear|Clear Logs|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_main|Back|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_logs|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
 
