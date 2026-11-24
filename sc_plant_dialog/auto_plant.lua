@@ -1336,9 +1336,9 @@ updateFileInfoDisplayList = function()
     local okF, statusMsg = checkFileStatus(fullPath)
     local dirDisplay = (dir ~= "") and dir or "(Folder Download HP)"
     local rows = {
-        { "📁 Lokasi Folder", dirDisplay },
-        { "📄 Nama File Simpanan", fn },
-        { "🔍 Status File", okF and ("`2[ADA] `w" .. statusMsg) or ("`4[BELUM DISIMPAN] `oKlik 'Simpan ke Download'") },
+        { "[F] Lokasi Folder", dirDisplay },
+        { "[D] Nama File Simpanan", fn },
+        { "[?] Status File", okF and ("`2[ADA] `w" .. statusMsg) or ("`4[BELUM DISIMPAN] `oKlik 'Simpan ke Download'") },
         { "Lokasi Lengkap", fullPath }
     }
     pcall(editValue, "ap_file_info_list", jsonEncode(rows))
@@ -3917,10 +3917,10 @@ showPlantQueueDialog = function()
             if idx <= 3 then
                 local dStr = (w.door and w.door ~= "") and (":" .. w.door) or ""
                 local isAct = (idx == STATE.active_world_idx and STATE.running)
-                local dot = isAct and "`b🔵" or (w.done and "`p🟣" or "`2🟢")
+                local dot = isAct and "`b●" or (w.done and "`p●" or "`2●")
                 local tag = isAct and "`b(Aktif)" or (w.done and "`p(Selesai)" or "`2(Siap)")
                 lines[#lines + 1] = string.format("add_textbox|%s `w#%d. `b%s%s %s|left|", dot, idx, w.name, dStr, tag)
-                lines[#lines + 1] = string.format("add_button|queue_del_%d|`4🗑️  Hapus World Ini (#%d)|noflags|0|0|", idx, idx)
+                lines[#lines + 1] = string.format("add_button|queue_del_%d|`4[X]  Hapus World Ini (#%d)|noflags|0|0|", idx, idx)
             end
         end
         if totalWorlds > 3 then
@@ -3929,10 +3929,10 @@ showPlantQueueDialog = function()
     end
 
     lines[#lines + 1] = "add_text_input|in_new_world|Tambah World (WORLD:DOOR):||28|"
-    lines[#lines + 1] = "add_button|btn_add_world_entry|`2➕  Tambah World ke Antrean|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_open_batch_dialog|`b📋  Import Banyak World / File txt|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_queue_reset_all|`b🔄  Reset Status Semua World|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_queue_clear_all|`4🗑️  Kosongkan Seluruh Antrean|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_add_world_entry|`2+  Tambah World ke Antrean|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_open_batch_dialog|`b»  Import Banyak World / File txt|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_queue_reset_all|`b[R]  Reset Status Semua World|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_queue_clear_all|`4[X]  Kosongkan Seluruh Antrean|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_back_main|`p↩  Kembali ke Menu Utama /plant|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_queue|Tutup||"
 
@@ -3948,9 +3948,9 @@ showPlantQueueBatchDialog = function()
         "add_label_with_icon|big|`wImport Banyak World & File``|left|2|",
         "add_textbox|`p[`bIMPORT BATCH: `wPisahkan spasi/koma (contoh: FARM1:DOOR FARM2)`p]|left|",
         "add_text_input|in_batch_worlds|Daftar Banyak World:||32|",
-        "add_button|btn_add_batch_worlds|`2➕  Tambahkan Semua World|noflags|0|0|",
-        "add_button|btn_queue_save_file|`w💾  Simpan Antrean ke File (txt)|noflags|0|0|",
-        "add_button|btn_queue_load_file|`w📂  Muat Antrean dari File (txt)|noflags|0|0|",
+        "add_button|btn_add_batch_worlds|`2+  Tambahkan Semua World|noflags|0|0|",
+        "add_button|btn_queue_save_file|`w[S]  Simpan Antrean ke File (txt)|noflags|0|0|",
+        "add_button|btn_queue_load_file|`w[L]  Muat Antrean dari File (txt)|noflags|0|0|",
         "add_button|btn_back_queue|`p↩  Kembali ke setting world farm|noflags|0|0|",
         "end_dialog|plant_queue_batch|Batal||"
     }
@@ -3981,10 +3981,10 @@ showPlantStorageDialog = function()
             if idx <= 2 then
                 local dStr = (s.door and s.door ~= "") and (":" .. s.door) or ""
                 local isAct = (idx == STATE.active_storage_idx)
-                local dot = isAct and "`b🔵" or "`2🟢"
+                local dot = isAct and "`b●" or "`2●"
                 local tag = isAct and "`b(Aktif Vault)" or "`2(Gudang)"
                 lines[#lines + 1] = string.format("add_textbox|%s `w#%d. `b%s%s %s|left|", dot, idx, s.name, dStr, tag)
-                lines[#lines + 1] = string.format("add_button|stor_del_%d|`4🗑️  Hapus Gudang Ini (#%d)|noflags|0|0|", idx, idx)
+                lines[#lines + 1] = string.format("add_button|stor_del_%d|`4[X]  Hapus Gudang Ini (#%d)|noflags|0|0|", idx, idx)
             end
         end
         if totalStorages > 2 then
@@ -3993,10 +3993,10 @@ showPlantStorageDialog = function()
     end
 
     lines[#lines + 1] = "add_text_input|in_new_stor_world|Tambah Gudang (WORLD:DOOR):||28|"
-    lines[#lines + 1] = "add_button|btn_add_stor_entry|`2➕  Tambah Gudang Seed|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_add_stor_entry|`2+  Tambah Gudang Seed|noflags|0|0|"
     lines[#lines + 1] = string.format("add_text_input|in_min_bp|Batas Ambil Saat Tas Sisa:|%d|5|", minBp)
     lines[#lines + 1] = "add_button|btn_save_stor_thresh|`2✔  Simpan Batas Tas|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_stor_clear_all|`4🗑️  Kosongkan Seluruh Gudang|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_stor_clear_all|`4[X]  Kosongkan Seluruh Gudang|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_back_main|`p↩  Kembali ke Menu Utama /plant|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_storage|Tutup||"
 
@@ -4014,7 +4014,7 @@ showPlantItemSearchDialog = function(query, results)
         "add_label_with_icon|big|`wDatabase Item Growtopia (16K)``|left|4585|",
         string.format("add_textbox|`p[`bDATABASE: `wCari nama atau ID item untuk benih tanam`p]|left|"),
         string.format("add_text_input|in_search_q|Nama atau ID Item:|%s|28|", query),
-        "add_button|btn_do_search|`b🔍  Cari di Database Item|noflags|0|0|"
+        "add_button|btn_do_search|`b[?]  Cari di Database Item|noflags|0|0|"
     }
 
     if #results > 0 then
@@ -4023,15 +4023,15 @@ showPlantItemSearchDialog = function(query, results)
                 local seedID, seedName = BOREN_ITEM_DB:resolveSeedID(it.id)
                 if seedID <= 0 then seedID = (it.id % 2 == 0) and (it.id + 1) or it.id end
                 local sName = (seedName ~= "") and seedName or BOREN_ITEM_DB:resolveName(seedID)
-                lines[#lines + 1] = string.format("add_textbox|`2🟢 `w%d. %s `p(#%d) `w-> Seed `b#%d (%s)|left|", i, it.name, it.id, seedID, sName)
-                lines[#lines + 1] = string.format("add_button|use_s1_%d|`2🌱  Pilih Seed 1 (#%d)|noflags|0|0|", seedID, seedID)
+                lines[#lines + 1] = string.format("add_textbox|`2● `w%d. %s `p(#%d) `w-> Seed `b#%d (%s)|left|", i, it.name, it.id, seedID, sName)
+                lines[#lines + 1] = string.format("add_button|use_s1_%d|`2»  Pilih Seed 1 (#%d)|noflags|0|0|", seedID, seedID)
             end
         end
     elseif query ~= "" then
         lines[#lines + 1] = string.format("add_textbox|`4Tidak ditemukan item dengan kata kunci '%s'.|left|", query)
     end
 
-    lines[#lines + 1] = "add_button|btn_back_seeds|`b🌱  Kembali ke set plant seed|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_back_seeds|`b»  Kembali ke set plant seed|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_back_main|`p↩  Kembali ke Menu Utama /plant|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_search_db|Tutup||"
     showClientDialog(table.concat(lines, "\n"))
@@ -4056,7 +4056,7 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
         "add_text_input|in_cur_door|Door ID (Opsional):||16|",
         string.format("add_text_input|in_cur_s1|ID Seed 1:|%s|16|", s1Display),
         string.format("add_checkbox|chk_cur_splice|`b⦿ `wMode Splice (Kawin Benih)|%d|", isSplice),
-        "add_button|btn_submit_cur_world|`2➕  Tambahkan World ke Antrean|noflags|0|0|",
+        "add_button|btn_submit_cur_world|`2+  Tambahkan World ke Antrean|noflags|0|0|",
         "add_button|btn_back_main|`4✕  Batal & Kembali|noflags|0|0|",
         "end_dialog|plant_add_curr|Batal||"
     }
@@ -4102,14 +4102,14 @@ showPlantMainDialog = function()
     else
         lines[#lines + 1] = "add_button|btn_stop_bot|`4■  stop plant (Hentikan Bot)|noflags|0|0|"
     end
-    lines[#lines + 1] = string.format("add_button|btn_sync_curr|`b➕  add current world (%s)|noflags|0|0|", curW)
+    lines[#lines + 1] = string.format("add_button|btn_sync_curr|`b+  add current world (%s)|noflags|0|0|", curW)
 
     -- Tombol Menu Fitur Sesuai Permintaan Pengguna
-    lines[#lines + 1] = string.format("add_button|btn_menu_queue|`w📋  setting world farm  `b(%d World)|noflags|0|0|", #CFG.world_list)
-    lines[#lines + 1] = string.format("add_button|btn_menu_storage|`w📦  setting save world  `b(%d Gudang)|noflags|0|0|", #CFG.storage_world_list)
-    lines[#lines + 1] = string.format("add_button|btn_menu_seeds|`w🌱  set plant seed  `b(#%d)|noflags|0|0|", s1ID)
-    lines[#lines + 1] = "add_button|btn_menu_settings|`w🛡️  apply mod  `b(ModFly/Shield)|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_menu_logs|`w📜  log activity bot|noflags|0|0|"
+    lines[#lines + 1] = string.format("add_button|btn_menu_queue|`w»  setting world farm  `b(%d World)|noflags|0|0|", #CFG.world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_storage|`w»  setting save world  `b(%d Gudang)|noflags|0|0|", #CFG.storage_world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_seeds|`w»  set plant seed  `b(#%d)|noflags|0|0|", s1ID)
+    lines[#lines + 1] = "add_button|btn_menu_settings|`w»  apply mod  `b(ModFly/Shield)|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_menu_logs|`w»  log activity bot|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_close_menu|`4✕  close menu|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_main|Tutup||"
 
@@ -4156,7 +4156,7 @@ showPlantSeedsDialog = function()
         string.format("add_text_input|in_seed1|ID/Nama Seed 1 (Tanam):|%s|24|", tostring(s1ID)),
         string.format("add_text_input|in_seed2|ID/Nama Seed 2 (Splice):|%s|24|", (s2ID > 0) and tostring(s2ID) or ""),
         "add_button|btn_apply_seeds|`2✔  Simpan & Terapkan Benih|noflags|0|0|",
-        "add_button|btn_open_search_item|`b🔍  Cari di Database Item (16K)|noflags|0|0|",
+        "add_button|btn_open_search_item|`b[?]  Cari di Database Item (16K)|noflags|0|0|",
         "add_button|btn_back_main|`p↩  Kembali ke Menu Utama /plant|noflags|0|0|",
         "end_dialog|plant_seeds|Batal||"
     }
@@ -4197,16 +4197,16 @@ showPlantLogsDialog = function()
     else
         for i = #curLogs, startIdx, -1 do
             local l = tostring(curLogs[i])
-            local dot = "`b🔵"
-            if l:find("Err") or l:find("Gagal") then dot = "`4🔴"
-            elseif l:find("Berhasil") or l:find("Siap") or l:find("Dispatch") or l:find("Sukses") then dot = "`2🟢"
+            local dot = "`b●"
+            if l:find("Err") or l:find("Gagal") then dot = "`4●"
+            elseif l:find("Berhasil") or l:find("Siap") or l:find("Dispatch") or l:find("Sukses") then dot = "`2●"
             end
             lines[#lines + 1] = string.format("add_textbox|%s `w%s|left|", dot, l:gsub("|", "/"))
         end
     end
 
-    lines[#lines + 1] = "add_button|btn_logs_refresh|`b🔄  Refresh Log|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_logs_clear|`4🗑️  Bersihkan Log|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_logs_refresh|`b[R]  Refresh Log|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_logs_clear|`4[X]  Bersihkan Log|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_back_main|`p↩  Kembali ke Menu Utama /plant|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_logs|Tutup||"
     showClientDialog(table.concat(lines, "\n"))
