@@ -4385,16 +4385,13 @@ showPlantSetSeed1Dialog = function()
         string.format("add_label_with_icon|big|`wSet Seed 1 (Primary)``|left|%d|", iconID),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wCurrent Seed 1: `b#%d `2(%s) `p- `wIn Bag: `2(%d seed)|left|", s1ID, s1Name, s1Count),
-        "add_textbox|`wEnter seed name or item ID to plant: `2(Seed 1)|left|",
-        "add_textbox|`p(Example: 17 or Laser Grid or 5641)|left|",
+        string.format("add_textbox|`wCurrent Seed: `b#%d `2(%s) `p- `wBag: `2(%d seed)|left|", s1ID, s1Name, s1Count),
+        "add_textbox|`p(Format: Item ID or Seed Name)|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
         string.format("add_text_input|in_new_seed1|Seed Name or ID|%s|32|", tostring(s1ID)),
         "add_spacer|small|",
         "add_button|btn_save_seed1_entry|Save Seed 1 `2(Save)|noflags|0|0|",
-        "add_button|btn_open_search_item|Search Item Database `2(Find)|noflags|0|0|",
-        "add_spacer|small|",
         "add_button|btn_back_seeds|Back|noflags|0|0|",
         "end_dialog|plant_set_seed1|Cancel||"
     }
@@ -4410,25 +4407,23 @@ showPlantSetSeed2Dialog = function()
     local iconID = (s2ID > 0) and ((s2ID > 1 and s2ID % 2 == 1) and (s2ID - 1) or s2ID) or 4585
     if iconID <= 0 then iconID = 4585 end
 
+    local curText = (s2ID > 0)
+        and string.format("`wCurrent Splice: `b#%d `2(%s) `p- `wBag: `2(%d seed)", s2ID, s2Name, s2Count)
+        or "`wCurrent Splice: `4(None) `p- `wStatus: `4(Disabled)"
+
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
         string.format("add_label_with_icon|big|`wSet Seed 2 (Splice)``|left|%d|", iconID),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        (s2ID > 0)
-            and string.format("add_textbox|`wCurrent Seed 2: `b#%d `2(%s) `p- `wIn Bag: `2(%d seed)|left|", s2ID, s2Name, s2Count)
-            or "add_textbox|`wCurrent Seed 2: `4(None) `p- `wStatus: `4(Disabled)|left|",
-        "add_textbox|`wEnter splice seed name or item ID `4(0 to disable)`:|left|",
-        "add_textbox|`p(Example: 4585 or Laser Grid or 0 to clear)|left|",
+        string.format("add_textbox|%s|left|", curText),
+        "add_textbox|`p(Format: Seed ID / Name, or 0 to disable)|left|",
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
         string.format("add_text_input|in_new_seed2|Splice Seed ID / Name|%s|32|", (s2ID > 0) and tostring(s2ID) or "0"),
         "add_spacer|small|",
         "add_button|btn_save_seed2_entry|Save Seed 2 `2(Save)|noflags|0|0|",
-        "add_button|btn_clear_splice|Clear Seed 2 `4(Disable)|noflags|0|0|",
-        "add_button|btn_open_search_item|Search Item Database `2(Find)|noflags|0|0|",
-        "add_spacer|small|",
         "add_button|btn_back_seeds|Back|noflags|0|0|",
         "end_dialog|plant_set_seed2|Cancel||"
     }

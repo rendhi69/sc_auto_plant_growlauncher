@@ -130,15 +130,20 @@ end
 
 local LOCAL_PATHS = {
     current_dir .. "auto_plant.lua",
+    current_dir .. "../dialog/plant/auto_plant.lua",
     current_dir .. "../sc_plant_dialog/auto_plant.lua",
+    "script/dialog/plant/auto_plant.lua",
     "script/sc_plant_dialog/auto_plant.lua",
     "sc_plant_dialog/auto_plant.lua",
     "auto_plant.lua",
     "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/sc_plant_dialog/auto_plant.lua",
+    "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/dialog/plant/auto_plant.lua",
     "/storage/emulated/0/Android/media/launcher.powerkuy.growlauncher/ScriptLua/auto_plant.lua",
     "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/sc_plant_dialog/auto_plant.lua",
+    "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/dialog/plant/auto_plant.lua",
     "/storage/emulated/0/Android/data/launcher.powerkuy.growlauncher/files/ScriptLua/auto_plant.lua",
     "/storage/emulated/0/Download/sc_plant_dialog/auto_plant.lua",
+    "/storage/emulated/0/Download/dialog/plant/auto_plant.lua",
     "/storage/emulated/0/Download/auto_plant.lua",
 }
 
