@@ -3893,7 +3893,7 @@ _G.showPlantPacingDialog = function() if showPlantPacingDialog then showPlantPac
 _G.showPlantLogsDialog = function() if showPlantLogsDialog then showPlantLogsDialog() end end
 _G.showPlantAddCurrentWorldDialog = function(cw) if showPlantAddCurrentWorldDialog then showPlantAddCurrentWorldDialog(cw) end end
 
--- 1. QUEUE MANAGER DIALOG (setting world farm - CLEAN, TALL LIKE MAIN MENU, NO BRACKET TAGS)
+-- 1. QUEUE MANAGER DIALOG (setting world farm - WIDE, COMPLETE, ALL INPUTS BEFORE LIST BUTTONS)
 showPlantQueueDialog = function()
     local totalWorlds = #CFG.world_list
     local isRun = (STATE.running == true)
@@ -3908,14 +3908,30 @@ showPlantQueueDialog = function()
         "add_quick_exit|",
         "add_label_with_icon|big|`wSetting World Farm``|left|2|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wWorld Saat Ini: `b%s `p- `wStatus Bot: %s|left|", curW, stBadge),
         string.format("add_textbox|`wTotal Antrean: `b%d World `p- `wBibit di Tas: `b%d seed|left|", totalWorlds, s1Count),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
+
+        -- SEMUA FORM INPUT DITARUH DI ATAS (AGAR TIDAK TERPOTONG ENGINE GROWTOPIA)
+        "add_textbox|`wTambah 1 World ke Antrean:|left|",
+        "add_text_input|in_new_world|Nama World (WORLD atau WORLD:DOOR):||32|",
+        "add_button|btn_add_world_entry|Tambah World ke Antrean|noflags|0|0|",
+        "add_spacer|small|",
+
+        "add_textbox|`wTambah Banyak World Sekaligus (Batch Import):|left|",
+        "add_text_input|in_batch_worlds|Daftar Banyak World (pisahkan spasi):||36|",
+        "add_button|btn_add_batch_worlds|Tambahkan Semua World|noflags|0|0|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+
+        -- DAFTAR ANTREAN SAAT INI
         string.format("add_textbox|`wDaftar Antrean World Farm (%d World):|left|", totalWorlds)
     }
 
     if totalWorlds == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wAntrean masih kosong. Tambahkan world baru di bawah.|left|"
+        lines[#lines + 1] = "add_textbox|`p- `wAntrean masih kosong. Masukkan nama world pada kolom di atas.|left|"
     else
         for idx, w in ipairs(CFG.world_list) do
             local dStr = (w.door and w.door ~= "") and (":" .. w.door) or ""
@@ -3926,27 +3942,16 @@ showPlantQueueDialog = function()
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
 
-    -- Form Tambah Satu World
-    lines[#lines + 1] = "add_textbox|`wTambah World Baru ke Antrean:|left|"
-    lines[#lines + 1] = "add_text_input|in_new_world|Nama World (WORLD atau WORLD:DOOR):||28|"
-    lines[#lines + 1] = "add_button|btn_add_world_entry|Tambah World ke Antrean|noflags|0|0|"
-    lines[#lines + 1] = "add_spacer|small|"
-
-    -- Form Tambah Banyak World (Batch)
-    lines[#lines + 1] = "add_textbox|`wTambah Banyak World Sekaligus (Batch):|left|"
-    lines[#lines + 1] = "add_text_input|in_batch_worlds|Daftar Banyak World (pisahkan spasi):||32|"
-    lines[#lines + 1] = "add_button|btn_add_batch_worlds|Tambahkan Semua World|noflags|0|0|"
-    lines[#lines + 1] = "add_spacer|small|"
-
-    -- Kontrol & Manajemen File
+    -- KONTROL & MANAJEMEN FILE
     lines[#lines + 1] = "add_button|btn_queue_reset_all|Reset Semua Status World|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_queue_save_file|Simpan Antrean ke File txt|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_queue_load_file|Muat Antrean dari File txt|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_queue_clear_all|Kosongkan Seluruh Antrean|noflags|0|0|"
     lines[#lines + 1] = "add_spacer|small|"
 
-    -- Tombol Kembali ke Menu Utama
+    -- TOMBOL KEMBALI
     lines[#lines + 1] = "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_queue|Tutup||"
 
@@ -3954,7 +3959,7 @@ showPlantQueueDialog = function()
 end
 openWorldListManagerDialog = showPlantQueueDialog
 
--- 2. STORAGE MANAGER DIALOG (setting save world - CLEAN, TALL LIKE MAIN MENU, NO BRACKET TAGS)
+-- 2. STORAGE MANAGER DIALOG (setting save world - WIDE, COMPLETE, ALL INPUTS BEFORE LIST BUTTONS)
 showPlantStorageDialog = function()
     local totalStorages = #CFG.storage_world_list
     local isRun = (STATE.running == true)
@@ -3970,14 +3975,31 @@ showPlantStorageDialog = function()
         "add_quick_exit|",
         "add_label_with_icon|big|`wSetting Save World``|left|3802|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wGudang Terdaftar: `b%d `p- `wRestock saat tas < `b%d seed|left|", totalStorages, minBp),
         string.format("add_textbox|`wTarget Isi Tas: `b%d seed `p- `wSisa di Tas: `b%d seed|left|", tarBp, s1Count),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
+
+        -- FORM INPUT GUDANG & THRESHOLD DI ATAS
+        "add_textbox|`wTambah Gudang Seed Baru:|left|",
+        "add_text_input|in_new_stor_world|Nama World Gudang (WORLD:DOOR):||32|",
+        "add_button|btn_add_stor_entry|Tambah Gudang Seed|noflags|0|0|",
+        "add_spacer|small|",
+
+        "add_textbox|`wPengaturan Batas Pengambilan Bibit di Tas:|left|",
+        string.format("add_text_input|in_min_bp|Ambil saat seed di tas sisa:|%d|5|", minBp),
+        string.format("add_text_input|in_tar_bp|Target isi seed ke dalam tas:|%d|5|", tarBp),
+        "add_button|btn_save_stor_thresh|Simpan Batas Pengambilan Tas|noflags|0|0|",
+        "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
+
+        -- DAFTAR GUDANG SAAT INI
         string.format("add_textbox|`wDaftar Gudang Seed Vault (%d Gudang):|left|", totalStorages)
     }
 
     if totalStorages == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wBelum ada gudang seed. Tambahkan gudang baru di bawah.|left|"
+        lines[#lines + 1] = "add_textbox|`p- `wBelum ada gudang seed. Tambahkan gudang baru pada kolom di atas.|left|"
     else
         for idx, s in ipairs(CFG.storage_world_list) do
             local dStr = (s.door and s.door ~= "") and (":" .. s.door) or ""
@@ -3988,18 +4010,9 @@ showPlantStorageDialog = function()
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
+    lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
 
-    lines[#lines + 1] = "add_textbox|`wTambah Gudang Seed Baru:|left|"
-    lines[#lines + 1] = "add_text_input|in_new_stor_world|Nama World Gudang (WORLD:DOOR):||28|"
-    lines[#lines + 1] = "add_button|btn_add_stor_entry|Tambah Gudang Seed|noflags|0|0|"
-    lines[#lines + 1] = "add_spacer|small|"
-
-    lines[#lines + 1] = "add_textbox|`wPengaturan Batas Pengambilan Bibit di Tas:|left|"
-    lines[#lines + 1] = string.format("add_text_input|in_min_bp|Ambil saat seed di tas sisa:|%d|5|", minBp)
-    lines[#lines + 1] = string.format("add_text_input|in_tar_bp|Target isi seed ke dalam tas:|%d|5|", tarBp)
-    lines[#lines + 1] = "add_button|btn_save_stor_thresh|Simpan Batas Pengambilan Tas|noflags|0|0|"
-    lines[#lines + 1] = "add_spacer|small|"
-
+    -- FILE & KONTROL
     lines[#lines + 1] = "add_button|btn_stor_save_file|Simpan Daftar Gudang ke File txt|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_stor_load_file|Muat Daftar Gudang dari File txt|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_stor_clear_all|Kosongkan Seluruh Gudang|noflags|0|0|"
@@ -4012,7 +4025,7 @@ showPlantStorageDialog = function()
 end
 openStorageListManagerDialog = showPlantStorageDialog
 
--- 3. SEARCH ITEM DATABASE SUB-DIALOG (CLEAN, NO BRACKET TAGS)
+-- 3. SEARCH ITEM DATABASE SUB-DIALOG
 showPlantItemSearchDialog = function(query, results)
     query = query or ""
     results = results or {}
@@ -4021,8 +4034,9 @@ showPlantItemSearchDialog = function(query, results)
         "add_quick_exit|",
         "add_label_with_icon|big|`wDatabase Item Growtopia (16K)``|left|4585|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wKetik nama atau ID item untuk mencari benih:|left|",
-        string.format("add_text_input|in_search_q|Nama atau ID Item:|%s|28|", query),
+        string.format("add_text_input|in_search_q|Nama atau ID Item:|%s|32|", query),
         "add_button|btn_do_search|Cari di Database Item|noflags|0|0|",
         "add_spacer|small|"
     }
@@ -4039,14 +4053,14 @@ showPlantItemSearchDialog = function(query, results)
         lines[#lines + 1] = string.format("add_textbox|`4Tidak ditemukan item dengan kata kunci '%s'.|left|", query)
     end
     lines[#lines + 1] = "add_spacer|small|"
-
+    lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
     lines[#lines + 1] = "add_button|btn_back_seeds|Kembali ke Pilihan Benih|noflags|0|0|"
     lines[#lines + 1] = "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_search_db|Tutup||"
     showClientDialog(table.concat(lines, "\n"))
 end
 
--- 4. ADD CURRENT WORLD SUB-DIALOG (CLEAN, NO BRACKET TAGS)
+-- 4. ADD CURRENT WORLD SUB-DIALOG
 showPlantAddCurrentWorldDialog = function(currentWorld)
     currentWorld = tostring(currentWorld or getCurrentWorldSafe() or ""):upper()
     if currentWorld == "" or currentWorld == "EXIT" then
@@ -4061,11 +4075,13 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
         "add_quick_exit|",
         "add_label_with_icon|big|`wAdd Current World``|left|2|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wWorld Terdeteksi: `b%s `p- `wSiap Ditambahkan|left|", currentWorld),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_text_input|in_cur_world|Nama World:|%s|28|", currentWorld),
-        "add_text_input|in_cur_door|Door ID (Opsional):||16|",
-        string.format("add_text_input|in_cur_s1|ID Seed 1:|%s|16|", s1Display),
+        string.format("add_text_input|in_cur_world|Nama World:|%s|32|", currentWorld),
+        "add_text_input|in_cur_door|Door ID (Opsional):||20|",
+        string.format("add_text_input|in_cur_s1|ID Seed 1:|%s|20|", s1Display),
         string.format("add_checkbox|chk_cur_splice|Mode Splice (Kawin Benih)|%d|", isSplice),
         "add_spacer|small|",
         "add_button|btn_submit_cur_world|Tambahkan World ke Antrean|noflags|0|0|",
@@ -4075,7 +4091,7 @@ showPlantAddCurrentWorldDialog = function(currentWorld)
     return showClientDialog(table.concat(lines, "\n"))
 end
 
--- 5. MAIN DASHBOARD DIALOG (/plant - CLEAN, NO BRACKET TAGS, EXACT REQUESTED FEATURE NAMES)
+-- 5. MAIN DASHBOARD DIALOG (/plant)
 showPlantMainDialog = function()
     local isRun = (STATE.running == true)
     local curW = getCurrentWorldSafe()
@@ -4105,8 +4121,10 @@ showPlantMainDialog = function()
         "add_quick_exit|",
         string.format("add_label_with_icon|big|`wBoren Auto Plant Pro``|left|%d|", headerIcon),
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wStatus: %s `p- `wWorld: `b%s `p- `wTas: `b%d seed|left|", stBadge, curW, s1Count),
         string.format("add_textbox|`wBenih Aktif: `b#%d (%s)%s `p- `wPohon: `b%d|left|", s1ID, s1Name, spliceTag, STATE.trees_planted or 0),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
     }
 
@@ -4119,7 +4137,7 @@ showPlantMainDialog = function()
     lines[#lines + 1] = string.format("add_button|btn_sync_curr|Tambah World Saat Ini (%s)|noflags|0|0|", curW)
     lines[#lines + 1] = "add_spacer|small|"
 
-    -- Tombol Menu Fitur Sesuai Permintaan Pengguna
+    -- Tombol Menu Fitur
     lines[#lines + 1] = string.format("add_button|btn_menu_queue|setting world farm (%d World)|noflags|0|0|", #CFG.world_list)
     lines[#lines + 1] = string.format("add_button|btn_menu_storage|setting save world (%d Gudang)|noflags|0|0|", #CFG.storage_world_list)
     lines[#lines + 1] = string.format("add_button|btn_menu_seeds|set plant seed (#%d)|noflags|0|0|", s1ID)
@@ -4132,14 +4150,16 @@ showPlantMainDialog = function()
     showClientDialog(table.concat(lines, "\n"))
 end
 
--- 6. SETTINGS & CHEAT SHIELD SUB-DIALOG (apply mod - CLEAN, NO BRACKET TAGS)
+-- 6. SETTINGS & CHEAT SHIELD SUB-DIALOG (apply mod)
 showPlantSettingsDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
         "add_label_with_icon|big|`wApply Mod & Proteksi``|left|32|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wAktifkan fitur pergerakan dan proteksi bot:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
         string.format("add_checkbox|chk_modfly|ModFly (Terbang Bebas Rintangan)|%d|", CFG.use_modfly and 1 or 0),
         string.format("add_checkbox|chk_antilava|Anti-Lava dan Anti-Bounce Shield|%d|", CFG.anti_lava and 1 or 0),
@@ -4148,6 +4168,7 @@ showPlantSettingsDialog = function()
         string.format("add_checkbox|chk_reconnect|Auto Reconnect Saat Terputus|%d|", CFG.auto_reconnect and 1 or 0),
         string.format("add_checkbox|chk_shield|Touch Shield (Anti-Punch Dialog)|%d|", (UI_STATE.touch_shield ~= false) and 1 or 0),
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_button|btn_save_settings|Simpan dan Terapkan Mod|noflags|0|0|",
         "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
         "end_dialog|plant_settings|Batal||"
@@ -4155,7 +4176,7 @@ showPlantSettingsDialog = function()
     showClientDialog(table.concat(lines, "\n"))
 end
 
--- 7. SEEDS & SPLICE SUB-DIALOG (set plant seed - CLEAN, NO BRACKET TAGS)
+-- 7. SEEDS & SPLICE SUB-DIALOG (set plant seed)
 showPlantSeedsDialog = function()
     local s1ID = tonumber(CFG.seed_1_id) or 17
     local s2ID = tonumber(CFG.seed_2_id) or 0
@@ -4171,11 +4192,13 @@ showPlantSeedsDialog = function()
         "add_quick_exit|",
         "add_label_with_icon|big|`wSet Plant Seed``|left|4585|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wSeed 1 Utama: `b#%d (%s) `p- `wDi Tas: `b%d seed|left|", s1ID, s1Name, s1Count),
         string.format("add_textbox|`wSeed 2 Splice: `b#%d (%s) `p- `wDi Tas: `b%d seed|left|", s2ID, s2Name, s2Count),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        string.format("add_text_input|in_seed1|ID atau Nama Seed 1:|%s|24|", tostring(s1ID)),
-        string.format("add_text_input|in_seed2|ID atau Nama Seed 2 (Splice):|%s|24|", (s2ID > 0) and tostring(s2ID) or ""),
+        string.format("add_text_input|in_seed1|ID atau Nama Seed 1:|%s|32|", tostring(s1ID)),
+        string.format("add_text_input|in_seed2|ID atau Nama Seed 2 (Splice):|%s|32|", (s2ID > 0) and tostring(s2ID) or ""),
         "add_spacer|small|",
         "add_button|btn_apply_seeds|Simpan dan Terapkan Benih|noflags|0|0|",
         "add_button|btn_open_search_item|Cari di Database Item (16K)|noflags|0|0|",
@@ -4185,20 +4208,22 @@ showPlantSeedsDialog = function()
     showClientDialog(table.concat(lines, "\n"))
 end
 
--- 8. PACING SUB-DIALOG (CLEAN, NO BRACKET TAGS)
+-- 8. PACING SUB-DIALOG
 showPlantPacingDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
         "add_label_with_icon|big|`wKecepatan & Delay Bot``|left|1422|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_textbox|`wPilih preset kecepatan atau atur jeda kustom:|left|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
         "add_button|preset_speed_fast|Profil Agresif (120ms Plant / 85ms Step)|noflags|0|0|",
         "add_button|preset_speed_norm|Profil Standar (180ms Plant / 110ms Step)|noflags|0|0|",
         "add_spacer|small|",
-        string.format("add_text_input|in_plant_delay|Plant Delay (ms):|%d|6|", CFG.plant_delay or 180),
-        string.format("add_text_input|in_step_delay|Step Delay (ms):|%d|6|", CFG.step_delay or 110),
+        string.format("add_text_input|in_plant_delay|Plant Delay (ms):|%d|8|", CFG.plant_delay or 180),
+        string.format("add_text_input|in_step_delay|Step Delay (ms):|%d|8|", CFG.step_delay or 110),
         "add_spacer|small|",
         "add_button|btn_save_pacing|Simpan Jeda Kustom|noflags|0|0|",
         "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
@@ -4207,7 +4232,7 @@ showPlantPacingDialog = function()
     showClientDialog(table.concat(lines, "\n"))
 end
 
--- 9. LOGS SUB-DIALOG (log activity bot - CLEAN, NO BRACKET TAGS)
+-- 9. LOGS SUB-DIALOG (log activity bot)
 showPlantLogsDialog = function()
     local curLogs = STATE.logs or {}
     local lines = {
@@ -4215,7 +4240,9 @@ showPlantLogsDialog = function()
         "add_quick_exit|",
         "add_label_with_icon|big|`wLog Activity Bot``|left|1422|",
         "add_spacer|small|",
+        "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wRiwayat Aktivitas Terakhir (Total %d Catatan):|left|", #curLogs),
+        "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|"
     }
 
