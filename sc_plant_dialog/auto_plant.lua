@@ -3908,7 +3908,7 @@ showPlantQueueDialog = function()
     if curW == "" then curW = "EXIT" end
     local s1ID = tonumber(CFG.seed_1_id) or 17
     local s1Count = getInvCount(s1ID)
-    local stBadge = isRun and "`2[AKTIF BERJALAN]" or "`4[BERHENTI / IDLE]"
+    local stBadge = isRun and "`2[RUNNING]" or "`4[STOPPED / IDLE]"
 
     local lines = {
         "set_default_color|`o",
@@ -3916,18 +3916,17 @@ showPlantQueueDialog = function()
         "add_label_with_icon|big|`wSetting World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wWorld Saat Ini: `b%s `p- `wStatus Bot: %s|left|", curW, stBadge),
-        string.format("add_textbox|`wTotal Antrean: `b%d World `p- `wBibit di Tas: `b%d seed|left|", totalWorlds, s1Count),
+        string.format("add_textbox|`wCurrent World: `b%s `p- `wBot Status: %s|left|", curW, stBadge),
+        string.format("add_textbox|`wTotal Queue: `b%d World `p- `wSeed in Bag: `b%d seed|left|", totalWorlds, s1Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|btn_menu_add_world|Tambah 1 World ke Antrean|noflags|0|0|",
-        "add_button|btn_menu_batch_world|Tambah Banyak World (Batch Import)|noflags|0|0|",
-        string.format("add_button|btn_menu_list_world|Lihat / Hapus Antrean World (%d World)|noflags|0|0|", totalWorlds),
-        "add_button|btn_queue_reset_all|Reset Semua Status Antrean World|noflags|0|0|",
-        "add_button|btn_menu_file_world|Simpan / Muat Antrean File txt|noflags|0|0|",
+        "add_button|btn_menu_add_world|Add World|noflags|0|0|",
+        "add_button|btn_menu_list_world|List World Farm|noflags|0|0|",
+        "add_button|btn_queue_reset_all|Reset Status World|noflags|0|0|",
+        "add_button|btn_queue_save_file|Save Farm to TXT|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
-        "end_dialog|plant_queue|Tutup||"
+        "add_button|btn_back_main|Back|noflags|0|0|",
+        "end_dialog|plant_queue|Close||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -3937,17 +3936,17 @@ showPlantAddWorldDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wTambah 1 World Farm``|left|2|",
+        "add_label_with_icon|big|`wAdd World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        "add_textbox|`wMasukkan nama world farm yang ingin ditanam:|left|",
-        "add_textbox|`p(Format: NAMA_WORLD atau NAMA_WORLD:DOOR_ID)|left|",
+        "add_textbox|`wEnter farm world name to plant:|left|",
+        "add_textbox|`p(Format: WORLD_NAME or WORLD_NAME:DOOR_ID)|left|",
         "add_spacer|small|",
-        "add_text_input|in_new_world|Nama World| |32|",
+        "add_text_input|in_new_world|World Name| |32|",
         "add_spacer|small|",
-        "add_button|btn_add_world_entry|Simpan ke Antrean World|noflags|0|0|",
-        "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|",
-        "end_dialog|plant_add_w|Batal||"
+        "add_button|btn_add_world_entry|Save World|noflags|0|0|",
+        "add_button|btn_back_queue|Back|noflags|0|0|",
+        "end_dialog|plant_add_w|Cancel||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -3976,31 +3975,31 @@ showPlantQueueListDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wDaftar Antrean World Farm``|left|2|",
+        "add_label_with_icon|big|`wList World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wTotal World Terdaftar: `b%d World|left|", totalWorlds),
+        string.format("add_textbox|`wTotal Registered: `b%d World|left|", totalWorlds),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|"
     }
     if totalWorlds == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wAntrean masih kosong. Tambahkan world baru.|left|"
+        lines[#lines + 1] = "add_textbox|`p- `wQueue is empty. Please add a world.|left|"
     else
         for idx, w in ipairs(CFG.world_list) do
             local dStr = (w.door and w.door ~= "") and (":" .. w.door) or ""
             local isAct = (idx == STATE.active_world_idx and STATE.running)
-            local tag = isAct and "`b(Sedang Ditanam)" or (w.done and "`p(Selesai)" or "`2(Siap Tanam)")
+            local tag = isAct and "`b(Planting)" or (w.done and "`p(Done)" or "`2(Ready)")
             lines[#lines + 1] = string.format("add_textbox|`p- `w#%d. `b%s%s %s|left|", idx, w.name, dStr, tag)
-            lines[#lines + 1] = string.format("add_button|queue_del_%d|Hapus World Ini (#%d)|noflags|0|0|", idx, idx)
+            lines[#lines + 1] = string.format("add_button|queue_del_%d|Delete World (#%d)|noflags|0|0|", idx, idx)
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
     if totalWorlds > 0 then
-        lines[#lines + 1] = "add_button|btn_queue_clear_all|Kosongkan Seluruh Antrean|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_queue_clear_all|Clear All Worlds|noflags|0|0|"
     end
-    lines[#lines + 1] = "add_button|btn_back_queue|Kembali ke Setting World|noflags|0|0|"
-    lines[#lines + 1] = "end_dialog|plant_queue_list|Tutup||"
+    lines[#lines + 1] = "add_button|btn_back_queue|Back|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_queue_list|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
 
