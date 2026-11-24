@@ -3908,7 +3908,7 @@ showPlantQueueDialog = function()
     if curW == "" then curW = "EXIT" end
     local s1ID = tonumber(CFG.seed_1_id) or 17
     local s1Count = getInvCount(s1ID)
-    local stBadge = isRun and "`2[RUNNING]" or "`4[STOPPED / IDLE]"
+    local stBadge = isRun and "`2(Running)" or "`4(Stopped)"
 
     local lines = {
         "set_default_color|`o",
@@ -3917,12 +3917,12 @@ showPlantQueueDialog = function()
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
         string.format("add_textbox|`wCurrent World: `b%s `p- `wBot Status: %s|left|", curW, stBadge),
-        string.format("add_textbox|`wTotal Queue: `b%d World `p- `wSeed in Bag: `b%d seed|left|", totalWorlds, s1Count),
+        string.format("add_textbox|`wTotal Queue: `2(%d World) `p- `wSeed in Bag: `2(%d seed)|left|", totalWorlds, s1Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
         "add_button|btn_menu_add_world|Add World|noflags|0|0|",
-        "add_button|btn_menu_list_world|List World Farm|noflags|0|0|",
-        "add_button|btn_queue_reset_all|Reset Status World|noflags|0|0|",
+        string.format("add_button|btn_menu_list_world|List World Farm `2(%d World)|noflags|0|0|", totalWorlds),
+        "add_button|btn_queue_reset_all|Reset Status World `4(Reset)|noflags|0|0|",
         "add_button|btn_queue_save_file|Save Farm to TXT|noflags|0|0|",
         "add_spacer|small|",
         "add_button|btn_back_main|Back|noflags|0|0|",
@@ -3978,25 +3978,25 @@ showPlantQueueListDialog = function()
         "add_label_with_icon|big|`wList World Farm``|left|2|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wTotal Registered: `b%d World|left|", totalWorlds),
+        string.format("add_textbox|`wTotal Registered: `2(%d World)|left|", totalWorlds),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|"
     }
     if totalWorlds == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wQueue is empty. Please add a world.|left|"
+        lines[#lines + 1] = "add_textbox|`4(Queue is empty) `wPlease add a world.|left|"
     else
         for idx, w in ipairs(CFG.world_list) do
             local dStr = (w.door and w.door ~= "") and (":" .. w.door) or ""
             local isAct = (idx == STATE.active_world_idx and STATE.running)
-            local tag = isAct and "`b(Planting)" or (w.done and "`p(Done)" or "`2(Ready)")
+            local tag = isAct and "`2(Planting)" or (w.done and "`4(Done)" or "`2(Ready)")
             lines[#lines + 1] = string.format("add_textbox|`p- `w#%d. `b%s%s %s|left|", idx, w.name, dStr, tag)
-            lines[#lines + 1] = string.format("add_button|queue_del_%d|Delete World (#%d)|noflags|0|0|", idx, idx)
+            lines[#lines + 1] = string.format("add_button|queue_del_%d|`4Delete World (#%d)|noflags|0|0|", idx, idx)
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
     if totalWorlds > 0 then
-        lines[#lines + 1] = "add_button|btn_queue_clear_all|Clear All Worlds|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_queue_clear_all|`4Clear All Worlds|noflags|0|0|"
     end
     lines[#lines + 1] = "add_button|btn_back_queue|Back|noflags|0|0|"
     lines[#lines + 1] = "end_dialog|plant_queue_list|Close||"
@@ -4041,17 +4041,17 @@ showPlantStorageDialog = function()
         "add_label_with_icon|big|`wSetting Save World``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wGudang Terdaftar: `b%d `p- `wRestock saat tas < `b%d seed|left|", totalStorages, minBp),
-        string.format("add_textbox|`wTarget Isi Tas: `b%d seed `p- `wSisa di Tas: `b%d seed|left|", tarBp, s1Count),
+        string.format("add_textbox|`wRegistered Vault: `2(%d Storage) `p- `wRestock when bag < `4(%d seed)|left|", totalStorages, minBp),
+        string.format("add_textbox|`wBag Target: `2(%d seed) `p- `wCurrent Bag: `2(%d seed)|left|", tarBp, s1Count),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
-        "add_button|btn_menu_add_storage|Tambah Gudang Seed Baru|noflags|0|0|",
-        "add_button|btn_menu_thresh_storage|Atur Batas Ambil Bibit di Tas|noflags|0|0|",
-        string.format("add_button|btn_menu_list_storage|Lihat / Hapus Gudang Seed (%d Gudang)|noflags|0|0|", totalStorages),
-        "add_button|btn_menu_file_storage|Simpan / Muat Gudang File txt|noflags|0|0|",
+        "add_button|btn_menu_add_storage|Add Storage|noflags|0|0|",
+        string.format("add_button|btn_menu_thresh_storage|Set Seed Threshold `2(%d / %d)|noflags|0|0|", minBp, tarBp),
+        string.format("add_button|btn_menu_list_storage|List Save World `2(%d Storage)|noflags|0|0|", totalStorages),
+        "add_button|btn_menu_file_storage|Save Storage to TXT|noflags|0|0|",
         "add_spacer|small|",
-        "add_button|btn_back_main|Kembali ke Menu Utama|noflags|0|0|",
-        "end_dialog|plant_storage|Tutup||"
+        "add_button|btn_back_main|Back|noflags|0|0|",
+        "end_dialog|plant_storage|Close||"
     }
     showClientDialog(table.concat(lines, "\n"))
 end
@@ -4103,31 +4103,31 @@ showPlantStorageListDialog = function()
     local lines = {
         "set_default_color|`o",
         "add_quick_exit|",
-        "add_label_with_icon|big|`wDaftar Gudang Seed Vault``|left|3802|",
+        "add_label_with_icon|big|`wList Save World``|left|3802|",
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wTotal Gudang Terdaftar: `b%d Gudang|left|", totalStorages),
+        string.format("add_textbox|`wTotal Registered: `2(%d Storage)|left|", totalStorages),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|"
     }
     if totalStorages == 0 then
-        lines[#lines + 1] = "add_textbox|`p- `wBelum ada gudang seed terdaftar.|left|"
+        lines[#lines + 1] = "add_textbox|`4(Storage is empty) `wPlease add a seed vault.|left|"
     else
         for idx, s in ipairs(CFG.storage_world_list) do
             local dStr = (s.door and s.door ~= "") and (":" .. s.door) or ""
             local isAct = (idx == STATE.active_storage_idx)
-            local tag = isAct and "`b(Gudang Aktif)" or "`2(Seed Vault)"
+            local tag = isAct and "`2(Active Vault)" or "`2(Seed Vault)"
             lines[#lines + 1] = string.format("add_textbox|`p- `w#%d. `b%s%s %s|left|", idx, s.name, dStr, tag)
-            lines[#lines + 1] = string.format("add_button|stor_del_%d|Hapus Gudang Ini (#%d)|noflags|0|0|", idx, idx)
+            lines[#lines + 1] = string.format("add_button|stor_del_%d|`4Delete Storage (#%d)|noflags|0|0|", idx, idx)
         end
     end
     lines[#lines + 1] = "add_spacer|small|"
     lines[#lines + 1] = "add_textbox|`p------------------------------------------------------------|left|"
     if totalStorages > 0 then
-        lines[#lines + 1] = "add_button|btn_stor_clear_all|Kosongkan Seluruh Gudang|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_stor_clear_all|`4Clear All Storages|noflags|0|0|"
     end
-    lines[#lines + 1] = "add_button|btn_back_storage|Kembali ke Setting Save World|noflags|0|0|"
-    lines[#lines + 1] = "end_dialog|plant_stor_list|Tutup||"
+    lines[#lines + 1] = "add_button|btn_back_storage|Back|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_stor_list|Close||"
     showClientDialog(table.concat(lines, "\n"))
 end
 
@@ -4242,8 +4242,8 @@ showPlantMainDialog = function()
     local headerIcon = (s1ID > 1 and s1ID % 2 == 1) and (s1ID - 1) or s1ID
     if headerIcon <= 0 then headerIcon = 4584 end
 
-    local spliceTag = CFG.splice_mode and string.format(" + Splice #%d", s2ID) or ""
-    local stBadge = isRun and "`2[AKTIF BERJALAN]" or "`4[BERHENTI / IDLE]"
+    local spliceTag = CFG.splice_mode and string.format(" `2(+ Splice #%d)", s2ID) or ""
+    local stBadge = isRun and "`2(Running)" or "`4(Stopped)"
 
     local lines = {
         "set_default_color|`o",
@@ -4251,30 +4251,30 @@ showPlantMainDialog = function()
         string.format("add_label_with_icon|big|`wBoren Auto Plant Pro``|left|%d|", headerIcon),
         "add_spacer|small|",
         "add_textbox|`p------------------------------------------------------------|left|",
-        string.format("add_textbox|`wStatus: %s `p- `wWorld: `b%s `p- `wTas: `b%d seed|left|", stBadge, curW, s1Count),
-        string.format("add_textbox|`wBenih Aktif: `b#%d (%s)%s `p- `wPohon: `b%d|left|", s1ID, s1Name, spliceTag, STATE.trees_planted or 0),
+        string.format("add_textbox|`wStatus: %s `p- `wWorld: `b%s `p- `wBag: `2(%d seed)|left|", stBadge, curW, s1Count),
+        string.format("add_textbox|`wActive Seed: `b#%d (%s)%s `p- `wTrees: `2(%d)|left|", s1ID, s1Name, spliceTag, STATE.trees_planted or 0),
         "add_textbox|`p------------------------------------------------------------|left|",
         "add_spacer|small|",
     }
 
     -- Tombol Utama Kontrol Bot
     if not isRun then
-        lines[#lines + 1] = "add_button|btn_start_bot|Mulai Bot Auto Plant|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_start_bot|Start Bot Auto Plant `2(Ready)|noflags|0|0|"
     else
-        lines[#lines + 1] = "add_button|btn_stop_bot|Hentikan Bot Auto Plant|noflags|0|0|"
+        lines[#lines + 1] = "add_button|btn_stop_bot|Stop Bot Auto Plant `4(Active)|noflags|0|0|"
     end
-    lines[#lines + 1] = string.format("add_button|btn_sync_curr|Tambah World Saat Ini (%s)|noflags|0|0|", curW)
+    lines[#lines + 1] = string.format("add_button|btn_sync_curr|Add Current World `2(%s)|noflags|0|0|", curW)
     lines[#lines + 1] = "add_spacer|small|"
 
     -- Tombol Menu Fitur
-    lines[#lines + 1] = string.format("add_button|btn_menu_queue|setting world farm (%d World)|noflags|0|0|", #CFG.world_list)
-    lines[#lines + 1] = string.format("add_button|btn_menu_storage|setting save world (%d Gudang)|noflags|0|0|", #CFG.storage_world_list)
-    lines[#lines + 1] = string.format("add_button|btn_menu_seeds|set plant seed (#%d)|noflags|0|0|", s1ID)
-    lines[#lines + 1] = "add_button|btn_menu_settings|apply mod (ModFly dan Shield)|noflags|0|0|"
-    lines[#lines + 1] = "add_button|btn_menu_logs|log activity bot|noflags|0|0|"
+    lines[#lines + 1] = string.format("add_button|btn_menu_queue|Setting World Farm `2(%d World)|noflags|0|0|", #CFG.world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_storage|Setting Save World `2(%d Storage)|noflags|0|0|", #CFG.storage_world_list)
+    lines[#lines + 1] = string.format("add_button|btn_menu_seeds|Set Plant Seed `2(#%d)|noflags|0|0|", s1ID)
+    lines[#lines + 1] = "add_button|btn_menu_settings|Apply Mod (Fly & Shield)|noflags|0|0|"
+    lines[#lines + 1] = "add_button|btn_menu_logs|Log Activity Bot|noflags|0|0|"
     lines[#lines + 1] = "add_spacer|small|"
-    lines[#lines + 1] = "add_button|btn_close_menu|Tutup Menu|noflags|0|0|"
-    lines[#lines + 1] = "end_dialog|plant_main|Tutup||"
+    lines[#lines + 1] = "add_button|btn_close_menu|Close|noflags|0|0|"
+    lines[#lines + 1] = "end_dialog|plant_main|Close||"
 
     showClientDialog(table.concat(lines, "\n"))
 end
